@@ -582,10 +582,11 @@ Parse: `file:line:col` → location | 💡 → how to fix | Exit 0/1 → pass/fa
 ### What It Checks
 
 The script cross-references:
-- **Open beads** (from `br list --status=open --json`)
+- **Active beads** (from `br list --json`, statuses `open` and `in_progress`)
 - **Open critical/high gaps** (from `docs/dropin-parity-gap-ledger.json`)
+- **Gap-tracking external refs** (`external_ref=<gap-id>`)
 
-If any critical or high-severity gaps lack corresponding open beads, the script fails and lists the orphan gaps.
+If any critical or high-severity gap lacks a corresponding active owner bead or active bead with `external_ref=<gap-id>`, the script fails and lists the orphan gap. If any active bead references a `gap-*` external ref that is not an active critical/high ledger gap, the script also fails so stale tracker work cannot outlive the ledger truth.
 
 ### Fix Workflow
 
@@ -599,7 +600,7 @@ If any critical or high-severity gaps lack corresponding open beads, the script 
 
 ### CI Integration
 
-This check runs automatically in CI as the "Beads ledger reconciliation check" step. It will fail the build if orphan gaps are detected.
+This check runs automatically in CI as the "Beads ledger reconciliation check" step. It will fail the build if orphan ledger gaps or stale active gap-tracking beads are detected.
 
 **Why This Matters:** Without this invariant, teams can falsely believe all work is complete when critical gaps remain untracked, leading to incomplete drop-in certification or missed functionality gaps.
 

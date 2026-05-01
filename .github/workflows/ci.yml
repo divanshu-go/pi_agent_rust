@@ -645,14 +645,14 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
-          # Verify that all critical/high gaps in the parity ledger have corresponding open beads
-          # to prevent "completion illusion" where all beads appear closed but gaps remain open.
+          # Verify that active critical/high parity gaps have exact active bead coverage,
+          # and that active gap-tracking beads do not outlive active ledger entries.
           if ! ./scripts/reconcile_beads_ledger.sh; then
-            echo "RECONCILIATION FAILED: Found orphan ledger gaps without corresponding beads" >&2
+            echo "RECONCILIATION FAILED: Found orphan ledger gaps or stale gap-tracking beads" >&2
             echo "Run './scripts/reconcile_beads_ledger.sh' locally to see details" >&2
             exit 1
           fi
-          echo "Beads ↔ ledger reconciliation passed: no orphan gaps found"
+          echo "Beads ↔ ledger reconciliation passed: no orphan gaps or stale active gap beads found"
 
       - name: cargo fmt
         run: cargo fmt --check
