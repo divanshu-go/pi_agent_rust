@@ -643,6 +643,20 @@ pub fn run_validation_pipeline(
                 rec.evidence
                     .reason
                     .push_str("vendored artifact (pre-validated)");
+            } else if status == ValidationStatus::Unknown
+                && rec
+                    .evidence
+                    .sources
+                    .iter()
+                    .any(|source| source.starts_with("candidate_pool:"))
+            {
+                status = ValidationStatus::MentionOnly;
+                if !rec.evidence.reason.is_empty() {
+                    rec.evidence.reason.push_str("; ");
+                }
+                rec.evidence
+                    .reason
+                    .push_str("candidate pool signal (unvendored)");
             }
             ValidatedCandidate {
                 canonical_id: rec.canonical_id,
