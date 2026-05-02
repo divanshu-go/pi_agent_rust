@@ -5,7 +5,7 @@
   "status": "active",
   "baseline_reference": "docs/dropin-upstream-baseline.json",
   "inventory_references": [
-    "docs/dropin-feature-inventory-matrix.json",
+    "docs/evidence/dropin-feature-inventory-matrix.json",
     "docs/dropin-112-feature-inventory-matrix.md"
   ],
   "severity_scale": {
@@ -26,8 +26,8 @@
       "retirement_reason": "Strict SDK drop-in parity claim officially retired per bd-lnmtp.3.1 decision. Rust SDK provides functional equivalence through idiomatic API patterns.",
       "retirement_decision_bead": "bd-lnmtp.3.1",
       "sources": [
-        "docs/dropin-feature-inventory-matrix.json#row:mode.sdk.embedding",
-        "docs/dropin-feature-inventory-matrix.json#unknown:unknown-01-sdk-dropin-contract"
+        "docs/evidence/dropin-feature-inventory-matrix.json#row:mode.sdk.embedding",
+        "docs/evidence/dropin-feature-inventory-matrix.json#unknown:unknown-01-sdk-dropin-contract"
       ],
       "final_state": "Rust SDK provides equivalent functionality to TypeScript SDK using idiomatic Rust patterns. Contract shape parity no longer required.",
       "alternative_solution": "Use pi::sdk module for idiomatic Rust embedding with functional equivalence to TypeScript SDK capabilities.",
@@ -49,8 +49,8 @@
       "closure_reason": "Extension flag pass-through fully implemented and tested. Comprehensive test coverage in tests/extension_flag_passthrough.rs with 11KB of integration tests covering CLI flag parsing, boolean flags, mixed flag sets, and edge cases.",
       "closure_bead": "bd-lnmtp.1",
       "sources": [
-        "docs/dropin-feature-inventory-matrix.json#row:cli.extensions.dynamic_flags",
-        "docs/dropin-feature-inventory-matrix.json#unknown:unknown-02-extension-cli-flag-pass-through"
+        "docs/evidence/dropin-feature-inventory-matrix.json#row:cli.extensions.dynamic_flags",
+        "docs/evidence/dropin-feature-inventory-matrix.json#unknown:unknown-02-extension-cli-flag-pass-through"
       ],
       "final_state": "Two-pass CLI parsing implemented with extension-registered flag support. Extension flags properly extracted and passed through to extensions with correct precedence and semantics.",
       "verification_evidence": [
@@ -72,7 +72,7 @@
       "status": "resolved",
       "resolution_date": "2026-04-28T04:30:15Z",
       "sources": [
-        "docs/dropin-feature-inventory-matrix.json#row:json.events.auto_lifecycle",
+        "docs/evidence/dropin-feature-inventory-matrix.json#row:json.events.auto_lifecycle",
         "docs/dropin-112-feature-inventory-matrix.md#summary:agent-events-auto-compaction-auto-retry"
       ],
       "final_state": "Auto-compaction and auto-retry lifecycle events serialize through AgentEvent in JSON/RPC paths, preserving camelCase fields and omitting absent optional payloads. Focused parity tests cover schema, ordering, retry success omission, and compaction missing-key failure omission.",
@@ -279,7 +279,7 @@
       "mismatch_kind": "partial_some_not_fully_wired",
       "severity": "medium",
       "sources": [
-        "docs/dropin-feature-inventory-matrix.json#row:config.ui_editor"
+        "docs/evidence/dropin-feature-inventory-matrix.json#row:config.ui_editor"
       ],
       "current_state": "UI/editor-related knobs are present but not fully wired or parity-verified",
       "user_impact": "Users can observe config keys that do not fully affect behavior as expected.",
@@ -308,7 +308,7 @@
       "status": "resolved",
       "resolution_date": "2026-04-22T18:36:00Z",
       "sources": [
-        "docs/dropin-feature-inventory-matrix.json#row:config.markdown"
+        "docs/evidence/dropin-feature-inventory-matrix.json#row:config.markdown"
       ],
       "final_state": "markdown.codeBlockIndent is implemented and wired for interactive + print rendering; inventory/docs updated.",
       "alternative_solution": "N/A - full parity achieved for markdown configuration options.",
@@ -335,8 +335,8 @@
       "mismatch_kind": "unknown_needs_gap_classification",
       "severity": "medium",
       "sources": [
-        "docs/dropin-feature-inventory-matrix.json#row:env.contracts.pi_ai_antigravity_version",
-        "docs/dropin-feature-inventory-matrix.json#unknown:unknown-04-gap-ledger-reconciliation"
+        "docs/evidence/dropin-feature-inventory-matrix.json#row:env.contracts.pi_ai_antigravity_version",
+        "docs/evidence/dropin-feature-inventory-matrix.json#unknown:unknown-04-gap-ledger-reconciliation"
       ],
       "current_state": "PI_AI_ANTIGRAVITY_VERSION semantics are not fully classified in Rust parity surface",
       "user_impact": "Environment-driven behavior can diverge for advanced provider/integration flows.",
@@ -392,9 +392,9 @@
       "mismatch_kind": "superset_behavior_policy",
       "severity": "low",
       "sources": [
-        "docs/dropin-feature-inventory-matrix.json#row:cli.flags.rust_only",
-        "docs/dropin-feature-inventory-matrix.json#row:cli.subcommands.rust_only",
-        "docs/dropin-feature-inventory-matrix.json#row:config.rust_additional_policy_knobs",
+        "docs/evidence/dropin-feature-inventory-matrix.json#row:cli.flags.rust_only",
+        "docs/evidence/dropin-feature-inventory-matrix.json#row:cli.subcommands.rust_only",
+        "docs/evidence/dropin-feature-inventory-matrix.json#row:config.rust_additional_policy_knobs",
         "docs/dropin-112-feature-inventory-matrix.md#summary:features-in-rust-not-in-ts"
       ],
       "current_state": "Rust includes superset capabilities not present in TS baseline",

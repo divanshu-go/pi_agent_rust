@@ -20,7 +20,7 @@
         "legacy_pi_mono_code/pi-mono/packages/coding-agent/docs/rpc.md"
       ],
       "fallback_sources": [
-        "docs/dropin-feature-inventory-matrix.json",
+        "docs/evidence/dropin-feature-inventory-matrix.json",
         "docs/rpc.md"
       ]
     },
@@ -36,7 +36,7 @@
     "implement_count": 0,
     "document_as_intentional_count": 0,
     "notes": [
-      "docs/dropin-feature-inventory-matrix.json already classifies rpc.commands.shared, rpc.prompt.streaming_behavior, rpc.extension_ui_contract, json.events.agent_lifecycle, and integration.rpc_wire as provisional_present_both.",
+      "docs/evidence/dropin-feature-inventory-matrix.json already classifies rpc.commands.shared, rpc.prompt.streaming_behavior, rpc.extension_ui_contract, json.events.agent_lifecycle, and integration.rpc_wire as provisional_present_both.",
       "The legacy pi-mono RPC source paths referenced by the inventory are not present in this checkout, so this artifact treats the inventory rows and docs/rpc.md as the available baseline evidence."
     ]
   },

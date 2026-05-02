@@ -40,6 +40,8 @@ const DROPIN_CERTIFICATION_CONTRACT_PATH: &str =
 const INTEGRATOR_MIGRATION_PLAYBOOK_PATH: &str = "docs/integrator-migration-playbook.md";
 const MAINTENANCE_DASHBOARD_SCRIPT_PATH: &str = "scripts/generate_maintenance_dashboard.py";
 const RECONCILE_BEADS_LEDGER_SCRIPT_PATH: &str = "scripts/reconcile_beads_ledger.sh";
+const DROPIN_RPC_SURFACE_DIFF_PATH: &str = "docs/dropin-rpc-surface-diff.json";
+const DROPIN_PARITY_GAP_LEDGER_PATH: &str = "docs/evidence/dropin-parity-gap-ledger.json";
 const CI_WORKFLOW_PATH: &str = ".github/workflows/ci.yml";
 const WEEKLY_CERTIFICATION_VERDICT_WORKFLOW_PATH: &str =
     ".github/workflows/weekly-certification-verdict.yml";
@@ -1946,6 +1948,8 @@ fn dropin_evidence_policy_uses_current_docs_evidence_paths() {
         INTEGRATOR_MIGRATION_PLAYBOOK_PATH,
         MAINTENANCE_DASHBOARD_SCRIPT_PATH,
         RECONCILE_BEADS_LEDGER_SCRIPT_PATH,
+        DROPIN_RPC_SURFACE_DIFF_PATH,
+        DROPIN_PARITY_GAP_LEDGER_PATH,
     ] {
         let content = load_text(path);
         for stale_path in [
@@ -1970,6 +1974,12 @@ fn dropin_evidence_policy_uses_current_docs_evidence_paths() {
             "maintenance dashboard must read current evidence path {current_path}"
         );
     }
+
+    let parity_gap_ledger = load_text(DROPIN_PARITY_GAP_LEDGER_PATH);
+    assert!(
+        parity_gap_ledger.contains("docs/evidence/dropin-feature-inventory-matrix.json"),
+        "parity gap ledger must reference the current evidence feature inventory path"
+    );
 }
 
 #[test]
