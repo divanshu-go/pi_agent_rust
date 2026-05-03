@@ -6211,15 +6211,40 @@ mod tests {
         assert_eq!(result.truncated_by, Some(TruncatedBy::Bytes));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     #[test]
     fn test_command_with_default_sigpipe_restores_pipe_disposition() {
+        // Verify the spawned child does NOT inherit the parent's
+        // SIGPIPE=SIG_IGN. The probe parses the SigIgn: hex mask exposed by
+        // Linux-format /proc/<pid>/status — available natively on Linux and,
+        // on FreeBSD, through the linprocfs compat module mounted at
+        // /compat/linux/proc. Skip with a one-line notice when linprocfs is
+        // not mounted rather than failing the test.
+        #[cfg(target_os = "freebsd")]
+        let status_dir = {
+            let probe = format!("/compat/linux/proc/{}/status", std::process::id());
+            if !std::path::Path::new(&probe).exists() {
+                eprintln!(
+                    "skipping sigpipe disposition test: linprocfs not mounted \
+                     at /compat/linux/proc — add `linprocfs /compat/linux/proc \
+                     linprocfs rw 0 0` to /etc/fstab and `mount /compat/linux/proc` \
+                     to enable"
+                );
+                return;
+            }
+            "/compat/linux/proc"
+        };
+        #[cfg(not(target_os = "freebsd"))]
+        let status_dir = "/proc";
+
+        let probe_cmd = format!(
+            "while read name value _; do [ \"$name\" = SigIgn: ] && \
+             {{ printf '%s' \"$value\"; exit 0; }}; done < {status_dir}/$$/status"
+        );
+
         let output = command_with_default_sigpipe("sh")
             .expect("prepare sigpipe disposition probe")
-            .args([
-                "-c",
-                "while read name value _; do [ \"$name\" = SigIgn: ] && { printf '%s' \"$value\"; exit 0; }; done < /proc/$$/status",
-            ])
+            .args(["-c", &probe_cmd])
             .stdout(std::process::Stdio::piped())
             .output()
             .expect("spawn sigpipe disposition probe");
