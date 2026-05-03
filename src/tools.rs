@@ -6533,6 +6533,64 @@ mod tests {
         });
     }
 
+    /// Issue #71: skill files, prompt templates, and themes live under the
+    /// agent dir (`~/.pi/agent/`, default). The agent legitimately needs to
+    /// read these even when cwd is a user project on a different path.
+    /// Ensure `enforce_read_scope_with_roots` accepts the agent dir as a
+    /// second valid root without breaking the cwd-only contract for paths
+    /// that are under neither.
+    #[test]
+    fn test_enforce_read_scope_allows_agent_dir_outside_cwd() {
+        let cwd = tempfile::tempdir().unwrap();
+        let agent_dir = tempfile::tempdir().unwrap();
+        let skill_dir = agent_dir.path().join("skills").join("freebsd-jails");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        let skill_path = skill_dir.join("SKILL.md");
+        std::fs::write(&skill_path, "---\nname: test\n---\n# body\n").unwrap();
+
+        let resolved =
+            enforce_read_scope_with_roots(&skill_path, cwd.path(), agent_dir.path()).unwrap();
+        assert!(
+            resolved.starts_with(agent_dir.path().canonicalize().unwrap_or_else(|_| agent_dir.path().to_path_buf())),
+            "agent-dir path must be allowed and returned canonicalised"
+        );
+    }
+
+    #[test]
+    fn test_enforce_read_scope_still_rejects_unrelated_paths() {
+        // Paths under neither cwd nor agent_dir must keep failing closed.
+        let cwd = tempfile::tempdir().unwrap();
+        let agent_dir = tempfile::tempdir().unwrap();
+        let unrelated = tempfile::tempdir().unwrap();
+        std::fs::write(unrelated.path().join("secret.txt"), "secret").unwrap();
+        let secret_path = unrelated.path().join("secret.txt");
+
+        let err = enforce_read_scope_with_roots(&secret_path, cwd.path(), agent_dir.path())
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("outside the working directory") && msg.contains("agent dir"),
+            "error must mention both denied roots, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_enforce_read_scope_prefers_cwd_when_path_is_under_cwd() {
+        // When a path is under cwd, we must not silently switch to agent-dir
+        // resolution. This locks in the order of the prefix checks.
+        let cwd = tempfile::tempdir().unwrap();
+        let agent_dir = tempfile::tempdir().unwrap();
+        std::fs::write(cwd.path().join("a.txt"), "in cwd").unwrap();
+
+        let resolved = enforce_read_scope_with_roots(
+            &cwd.path().join("a.txt"),
+            cwd.path(),
+            agent_dir.path(),
+        )
+        .unwrap();
+        assert!(resolved.starts_with(cwd.path().canonicalize().unwrap_or_else(|_| cwd.path().to_path_buf())));
+    }
+
     #[test]
     fn test_read_empty_file() {
         asupersync::test_utils::run_test(|| async {
