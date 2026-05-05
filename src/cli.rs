@@ -80,6 +80,7 @@ fn known_long_option(name: &str) -> Option<LongOptionSpec> {
         | "prompt-template"
         | "theme"
         | "theme-path"
+        | "max-tool-iterations"
         | "export" => (true, false),
         "list-models" => (true, true),
         _ => return None,
@@ -439,6 +440,16 @@ pub struct Cli {
     /// Hide the current working directory from the system prompt.
     #[arg(long, env = "PI_HIDE_CWD_IN_PROMPT")]
     pub hide_cwd_in_prompt: bool,
+
+    /// Maximum tool-call iterations per agent turn before stopping.
+    /// Default: 50. Clamped to [1, 1000]; values outside the range fall back
+    /// to 50 with a warning. Pairs with the iteration-aware-handoff protocol —
+    /// at 80% of the cap, a one-shot steering message is injected so the agent
+    /// can begin a graceful handoff rather than being silently killed at the
+    /// ceiling. Override per-invocation via this flag, or globally via the
+    /// `PI_MAX_TOOL_ITERATIONS` env var.
+    #[arg(long, env = "PI_MAX_TOOL_ITERATIONS", value_name = "N")]
+    pub max_tool_iterations: Option<usize>,
 
     // === Export & Listing ===
     /// Export session file to HTML

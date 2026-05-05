@@ -122,6 +122,129 @@ fn resolve_read_only_tool_parallelism(
 // Agent Configuration
 // ============================================================================
 
+/// Default cap for tool-call iterations per agent turn.
+///
+/// Override per-invocation via `--max-tool-iterations` / the
+/// `PI_MAX_TOOL_ITERATIONS` env var, or programmatically by writing
+/// [`AgentConfig::max_tool_iterations`] directly. Resolved through
+/// [`resolve_max_tool_iterations`] which clamps invalid values back to this
+/// default rather than failing the run.
+pub const MAX_TOOL_ITERATIONS_DEFAULT: usize = 50;
+
+/// Sanity ceiling for `max_tool_iterations` overrides.
+///
+/// Guards against runaway loops from a typo while still leaving plenty of
+/// room for long, multi-step agentic tasks (large refactors, multi-phase
+/// spec implementations).
+pub const MAX_TOOL_ITERATIONS_CEILING: usize = 1_000;
+
+/// Threshold (as a fraction of `max_tool_iterations`) at which the runtime
+/// emits a one-shot soft-handoff steering message so the agent can begin a
+/// graceful incomplete-handoff rather than being silently killed at the cap.
+/// Encoded as numerator/denominator to avoid floating-point in a hot loop.
+const ITERATION_WARN_NUMERATOR: usize = 4;
+const ITERATION_WARN_DENOMINATOR: usize = 5;
+
+/// Below this absolute cap, the soft-handoff warning is suppressed — for
+/// caps like 3 or 4, the warning would fire on the first iteration and add
+/// noise rather than help.
+const ITERATION_WARN_MIN_CAP: usize = 5;
+
+/// Resolve the effective tool-iteration cap from `PI_MAX_TOOL_ITERATIONS`.
+///
+/// Falls back to [`MAX_TOOL_ITERATIONS_DEFAULT`] when unset/invalid. Used
+/// by callers that build an [`AgentConfig`] without going through the CLI
+/// parser (ACP server, SDK).
+pub fn resolved_max_tool_iterations_default() -> usize {
+    resolve_max_tool_iterations(std::env::var("PI_MAX_TOOL_ITERATIONS").ok().as_deref())
+}
+
+/// Pure resolver for `max_tool_iterations` string overrides.
+///
+/// Returns [`MAX_TOOL_ITERATIONS_DEFAULT`] when input is `None`, empty,
+/// unparseable, zero, or above the ceiling — emitting a warning so a
+/// misconfigured cap is observable in logs rather than silently lost.
+pub fn resolve_max_tool_iterations(raw_override: Option<&str>) -> usize {
+    let Some(raw) = raw_override.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return MAX_TOOL_ITERATIONS_DEFAULT;
+    };
+    match raw.parse::<usize>() {
+        Ok(0) => {
+            warn!(
+                "PI_MAX_TOOL_ITERATIONS=0 is invalid; falling back to {}",
+                MAX_TOOL_ITERATIONS_DEFAULT
+            );
+            MAX_TOOL_ITERATIONS_DEFAULT
+        }
+        Ok(n) if n > MAX_TOOL_ITERATIONS_CEILING => {
+            warn!(
+                "PI_MAX_TOOL_ITERATIONS={n} exceeds ceiling {MAX_TOOL_ITERATIONS_CEILING}; clamping to {MAX_TOOL_ITERATIONS_CEILING}"
+            );
+            MAX_TOOL_ITERATIONS_CEILING
+        }
+        Ok(n) => n,
+        Err(err) => {
+            warn!(
+                "PI_MAX_TOOL_ITERATIONS={raw:?} is not a valid usize ({err}); falling back to {}",
+                MAX_TOOL_ITERATIONS_DEFAULT
+            );
+            MAX_TOOL_ITERATIONS_DEFAULT
+        }
+    }
+}
+
+/// Clamp a CLI-parsed `Option<usize>` cap to the supported range.
+///
+/// Same semantics as [`resolve_max_tool_iterations`] but for values that
+/// have already been parsed by clap. Returns the effective cap, clamped
+/// to `[1, MAX_TOOL_ITERATIONS_CEILING]` with invalid values (None, 0)
+/// falling back to [`MAX_TOOL_ITERATIONS_DEFAULT`].
+pub fn clamp_max_tool_iterations(value: Option<usize>) -> usize {
+    match value {
+        None => MAX_TOOL_ITERATIONS_DEFAULT,
+        Some(0) => {
+            warn!(
+                "--max-tool-iterations=0 is invalid; falling back to {}",
+                MAX_TOOL_ITERATIONS_DEFAULT
+            );
+            MAX_TOOL_ITERATIONS_DEFAULT
+        }
+        Some(n) if n > MAX_TOOL_ITERATIONS_CEILING => {
+            warn!(
+                "--max-tool-iterations={n} exceeds ceiling {MAX_TOOL_ITERATIONS_CEILING}; clamping to {MAX_TOOL_ITERATIONS_CEILING}"
+            );
+            MAX_TOOL_ITERATIONS_CEILING
+        }
+        Some(n) => n,
+    }
+}
+
+/// Pure predicate: should we emit the one-shot iteration-budget warning at
+/// the current iteration, given the configured cap?
+///
+/// Fires when `current >= (max * 4) / 5` and `max >= ITERATION_WARN_MIN_CAP`.
+/// Caller is responsible for tracking fire-once state so the steering message
+/// only injects once per run-loop. Stateless and integer-only so it's safe to
+/// call inside the hot loop.
+pub const fn should_warn_at_iteration_threshold(current: usize, max: usize) -> bool {
+    max >= ITERATION_WARN_MIN_CAP
+        && current >= (max * ITERATION_WARN_NUMERATOR) / ITERATION_WARN_DENOMINATOR
+}
+
+/// Body of the one-shot soft-handoff steering message, formatted with the
+/// current/max iteration counts. Kept as a free function so test fixtures
+/// can pin the wording without instantiating a full agent.
+pub fn iteration_handoff_steering_text(current: usize, max: usize) -> String {
+    format!(
+        "[runtime] Tool-iteration budget at >=80% (used {current} of {max}). \
+         Per the iteration-aware-handoff protocol in your spec, begin graceful \
+         handoff now: commit current work, post a one-line status note, and \
+         write an incomplete-handoff envelope with what's done / what remains \
+         / next-agent starting position. Do NOT compress remaining work into \
+         the last few iterations."
+    )
+}
+
 /// Configuration for the agent.
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
@@ -145,7 +268,7 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             system_prompt: None,
-            max_tool_iterations: 50,
+            max_tool_iterations: resolved_max_tool_iterations_default(),
             stream_options: StreamOptions::default(),
             block_images: false,
             fail_closed_hooks: false,
@@ -836,6 +959,7 @@ impl Agent {
             .unwrap_or("")
             .into();
         let mut iterations = 0usize;
+        let mut warned_at_handoff_threshold = false;
         let mut turn_index: usize = 0;
         let mut new_messages: Vec<Message> = Vec::with_capacity(prompts.len() + 8);
         let mut last_assistant: Option<Arc<AssistantMessage>> = None;
@@ -1026,6 +1150,34 @@ impl Agent {
                 let mut tool_results: Vec<Arc<ToolResultMessage>> = Vec::new();
                 if has_more_tool_calls {
                     iterations += 1;
+                    // Soft handoff: at >=80% of the cap, push a one-shot
+                    // steering message so the agent has room to write an
+                    // incomplete-handoff envelope before the hard stop. The
+                    // queue drains at the next loop iteration via
+                    // drain_steering_messages, so the agent observes the
+                    // steering before its next assistant turn rather than
+                    // after the cap fires.
+                    if !warned_at_handoff_threshold
+                        && should_warn_at_iteration_threshold(
+                            iterations,
+                            self.config.max_tool_iterations,
+                        )
+                    {
+                        warned_at_handoff_threshold = true;
+                        let warning = Message::User(UserMessage {
+                            content: UserContent::Text(iteration_handoff_steering_text(
+                                iterations,
+                                self.config.max_tool_iterations,
+                            )),
+                            timestamp: Utc::now().timestamp_millis(),
+                        });
+                        self.message_queue.push_steering(warning);
+                        tracing::warn!(
+                            iterations,
+                            max = self.config.max_tool_iterations,
+                            "tool-iteration budget at >=80%; injected handoff steering message"
+                        );
+                    }
                     if iterations > self.config.max_tool_iterations {
                         let error_message = format!(
                             "Maximum tool iterations ({}) exceeded",
@@ -8056,10 +8208,151 @@ mod tests {
 
     #[test]
     fn test_agent_config_default() {
+        // Tests don't mutate env (the crate forbids unsafe code, and
+        // `std::env::set_var` is unsafe in 2024 edition); under typical
+        // `cargo test` invocation `PI_MAX_TOOL_ITERATIONS` is unset, so
+        // this assertion holds. If a developer's shell happens to export
+        // that var, this test will reflect their effective default — which
+        // is the correct behavior, not a bug.
         let config = AgentConfig::default();
-        assert_eq!(config.max_tool_iterations, 50);
+        let expected = resolved_max_tool_iterations_default();
+        assert_eq!(config.max_tool_iterations, expected);
         assert!(config.system_prompt.is_none());
         assert!(!config.block_images);
+    }
+
+    #[test]
+    fn resolve_max_tool_iterations_handles_unset_empty_and_whitespace() {
+        assert_eq!(
+            resolve_max_tool_iterations(None),
+            MAX_TOOL_ITERATIONS_DEFAULT
+        );
+        assert_eq!(
+            resolve_max_tool_iterations(Some("")),
+            MAX_TOOL_ITERATIONS_DEFAULT
+        );
+        assert_eq!(
+            resolve_max_tool_iterations(Some("    ")),
+            MAX_TOOL_ITERATIONS_DEFAULT
+        );
+    }
+
+    #[test]
+    fn resolve_max_tool_iterations_rejects_zero_and_invalid() {
+        assert_eq!(
+            resolve_max_tool_iterations(Some("0")),
+            MAX_TOOL_ITERATIONS_DEFAULT
+        );
+        assert_eq!(
+            resolve_max_tool_iterations(Some("not-a-number")),
+            MAX_TOOL_ITERATIONS_DEFAULT
+        );
+        assert_eq!(
+            resolve_max_tool_iterations(Some("-5")),
+            MAX_TOOL_ITERATIONS_DEFAULT
+        );
+        assert_eq!(
+            resolve_max_tool_iterations(Some("3.14")),
+            MAX_TOOL_ITERATIONS_DEFAULT
+        );
+    }
+
+    #[test]
+    fn resolve_max_tool_iterations_accepts_valid_overrides_and_trims_whitespace() {
+        assert_eq!(resolve_max_tool_iterations(Some("1")), 1);
+        assert_eq!(resolve_max_tool_iterations(Some("100")), 100);
+        assert_eq!(resolve_max_tool_iterations(Some("  200  ")), 200);
+        assert_eq!(resolve_max_tool_iterations(Some("999")), 999);
+    }
+
+    #[test]
+    fn resolve_max_tool_iterations_clamps_above_ceiling() {
+        assert_eq!(
+            resolve_max_tool_iterations(Some("99999")),
+            MAX_TOOL_ITERATIONS_CEILING
+        );
+        // The ceiling itself should pass through unchanged.
+        assert_eq!(
+            resolve_max_tool_iterations(Some("1000")),
+            MAX_TOOL_ITERATIONS_CEILING
+        );
+    }
+
+    #[test]
+    fn clamp_max_tool_iterations_matches_resolve_semantics() {
+        // None -> default, 0 -> default (with warning), >ceiling -> ceiling.
+        assert_eq!(clamp_max_tool_iterations(None), MAX_TOOL_ITERATIONS_DEFAULT);
+        assert_eq!(
+            clamp_max_tool_iterations(Some(0)),
+            MAX_TOOL_ITERATIONS_DEFAULT
+        );
+        assert_eq!(clamp_max_tool_iterations(Some(7)), 7);
+        assert_eq!(
+            clamp_max_tool_iterations(Some(usize::MAX)),
+            MAX_TOOL_ITERATIONS_CEILING
+        );
+    }
+
+    #[test]
+    fn iteration_warning_fires_at_80_percent_for_default_cap() {
+        // Default cap = 50; (50 * 4) / 5 = 40 → warn at 40+.
+        assert!(!should_warn_at_iteration_threshold(39, 50));
+        assert!(should_warn_at_iteration_threshold(40, 50));
+        assert!(should_warn_at_iteration_threshold(50, 50));
+        // Off-by-one regression guard: not at 39 even with default cap.
+        assert!(!should_warn_at_iteration_threshold(0, 50));
+    }
+
+    #[test]
+    fn iteration_warning_fires_at_80_percent_for_custom_caps() {
+        for (cap, threshold) in [(100usize, 80usize), (200, 160), (1000, 800)] {
+            assert!(
+                !should_warn_at_iteration_threshold(threshold - 1, cap),
+                "expected no warning below threshold (current=cap={cap}, threshold={threshold})"
+            );
+            assert!(
+                should_warn_at_iteration_threshold(threshold, cap),
+                "expected warning at threshold (cap={cap}, threshold={threshold})"
+            );
+        }
+    }
+
+    #[test]
+    fn iteration_warning_skipped_for_caps_below_minimum() {
+        // For caps under ITERATION_WARN_MIN_CAP (5), the warning never
+        // fires regardless of `current`. This avoids noise on tiny ceilings
+        // where the warning would land on iteration 0 or 1.
+        for cap in 0..ITERATION_WARN_MIN_CAP {
+            for current in 0..=cap.saturating_add(2) {
+                assert!(
+                    !should_warn_at_iteration_threshold(current, cap),
+                    "should not warn at current={current} cap={cap}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn iteration_warning_handles_minimum_warnable_cap_boundary() {
+        // Cap == ITERATION_WARN_MIN_CAP (5): (5 * 4) / 5 = 4 → warn at 4+.
+        assert!(!should_warn_at_iteration_threshold(3, 5));
+        assert!(should_warn_at_iteration_threshold(4, 5));
+        assert!(should_warn_at_iteration_threshold(5, 5));
+    }
+
+    #[test]
+    fn iteration_handoff_steering_text_is_self_describing() {
+        // Pinning the wording is intentional: this string is the load-bearing
+        // contract between the runtime and the agent's iteration-aware-handoff
+        // protocol. If it changes, downstream spec templates may need an
+        // update, so the test forces a deliberate review on edits.
+        let text = iteration_handoff_steering_text(42, 50);
+        assert!(text.contains("[runtime]"));
+        assert!(text.contains("Tool-iteration budget at >=80%"));
+        assert!(text.contains("used 42 of 50"));
+        assert!(text.contains("graceful handoff"));
+        assert!(text.contains("incomplete-handoff"));
+        assert!(text.contains("Do NOT compress"));
     }
 
     #[test]

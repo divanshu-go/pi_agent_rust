@@ -365,20 +365,20 @@ fn loopback_http_rejects_non_loopback_addresses_when_opt_in() {
     // unspecified address, RFC1918 private space, and link-local addresses
     // all must still be denied.
     for host in [
-        "localhost.evil.com",       // suffix lookalike
-        "evil.localhost",           // prefix lookalike (RFC 6761 carves out
-                                    // .localhost as loopback in resolvers,
-                                    // but we don't resolve — we treat it as
-                                    // a non-loopback hostname so an
-                                    // attacker can't smuggle a connection
-                                    // by crafting a rogue DNS name)
-        "0.0.0.0",                  // unspecified address, not loopback
-        "10.0.0.1",                 // RFC1918 private
-        "192.168.1.1",              // RFC1918 private
-        "169.254.169.254",          // link-local (cloud metadata!)
-        "[::]",                     // IPv6 unspecified
-        "[fe80::1]",                // IPv6 link-local
-        "[2001:db8::1]",            // documentation prefix, not loopback
+        "localhost.evil.com", // suffix lookalike
+        "evil.localhost",     // prefix lookalike (RFC 6761 carves out
+        // .localhost as loopback in resolvers,
+        // but we don't resolve — we treat it as
+        // a non-loopback hostname so an
+        // attacker can't smuggle a connection
+        // by crafting a rogue DNS name)
+        "0.0.0.0",         // unspecified address, not loopback
+        "10.0.0.1",        // RFC1918 private
+        "192.168.1.1",     // RFC1918 private
+        "169.254.169.254", // link-local (cloud metadata!)
+        "[::]",            // IPv6 unspecified
+        "[fe80::1]",       // IPv6 link-local
+        "[2001:db8::1]",   // documentation prefix, not loopback
     ] {
         let connector = HttpConnector::new(HttpConnectorConfig {
             require_tls: true,

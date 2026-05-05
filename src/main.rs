@@ -1303,9 +1303,17 @@ async fn run(
         providers::create_provider(&selection.model_entry, None).map_err(anyhow::Error::new)?;
     let stream_options =
         pi::app::build_stream_options(&config, resolved_key.clone(), &selection, &session);
+    // CLI flag wins; fall back to PI_MAX_TOOL_ITERATIONS env, then default.
+    // `clamp_max_tool_iterations` keeps invalid values out of the loop and
+    // emits a warning instead of failing the run.
+    let max_tool_iterations = if cli.max_tool_iterations.is_some() {
+        pi::agent::clamp_max_tool_iterations(cli.max_tool_iterations)
+    } else {
+        pi::agent::resolved_max_tool_iterations_default()
+    };
     let agent_config = AgentConfig {
         system_prompt: Some(system_prompt),
-        max_tool_iterations: 50,
+        max_tool_iterations,
         stream_options,
         block_images: config.image_block_images(),
         fail_closed_hooks: config.fail_closed_hooks(),
