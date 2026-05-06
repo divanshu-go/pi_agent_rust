@@ -357,7 +357,13 @@ pub struct Cli {
     /// turns the capture off so terminal-native copy/paste keeps working.
     /// In-app mouse wheel scrolling is sacrificed; users can still scroll
     /// with Page Up/Down or arrow keys.
-    #[arg(long, env = "PI_NO_MOUSE_CAPTURE")]
+    ///
+    /// Note: the env-var path is intentionally read in `run_interactive`
+    /// (not via `#[arg(env = "...")]` here) so the truthiness semantics
+    /// stay "only `=1` is truthy", matching how `PI_HARDWARE_CURSOR`
+    /// behaves and avoiding clap's bool-env ambiguity where `=0` /
+    /// `=false` may otherwise set the flag to true.
+    #[arg(long)]
     pub no_mouse_capture: bool,
 
     // === Mode & Output ===
