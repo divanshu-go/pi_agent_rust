@@ -142,6 +142,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             ContentBlock::Image(_) => {
                 eprintln!("[image block]");
             }
+            ContentBlock::RedactedThinking(_) => {
+                eprintln!("[thinking] (redacted)");
+            }
         }
     }
 

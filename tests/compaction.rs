@@ -312,6 +312,7 @@ fn describe_entry(entry: &SessionEntry) -> String {
                     .map(|b| match b {
                         ContentBlock::Text(_) => "text",
                         ContentBlock::Thinking(_) => "thinking",
+                        ContentBlock::RedactedThinking(_) => "redacted_thinking",
                         ContentBlock::Image(_) => "image",
                         ContentBlock::ToolCall(_) => "tool_call",
                     })

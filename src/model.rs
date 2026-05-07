@@ -187,10 +187,10 @@ pub struct ImageContent {
     pub mime_type: String,
 }
 
-/// Redacted-thinking content block — opaque marker emitted by Anthropic's
-/// safety pipeline. The `data` field is provider-controlled and not intended
-/// for user display; it is preserved on round-trip so cross-provider replays
-/// stay faithful.
+/// Redacted-thinking content block — opaque marker emitted by Anthropic's safety pipeline.
+///
+/// The `data` field is provider-controlled and not intended for user display;
+/// it is preserved on round-trip so cross-provider replays stay faithful.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RedactedThinkingContent {

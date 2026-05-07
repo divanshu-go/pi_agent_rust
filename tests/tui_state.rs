@@ -516,6 +516,9 @@ fn content_blocks_to_text(blocks: &[ContentBlock]) -> String {
             ContentBlock::ToolCall(call) => {
                 push_line(&mut output, &format!("[tool call: {}]", call.name));
             }
+            ContentBlock::RedactedThinking(_) => {
+                push_line(&mut output, "[thinking: redacted]");
+            }
         }
     }
     output
