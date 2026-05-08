@@ -196,7 +196,10 @@ fn read_jsonl_file(path: &Path) -> Vec<Value> {
 
 fn load_perf_sli_matrix() -> Value {
     let path = project_root().join("docs/perf_sli_matrix.json");
-    read_json_file(&path).unwrap_or_else(|| panic!("failed to parse {}", path.display()))
+    read_json_file(&path).unwrap_or_else(|| {
+        eprintln!("failed to parse {}", path.display());
+        Value::Null
+    })
 }
 
 /// Measurement result for a budget check.
@@ -468,7 +471,10 @@ fn collect_full_e2e_rows(payload: &Value) -> Vec<&Value> {
         .map_or_else(Vec::new, |rows| {
             rows.iter()
                 .filter(|row| {
-                    row.get("layer_id").and_then(Value::as_str) == Some("full_e2e_long_session")
+                    matches!(
+                        row.get("layer_id").and_then(Value::as_str),
+                        Some("full_e2e_long_session")
+                    )
                 })
                 .collect::<Vec<_>>()
         })
@@ -1556,13 +1562,14 @@ fn generate_budget_report() {
         .count();
     let data_contract_failures_count = data_contract_failures.len();
     let run_id = perf_run_id();
+    let run_id_json = run_id.as_deref();
     let run_id_label = run_id.as_deref().unwrap_or("not set").to_string();
 
     let summary = json!({
         "schema": "pi.perf.budget_summary.v1",
         "generated_at": chrono::Utc::now().to_rfc3339(),
-        "run_id": run_id.clone(),
-        "correlation_id": run_id.clone(),
+        "run_id": run_id_json,
+        "correlation_id": run_id_json,
         "total_budgets": BUDGETS.len(),
         "ci_enforced": ci_enforced_count,
         "ci_with_data": ci_with_data_count,
@@ -1636,7 +1643,7 @@ fn generate_budget_report() {
     ];
 
     for cat in &categories {
-        let cat_budgets: Vec<_> = BUDGETS.iter().filter(|b| b.category == *cat).collect();
+        let cat_budgets: Vec<_> = BUDGETS.iter().filter(|b| b.category.eq(*cat)).collect();
         if cat_budgets.is_empty() {
             continue;
         }
@@ -1646,10 +1653,18 @@ fn generate_budget_report() {
         md.push_str("|---|---|---|---|---|---|\n");
 
         for budget in &cat_budgets {
-            let result = results
-                .iter()
-                .find(|r| r.budget_name == budget.name)
-                .unwrap();
+            let Some(result) = results.iter().find(|r| r.budget_name.eq(budget.name)) else {
+                let _ = writeln!(
+                    md,
+                    "| {} | {} | {} {} | - | NO_DATA | {} |",
+                    budget.name,
+                    budget.metric,
+                    format_value(budget.threshold, budget.unit),
+                    budget.unit,
+                    if budget.ci_enforced { "yes" } else { "no" }
+                );
+                continue;
+            };
             let actual_str = result
                 .actual
                 .map_or_else(|| "-".to_string(), |v| format_value(v, budget.unit));
