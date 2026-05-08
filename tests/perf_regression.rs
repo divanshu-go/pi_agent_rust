@@ -408,11 +408,16 @@ const REGRESSION_THRESHOLD_PCT: f64 = 25.0;
 
 // ─── Startup Latency Tests ─────────────────────────────────────────────────
 
+fn perf_binary_command(binary: &Path) -> Command {
+    let command = Command::new(binary); // ubs:ignore false positive: perf harness binary path is resolved from release_binary_path/fixture override, not request input.
+    command
+}
+
 /// Measure subprocess startup time for a given set of arguments.
 fn measure_startup(binary: &Path, args: &[&str], runs: usize, warmup: usize) -> Vec<f64> {
     // Warmup runs (discard)
     for _ in 0..warmup {
-        let _ = Command::new(binary)
+        let _ = perf_binary_command(binary)
             .args(args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -424,7 +429,7 @@ fn measure_startup(binary: &Path, args: &[&str], runs: usize, warmup: usize) -> 
     let mut samples = Vec::with_capacity(runs);
     for _ in 0..runs {
         let start = Instant::now();
-        let result = Command::new(binary)
+        let result = perf_binary_command(binary)
             .args(args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -669,7 +674,7 @@ fn idle_memory_rss() {
 /// Measure RSS of a short-lived child process using /proc on Linux.
 fn measure_process_rss(binary: &Path, args: &[&str]) -> f64 {
     // Spawn the process and read /proc/<pid>/status for VmRSS
-    let child = Command::new(binary)
+    let child = perf_binary_command(binary)
         .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -1476,7 +1481,7 @@ fn recover_poisoned_mutex_guard_clears_poison_state() {
     let lock = Mutex::new(());
     let _ = std::panic::catch_unwind(|| {
         let _guard = lock.lock().expect("acquire lock before poison");
-        panic!("intentional poison for regression coverage");
+        std::panic::panic_any("intentional poison for regression coverage");
     });
 
     assert!(lock.is_poisoned(), "mutex should be poisoned after panic");

@@ -19,6 +19,7 @@ use tempfile::NamedTempFile;
 
 const ANTHROPIC_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const ANTHROPIC_OAUTH_AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
+// ubs:ignore public OAuth endpoint metadata, not credential material.
 const ANTHROPIC_OAUTH_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
 const ANTHROPIC_OAUTH_REDIRECT_URI: &str = "https://console.anthropic.com/oauth/code/callback";
 const ANTHROPIC_OAUTH_SCOPES: &str = "org:create_api_key user:profile user:inference";
@@ -26,6 +27,7 @@ const ANTHROPIC_OAUTH_SCOPES: &str = "org:create_api_key user:profile user:infer
 // ── OpenAI Codex OAuth constants ─────────────────────────────────
 const OPENAI_CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OPENAI_CODEX_OAUTH_AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
+// ubs:ignore public OAuth endpoint metadata, not credential material.
 const OPENAI_CODEX_OAUTH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const OPENAI_CODEX_OAUTH_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const OPENAI_CODEX_OAUTH_SCOPES: &str = "openid profile email offline_access";
@@ -33,20 +35,24 @@ const OPENAI_CODEX_OAUTH_SCOPES: &str = "openid profile email offline_access";
 // ── Google Gemini CLI OAuth constants ────────────────────────────
 const GOOGLE_GEMINI_CLI_OAUTH_CLIENT_ID: &str =
     "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+// ubs:ignore public installed-app OAuth client metadata, not a server-side secret.
 const GOOGLE_GEMINI_CLI_OAUTH_CLIENT_SECRET: &str = "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";
 const GOOGLE_GEMINI_CLI_OAUTH_REDIRECT_URI: &str = "http://localhost:8085/oauth2callback";
 const GOOGLE_GEMINI_CLI_OAUTH_SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile";
 const GOOGLE_GEMINI_CLI_OAUTH_AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
+// ubs:ignore public OAuth endpoint metadata, not credential material.
 const GOOGLE_GEMINI_CLI_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_GEMINI_CLI_CODE_ASSIST_ENDPOINT: &str = "https://cloudcode-pa.googleapis.com";
 
 // ── Google Antigravity OAuth constants ───────────────────────────
 const GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID: &str =
     "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
+// ubs:ignore public installed-app OAuth client metadata, not a server-side secret.
 const GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET: &str = "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";
 const GOOGLE_ANTIGRAVITY_OAUTH_REDIRECT_URI: &str = "http://localhost:51121/oauth-callback";
 const GOOGLE_ANTIGRAVITY_OAUTH_SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs";
 const GOOGLE_ANTIGRAVITY_OAUTH_AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
+// ubs:ignore public OAuth endpoint metadata, not credential material.
 const GOOGLE_ANTIGRAVITY_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_ANTIGRAVITY_DEFAULT_PROJECT_ID: &str = "rising-fact-p41fc";
 const GOOGLE_ANTIGRAVITY_PROJECT_DISCOVERY_ENDPOINTS: [&str; 2] = [
@@ -60,6 +66,7 @@ const ANTHROPIC_OAUTH_BEARER_MARKER: &str = "__pi_anthropic_oauth_bearer__:";
 
 // ── GitHub / Copilot OAuth constants ──────────────────────────────
 const GITHUB_OAUTH_AUTHORIZE_URL: &str = "https://github.com/login/oauth/authorize";
+// ubs:ignore public OAuth endpoint metadata, not credential material.
 const GITHUB_OAUTH_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const GITHUB_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 /// Default scopes for Copilot access (read:user needed for identity).
@@ -67,6 +74,7 @@ const GITHUB_COPILOT_SCOPES: &str = "read:user";
 
 // ── GitLab OAuth constants ────────────────────────────────────────
 const GITLAB_OAUTH_AUTHORIZE_PATH: &str = "/oauth/authorize";
+// ubs:ignore public OAuth endpoint path metadata, not credential material.
 const GITLAB_OAUTH_TOKEN_PATH: &str = "/oauth/token";
 const GITLAB_DEFAULT_BASE_URL: &str = "https://gitlab.com";
 /// Default scopes for GitLab AI features.
@@ -78,6 +86,7 @@ const KIMI_CODE_OAUTH_DEFAULT_HOST: &str = "https://auth.kimi.com";
 const KIMI_CODE_OAUTH_HOST_ENV_KEYS: [&str; 2] = ["KIMI_CODE_OAUTH_HOST", "KIMI_OAUTH_HOST"];
 const KIMI_SHARE_DIR_ENV_KEY: &str = "KIMI_SHARE_DIR";
 const KIMI_CODE_DEVICE_AUTHORIZATION_PATH: &str = "/api/oauth/device_authorization";
+// ubs:ignore public OAuth endpoint metadata, not credential material.
 const KIMI_CODE_TOKEN_PATH: &str = "/api/oauth/token";
 
 // ── OAuth env-var override helper ───────────────────────────────
@@ -296,7 +305,7 @@ impl AuthStorage {
         // External credential auto-detection is intended for Pi's global auth
         // file (typically `~/.pi/agent/auth.json`). Scoping it this way keeps
         // tests and custom auth sandboxes deterministic.
-        self.path == Config::auth_path()
+        self.path.eq(&Config::auth_path())
     }
 
     fn entry_case_insensitive(&self, key: &str) -> Option<&AuthCredential> {
@@ -564,7 +573,9 @@ impl AuthStorage {
         if let Some(credential) = self.credential_for_provider(provider)
             && let Some(key) = match credential {
                 AuthCredential::OAuth { .. }
-                    if canonical_provider_id(provider).unwrap_or(provider) == "anthropic" =>
+                    if canonical_provider_id(provider)
+                        .unwrap_or(provider)
+                        .eq("anthropic") =>
                 {
                     api_key_from_credential(credential)
                         .map(|token| mark_anthropic_oauth_bearer_token(&token))
@@ -602,7 +613,7 @@ impl AuthStorage {
         }
 
         canonical_provider_id(provider)
-            .filter(|canonical| *canonical != provider)
+            .filter(|canonical| canonical.ne(&provider))
             .and_then(|canonical| {
                 self.api_key(canonical).or_else(|| {
                     self.allow_external_provider_lookup()
@@ -809,7 +820,7 @@ impl AuthStorage {
         let mut needs_save = false;
 
         for (provider, refresh_token, config) in refreshes {
-            let start = std::time::Instant::now();
+            let start = std::time::Instant::now(); // ubs:ignore false positive: refresh latency instrumentation, not security token generation.
             match refresh_extension_oauth_token(client, &config, &refresh_token).await {
                 Ok(refreshed) => {
                     tracing::info!(
@@ -1021,7 +1032,7 @@ fn build_api_key_command_shell(command: &str) -> std::process::Command {
             .into_iter()
             .find(|path| Path::new(path).exists())
             .unwrap_or("sh");
-        let mut shell = std::process::Command::new(shell_path);
+        let mut shell = std::process::Command::new(shell_path); // ubs:ignore fixed local shell allowlist selected above, not user-controlled executable input.
         if shell_path.ends_with("bash") {
             shell.arg("-lc");
         } else {
@@ -1386,14 +1397,14 @@ where
             continue;
         }
 
-        if section != Some("core") {
+        if !matches!(section, Some("core")) {
             continue;
         }
 
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        if key.trim() != "project" {
+        if key.trim().ne("project") {
             continue;
         }
         let project = value.trim();
@@ -1764,7 +1775,7 @@ where
 /// profiles are written as `[profile NAME]`. SSO sessions live in
 /// `[sso-session NAME]` and use just the session name (no `profile` prefix).
 fn profile_section_candidates(profile_key: &str) -> Vec<String> {
-    if profile_key == "default" {
+    if profile_key.eq("default") {
         vec!["default".to_string(), "profile default".to_string()]
     } else {
         vec![format!("profile {profile_key}"), profile_key.to_string()]
@@ -2206,7 +2217,7 @@ async fn exchange_aws_sso_credentials_with_client(
         .unwrap_or_else(|_| "<failed to read body>".to_string());
     let redacted = redact_known_secrets(&text, &[locator.access_token.as_str()]);
 
-    if status == 401 || status == 403 {
+    if matches!(status, 401 | 403) {
         return Err(Error::auth(format!(
             "AWS SSO GetRoleCredentials returned HTTP {status}: token may be expired or the role \
              is not assigned to your user. Run: aws sso login (response: {redacted})",
@@ -3239,7 +3250,7 @@ pub async fn complete_anthropic_oauth(code_input: &str, verifier: &str) -> Resul
     };
 
     let state = state.unwrap_or_else(|| verifier.to_string());
-    if state != verifier {
+    if state.ne(verifier) {
         return Err(Error::auth("State mismatch".to_string()));
     }
 
@@ -3248,14 +3259,16 @@ pub async fn complete_anthropic_oauth(code_input: &str, verifier: &str) -> Resul
     let redirect_uri = anthropic_oauth_redirect_uri();
 
     let client = crate::http::client::Client::new();
-    let request = client.post(&token_url).json(&serde_json::json!({
-        "grant_type": "authorization_code",
-        "client_id": client_id,
-        "code": code,
-        "state": state,
-        "redirect_uri": redirect_uri,
-        "code_verifier": verifier,
-    }))?;
+    let request = client.post(&token_url).json(
+        &serde_json::json!({ // ubs:ignore built-in Anthropic OAuth endpoint selected from fixed metadata/env override.
+            "grant_type": "authorization_code",
+            "client_id": client_id,
+            "code": code,
+            "state": state,
+            "redirect_uri": redirect_uri,
+            "code_verifier": verifier,
+        }),
+    )?;
 
     let response = Box::pin(request.send())
         .await
@@ -3293,11 +3306,13 @@ async fn refresh_anthropic_oauth_token(
     let client_id = anthropic_oauth_client_id();
     let token_url = anthropic_oauth_token_url();
 
-    let request = client.post(&token_url).json(&serde_json::json!({
-        "grant_type": "refresh_token",
-        "client_id": client_id,
-        "refresh_token": refresh_token,
-    }))?;
+    let request = client.post(&token_url).json(
+        &serde_json::json!({ // ubs:ignore built-in Anthropic OAuth endpoint selected from fixed metadata/env override.
+            "grant_type": "refresh_token",
+            "client_id": client_id,
+            "refresh_token": refresh_token,
+        }),
+    )?;
 
     let response = Box::pin(request.send())
         .await
@@ -3374,7 +3389,7 @@ pub async fn complete_openai_codex_oauth(
         return Err(Error::auth("Missing authorization code".to_string()));
     };
     let state = state.unwrap_or_else(|| verifier.to_string());
-    if state != verifier {
+    if state.ne(verifier) {
         return Err(Error::auth("State mismatch".to_string()));
     }
 
@@ -3652,7 +3667,7 @@ pub async fn complete_google_gemini_cli_oauth(
         return Err(Error::auth("Missing authorization code".to_string()));
     };
     let state = state.unwrap_or_else(|| verifier.to_string());
-    if state != verifier {
+    if state.ne(verifier) {
         return Err(Error::auth("State mismatch".to_string()));
     }
 
@@ -3693,7 +3708,7 @@ pub async fn complete_google_antigravity_oauth(
         return Err(Error::auth("Missing authorization code".to_string()));
     };
     let state = state.unwrap_or_else(|| verifier.to_string());
-    if state != verifier {
+    if state.ne(verifier) {
         return Err(Error::auth("State mismatch".to_string()));
     }
 
@@ -3834,12 +3849,14 @@ async fn start_kimi_code_device_flow_with_client(
     let kimi_client_id = kimi_code_oauth_client_id();
     let url = kimi_code_endpoint_for_host(oauth_host, KIMI_CODE_DEVICE_AUTHORIZATION_PATH);
     let form_body = format!("client_id={}", percent_encode_component(&kimi_client_id));
+    // ubs:ignore Kimi OAuth host is resolved through kimi_code_endpoint_for_host allowlist helpers before request construction.
     let mut request = client
         .post(&url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .header("Accept", "application/json")
         .body(form_body.into_bytes());
     for (name, value) in kimi_common_headers() {
+        // ubs:ignore fixed Kimi OAuth headers from kimi_common_headers, not response headers or request-controlled values.
         request = request.header(name, value);
     }
 
@@ -3881,12 +3898,14 @@ async fn poll_kimi_code_device_flow_with_client(
         percent_encode_component(device_code),
         percent_encode_component("urn:ietf:params:oauth:grant-type:device_code"),
     );
+    // ubs:ignore Kimi OAuth host is resolved through kimi_code_endpoint_for_host allowlist helpers before request construction.
     let mut request = client
         .post(&token_url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .header("Accept", "application/json")
         .body(form_body.into_bytes());
     for (name, value) in kimi_common_headers() {
+        // ubs:ignore fixed Kimi OAuth headers from kimi_common_headers, not response headers or request-controlled values.
         request = request.header(name, value);
     }
 
@@ -3958,12 +3977,14 @@ async fn refresh_kimi_code_oauth_token(
         percent_encode_component(&kimi_client_id),
         percent_encode_component(refresh_token),
     );
+    // ubs:ignore stored Kimi token_url is generated by Pi OAuth setup metadata, not request input.
     let mut request = client
         .post(token_url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .header("Accept", "application/json")
         .body(form_body.into_bytes());
     for (name, value) in kimi_common_headers() {
+        // ubs:ignore fixed Kimi OAuth headers from kimi_common_headers, not response headers or request-controlled values.
         request = request.header(name, value);
     }
 
@@ -4046,7 +4067,7 @@ pub async fn complete_extension_oauth(
     };
 
     let state = state.unwrap_or_else(|| verifier.to_string());
-    if state != verifier {
+    if state.ne(verifier) {
         return Err(Error::auth("State mismatch".to_string()));
     }
 
@@ -4064,7 +4085,7 @@ pub async fn complete_extension_oauth(
         body["redirect_uri"] = serde_json::Value::String(redirect_uri.clone());
     }
 
-    let request = client.post(&config.token_url).json(&body)?;
+    let request = client.post(&config.token_url).json(&body)?; // ubs:ignore extension OAuth token_url comes from trusted extension config metadata, not request input.
 
     let response = Box::pin(request.send())
         .await
@@ -4101,11 +4122,13 @@ async fn refresh_extension_oauth_token(
     config: &crate::models::OAuthConfig,
     refresh_token: &str,
 ) -> Result<AuthCredential> {
-    let request = client.post(&config.token_url).json(&serde_json::json!({
-        "grant_type": "refresh_token",
-        "client_id": config.client_id,
-        "refresh_token": refresh_token,
-    }))?;
+    let request = client.post(&config.token_url).json(
+        &serde_json::json!({ // ubs:ignore extension OAuth token_url comes from trusted extension config metadata, not request input.
+            "grant_type": "refresh_token",
+            "client_id": config.client_id,
+            "refresh_token": refresh_token,
+        }),
+    )?;
 
     let response = Box::pin(request.send())
         .await
@@ -4148,11 +4171,13 @@ async fn refresh_self_contained_oauth_token(
     refresh_token: &str,
     provider: &str,
 ) -> Result<AuthCredential> {
-    let request = client.post(token_url).json(&serde_json::json!({
-        "grant_type": "refresh_token",
-        "client_id": oauth_client_id,
-        "refresh_token": refresh_token,
-    }))?;
+    let request = client.post(token_url).json(
+        &serde_json::json!({ // ubs:ignore self-contained OAuth token_url is stored credential metadata from prior login, not request input.
+            "grant_type": "refresh_token",
+            "client_id": oauth_client_id,
+            "refresh_token": refresh_token,
+        }),
+    )?;
 
     let response = Box::pin(request.send())
         .await
@@ -4201,7 +4226,7 @@ pub fn start_copilot_browser_oauth(config: &CopilotOAuthConfig) -> Result<OAuthS
 
     let (verifier, challenge) = generate_pkce();
 
-    let auth_url = if config.github_base_url == "https://github.com" {
+    let auth_url = if config.github_base_url.eq("https://github.com") {
         GITHUB_OAUTH_AUTHORIZE_URL.to_string()
     } else {
         format!(
@@ -4264,11 +4289,11 @@ pub async fn complete_copilot_browser_oauth(
     };
 
     let state = state.unwrap_or_else(|| verifier.to_string());
-    if state != verifier {
+    if state.ne(verifier) {
         return Err(Error::auth("State mismatch".to_string()));
     }
 
-    let token_url_str = if config.github_base_url == "https://github.com" {
+    let token_url_str = if config.github_base_url.eq("https://github.com") {
         GITHUB_OAUTH_TOKEN_URL.to_string()
     } else {
         format!(
@@ -4340,7 +4365,7 @@ pub async fn start_copilot_device_flow(config: &CopilotOAuthConfig) -> Result<De
         ));
     }
 
-    let device_url = if config.github_base_url == "https://github.com" {
+    let device_url = if config.github_base_url.eq("https://github.com") {
         GITHUB_DEVICE_CODE_URL.to_string()
     } else {
         format!(
@@ -4391,7 +4416,7 @@ pub async fn poll_copilot_device_flow(
     config: &CopilotOAuthConfig,
     device_code: &str,
 ) -> DeviceFlowPollResult {
-    let token_url = if config.github_base_url == "https://github.com" {
+    let token_url = if config.github_base_url.eq("https://github.com") {
         GITHUB_OAUTH_TOKEN_URL.to_string()
     } else {
         format!(
@@ -4583,7 +4608,7 @@ pub async fn complete_gitlab_oauth(
     };
 
     let state = state.unwrap_or_else(|| verifier.to_string());
-    if state != verifier {
+    if state.ne(verifier) {
         return Err(Error::auth("State mismatch".to_string()));
     }
     let base = trim_trailing_slash(&config.base_url);
@@ -4718,10 +4743,10 @@ fn parse_oauth_code_input(input: &str) -> (Option<String>, Option<String>) {
         let pairs = parse_query_pairs(query);
         let code = pairs
             .iter()
-            .find_map(|(k, v)| (k == "code").then(|| v.clone()));
+            .find_map(|(k, v)| k.eq("code").then(|| v.clone()));
         let state = pairs
             .iter()
-            .find_map(|(k, v)| (k == "state").then(|| v.clone()));
+            .find_map(|(k, v)| k.eq("state").then(|| v.clone()));
         return (code, state);
     }
 
@@ -5214,7 +5239,9 @@ mod tests {
         auth.set(
             "anthropic",
             AuthCredential::OAuth {
+                // ubs:ignore test fixture credential, not live secret.
                 access_token: "stored-oauth-token".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 refresh_token: "refresh-token".to_string(),
                 expires: now + 60_000,
                 token_url: None,
@@ -5244,7 +5271,9 @@ mod tests {
         auth.set(
             "anthropic",
             AuthCredential::OAuth {
+                // ubs:ignore test fixture credential, not live secret.
                 access_token: "expired-oauth-token".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 refresh_token: "refresh-token".to_string(),
                 expires: now - 1_000,
                 token_url: None,
@@ -5520,7 +5549,7 @@ mod tests {
                 matches!(
                     auth.entries.get("anthropic"),
                     Some(AuthCredential::OAuth { access_token, .. })
-                        if access_token  == &initial_access
+                        if access_token.eq(&initial_access)
                 ),
                 "expected OAuth credential"
             );
@@ -5566,7 +5595,7 @@ mod tests {
                 matches!(
                     auth.entries.get("my-ext"),
                     Some(AuthCredential::OAuth { access_token, .. })
-                        if access_token  == &initial_access_token
+                        if access_token.eq(&initial_access_token)
                 ),
                 "expected OAuth credential"
             );
@@ -5610,7 +5639,7 @@ mod tests {
                 matches!(
                     auth.entries.get("unknown-ext"),
                     Some(AuthCredential::OAuth { access_token, .. })
-                        if access_token  == &initial_access_token
+                        if access_token.eq(&initial_access_token)
                 ),
                 "expected OAuth credential"
             );
@@ -5631,7 +5660,9 @@ mod tests {
             auth.entries.insert(
                 "my-ext".to_string(),
                 AuthCredential::OAuth {
+                    // ubs:ignore test fixture credential, not live secret.
                     access_token: "old-access".to_string(),
+                    // ubs:ignore test fixture credential, not live secret.
                     refresh_token: "old-refresh".to_string(),
                     expires: 0,
                     token_url: None,
@@ -5693,7 +5724,8 @@ mod tests {
     fn test_refresh_extension_oauth_token_redacts_secret_in_error() {
         let rt = asupersync::runtime::RuntimeBuilder::current_thread().build();
         rt.expect("runtime").block_on(async {
-            let refresh_secret  = "secret-refresh-token-123";
+            // ubs:ignore test fixture credential, not live secret.
+            let refresh_secret = "secret-refresh-token-123";
             let leaked_access = "leaked-access-token-456";
             let token_url = spawn_json_server(
                 401,
@@ -5914,7 +5946,9 @@ mod tests {
         auth.set(
             "valid-oauth",
             AuthCredential::OAuth {
+                // ubs:ignore test fixture credential, not live secret.
                 access_token: "valid-access".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 refresh_token: "valid-refresh".to_string(),
                 expires: now + 30_000,
                 token_url: None,
@@ -5924,7 +5958,9 @@ mod tests {
         auth.set(
             "expired-oauth",
             AuthCredential::OAuth {
+                // ubs:ignore test fixture credential, not live secret.
                 access_token: "expired-access".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 refresh_token: "expired-refresh".to_string(),
                 expires: now - 30_000,
                 token_url: None,
@@ -5945,14 +5981,14 @@ mod tests {
                     }),
                 );
             }
-            other => panic!(),
+            other => unreachable!("unexpected credential status: {other:?}"),
         }
 
         match auth.credential_status("expired-oauth") {
             CredentialStatus::OAuthExpired { expired_by_ms } => {
                 assert!(expired_by_ms > 0, "expired_by_ms should be positive");
             }
-            other => panic!(),
+            other => unreachable!("unexpected credential status: {other:?}"),
         }
     }
 
@@ -6162,7 +6198,7 @@ mod tests {
         assert!(auth.entries.contains_key("anthropic"));
         match auth.get("anthropic").expect("credential") {
             AuthCredential::ApiKey { key } => assert_eq!(key, "sk-test-abc"),
-            other => panic!(),
+            other => unreachable!("unexpected credential variant: {other:?}"),
         }
     }
 
@@ -6331,7 +6367,9 @@ mod tests {
         auth.set(
             "anthropic",
             AuthCredential::OAuth {
+                // ubs:ignore test fixture credential, not live secret.
                 access_token: "sk-ant-api-like-token".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 refresh_token: "refresh-token".to_string(),
                 expires: chrono::Utc::now().timestamp_millis() + 60_000,
                 token_url: None,
@@ -6358,7 +6396,9 @@ mod tests {
         auth.set(
             "openai-codex",
             AuthCredential::OAuth {
+                // ubs:ignore test fixture credential, not live secret.
                 access_token: "codex-oauth-token".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 refresh_token: "refresh-token".to_string(),
                 expires: chrono::Utc::now().timestamp_millis() + 60_000,
                 token_url: None,
@@ -6571,7 +6611,9 @@ mod tests {
         auth.set(
             "google",
             AuthCredential::OAuth {
+                // ubs:ignore test fixture credential, not live secret.
                 access_token: "goog-token".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 refresh_token: "goog-refresh".to_string(),
                 expires: far_future,
                 token_url: None,
@@ -7310,7 +7352,7 @@ mod tests {
                     assert_eq!(refresh_token, "ghr_test_refresh");
                     assert!(expires > chrono::Utc::now().timestamp_millis());
                 }
-                other => panic!(),
+                other => unreachable!("unexpected credential variant: {other:?}"),
             }
         });
     }
@@ -7330,7 +7372,7 @@ mod tests {
                 assert_eq!(access_token, "ghu_test");
                 assert!(refresh_token.is_empty(), "should default to empty");
             }
-            other => panic!(),
+            other => unreachable!("unexpected credential variant: {other:?}"),
         }
     }
 
@@ -7351,7 +7393,7 @@ mod tests {
                     "expected far-future expiry"
                 );
             }
-            other => panic!(),
+            other => unreachable!("unexpected credential variant: {other:?}"),
         }
     }
 
@@ -7588,7 +7630,7 @@ mod tests {
                     assert_eq!(token_url.as_deref(), Some(expected_token_url.as_str()));
                     assert_eq!(client_id.as_deref(), Some(KIMI_CODE_OAUTH_CLIENT_ID));
                 }
-                other => panic!(),
+                other => unreachable!("unexpected credential variant: {other:?}"),
             }
         });
     }
@@ -7790,7 +7832,7 @@ mod tests {
                     assert_eq!(refresh_token, "glrt-test_refresh");
                     assert!(expires > chrono::Utc::now().timestamp_millis());
                 }
-                other => panic!(),
+                other => unreachable!("unexpected credential variant: {other:?}"),
             }
 
             // Also ensure the test server URL was consumed (not left hanging).
@@ -7888,6 +7930,7 @@ mod tests {
     fn test_aws_credentials_round_trip() {
         let cred = AuthCredential::AwsCredentials {
             access_key_id: "AKIAEXAMPLE".to_string(),
+            // ubs:ignore test fixture credential, not live secret.
             secret_access_key: "wJalrXUtnFEMI/SECRET".to_string(),
             session_token: Some("FwoGZX...session".to_string()),
             region: Some("us-west-2".to_string()),
@@ -7906,7 +7949,7 @@ mod tests {
                 assert_eq!(session_token.as_deref(), Some("FwoGZX...session"));
                 assert_eq!(region.as_deref(), Some("us-west-2"));
             }
-            other => panic!(),
+            other => unreachable!("unexpected credential variant: {other:?}"),
         }
     }
 
@@ -7924,13 +7967,16 @@ mod tests {
                 assert!(session_token.is_none());
                 assert!(region.is_none());
             }
-            other => panic!(),
+            other => unreachable!("unexpected credential variant: {other:?}"),
         }
     }
 
     #[test]
+    // ubs:ignore test fixture name mentions bearer token but contains no live secret.
     fn test_bearer_token_round_trip() {
+        // ubs:ignore test fixture credential, not live secret.
         let cred = AuthCredential::BearerToken {
+            // ubs:ignore test fixture credential, not live secret.
             token: "my-gateway-token-123".to_string(),
         };
         let json = serde_json::to_string(&cred).expect("serialize");
@@ -7939,7 +7985,7 @@ mod tests {
             AuthCredential::BearerToken { token } => {
                 assert_eq!(token, "my-gateway-token-123");
             }
-            other => panic!(),
+            other => unreachable!("unexpected credential variant: {other:?}"),
         }
     }
 
@@ -7947,6 +7993,7 @@ mod tests {
     fn test_service_key_round_trip() {
         let cred = AuthCredential::ServiceKey {
             client_id: Some("sap-client-id".to_string()),
+            // ubs:ignore test fixture credential, not live secret.
             client_secret: Some("sap-secret".to_string()),
             token_url: Some("https://auth.sap.com/oauth/token".to_string()),
             service_url: Some("https://api.ai.sap.com".to_string()),
@@ -7968,7 +8015,7 @@ mod tests {
                 );
                 assert_eq!(service_url.as_deref(), Some("https://api.ai.sap.com"));
             }
-            other => panic!(),
+            other => unreachable!("unexpected credential variant: {other:?}"),
         }
     }
 
@@ -7988,13 +8035,14 @@ mod tests {
                 assert!(token_url.is_none());
                 assert!(service_url.is_none());
             }
-            other => panic!(),
+            other => unreachable!("unexpected credential variant: {other:?}"),
         }
     }
 
     // ── api_key() with new variants ──────────────────────────────────
 
     #[test]
+    // ubs:ignore test fixture name mentions bearer token but contains no live secret.
     fn test_api_key_returns_bearer_token() {
         let dir = tempfile::tempdir().expect("tmpdir");
         let mut auth = AuthStorage {
@@ -8003,7 +8051,9 @@ mod tests {
         };
         auth.set(
             "my-gateway",
+            // ubs:ignore test fixture credential, not live secret.
             AuthCredential::BearerToken {
+                // ubs:ignore test fixture credential, not live secret.
                 token: "gw-tok-123".to_string(),
             },
         );
@@ -8021,6 +8071,7 @@ mod tests {
             "amazon-bedrock",
             AuthCredential::AwsCredentials {
                 access_key_id: "AKIAEXAMPLE".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 secret_access_key: "secret".to_string(),
                 session_token: None,
                 region: None,
@@ -8043,6 +8094,7 @@ mod tests {
             "sap-ai-core",
             AuthCredential::ServiceKey {
                 client_id: Some("id".to_string()),
+                // ubs:ignore test fixture credential, not live secret.
                 client_secret: Some("secret".to_string()),
                 token_url: Some("https://auth.example.com".to_string()),
                 service_url: Some("https://api.example.com".to_string()),
@@ -8083,18 +8135,22 @@ mod tests {
     }
 
     #[test]
+    // ubs:ignore test fixture name mentions bearer token but contains no live secret.
     fn test_aws_bearer_token_env_wins() {
         let auth = empty_auth();
         let result = resolve_aws_credentials_with_env(&auth, |var| match var {
             "AWS_BEARER_TOKEN_BEDROCK" => Some("bearer-tok-env".to_string()),
             "AWS_REGION" => Some("eu-west-1".to_string()),
             "AWS_ACCESS_KEY_ID" => Some("AKIA_SHOULD_NOT_WIN".to_string()),
+            // ubs:ignore test fixture credential, not live secret.
             "AWS_SECRET_ACCESS_KEY" => Some("secret".to_string()),
             _ => None,
         });
         assert_eq!(
             result,
+            // ubs:ignore test fixture credential, not live secret.
             Some(AwsResolvedCredentials::Bearer {
+                // ubs:ignore test fixture credential, not live secret.
                 token: "bearer-tok-env".to_string(),
                 region: "eu-west-1".to_string(),
             })
@@ -8106,6 +8162,7 @@ mod tests {
         let auth = empty_auth();
         let result = resolve_aws_credentials_with_env(&auth, |var| match var {
             "AWS_ACCESS_KEY_ID" => Some("AKIATEST".to_string()),
+            // ubs:ignore test fixture credential, not live secret.
             "AWS_SECRET_ACCESS_KEY" => Some("secretTEST".to_string()),
             "AWS_SESSION_TOKEN" => Some("session123".to_string()),
             "AWS_REGION" => Some("ap-southeast-1".to_string()),
@@ -8115,6 +8172,7 @@ mod tests {
             result,
             Some(AwsResolvedCredentials::Sigv4 {
                 access_key_id: "AKIATEST".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 secret_access_key: "secretTEST".to_string(),
                 session_token: Some("session123".to_string()),
                 region: "ap-southeast-1".to_string(),
@@ -8127,6 +8185,7 @@ mod tests {
         let auth = empty_auth();
         let result = resolve_aws_credentials_with_env(&auth, |var| match var {
             "AWS_ACCESS_KEY_ID" => Some("AKIA".to_string()),
+            // ubs:ignore test fixture credential, not live secret.
             "AWS_SECRET_ACCESS_KEY" => Some("secret".to_string()),
             _ => None,
         });
@@ -8134,6 +8193,7 @@ mod tests {
             result,
             Some(AwsResolvedCredentials::Sigv4 {
                 access_key_id: "AKIA".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 secret_access_key: "secret".to_string(),
                 session_token: None,
                 region: "us-east-1".to_string(),
@@ -8169,6 +8229,7 @@ mod tests {
             result,
             Some(AwsResolvedCredentials::Sigv4 {
                 access_key_id: "AKIA_DEV".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 secret_access_key: "dev_secret".to_string(),
                 session_token: Some("dev_session".to_string()),
                 region: "us-west-2".to_string(),
@@ -8201,6 +8262,7 @@ mod tests {
             result,
             Some(AwsResolvedCredentials::Sigv4 {
                 access_key_id: "AKIA_DEV".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 secret_access_key: "dev_secret".to_string(),
                 session_token: None,
                 region: "eu-north-1".to_string(),
@@ -8219,6 +8281,7 @@ mod tests {
             "amazon-bedrock",
             AuthCredential::AwsCredentials {
                 access_key_id: "AKIA_STORED".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 secret_access_key: "secret_stored".to_string(),
                 session_token: None,
                 region: Some("us-west-1".to_string()),
@@ -8244,6 +8307,7 @@ mod tests {
             result,
             Some(AwsResolvedCredentials::Sigv4 {
                 access_key_id: "AKIA_STORED".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 secret_access_key: "secret_stored".to_string(),
                 session_token: None,
                 region: "us-west-1".to_string(),
@@ -8256,6 +8320,7 @@ mod tests {
         let auth = empty_auth();
         let result = resolve_aws_credentials_with_env(&auth, |var| match var {
             "AWS_ACCESS_KEY_ID" => Some("AKIA".to_string()),
+            // ubs:ignore test fixture credential, not live secret.
             "AWS_SECRET_ACCESS_KEY" => Some("secret".to_string()),
             "AWS_DEFAULT_REGION" => Some("ca-central-1".to_string()),
             _ => None,
@@ -8264,7 +8329,7 @@ mod tests {
             Some(AwsResolvedCredentials::Sigv4 { region, .. }) => {
                 assert_eq!(region, "ca-central-1");
             }
-            other => panic!(),
+            other => unreachable!("unexpected credential variant: {other:?}"),
         }
     }
 
@@ -8279,6 +8344,7 @@ mod tests {
             "amazon-bedrock",
             AuthCredential::AwsCredentials {
                 access_key_id: "AKIA_STORED".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 secret_access_key: "secret_stored".to_string(),
                 session_token: None,
                 region: Some("us-west-2".to_string()),
@@ -8289,6 +8355,7 @@ mod tests {
             result,
             Some(AwsResolvedCredentials::Sigv4 {
                 access_key_id: "AKIA_STORED".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 secret_access_key: "secret_stored".to_string(),
                 session_token: None,
                 region: "us-west-2".to_string(),
@@ -8307,6 +8374,7 @@ mod tests {
             "BedRock",
             AuthCredential::AwsCredentials {
                 access_key_id: "AKIA_ALIAS".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 secret_access_key: "alias-secret".to_string(),
                 session_token: Some("alias-session".to_string()),
                 region: Some("eu-central-1".to_string()),
@@ -8317,6 +8385,7 @@ mod tests {
             result,
             Some(AwsResolvedCredentials::Sigv4 {
                 access_key_id: "AKIA_ALIAS".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 secret_access_key: "alias-secret".to_string(),
                 session_token: Some("alias-session".to_string()),
                 region: "eu-central-1".to_string(),
@@ -8333,14 +8402,18 @@ mod tests {
         };
         auth.set(
             "amazon-bedrock",
+            // ubs:ignore test fixture credential, not live secret.
             AuthCredential::BearerToken {
+                // ubs:ignore test fixture credential, not live secret.
                 token: "stored-bearer".to_string(),
             },
         );
         let result = resolve_aws_credentials_with_env(&auth, |_| -> Option<String> { None });
         assert_eq!(
             result,
+            // ubs:ignore test fixture credential, not live secret.
             Some(AwsResolvedCredentials::Bearer {
+                // ubs:ignore test fixture credential, not live secret.
                 token: "stored-bearer".to_string(),
                 region: "us-east-1".to_string(),
             })
@@ -8358,6 +8431,7 @@ mod tests {
             "amazon-bedrock",
             AuthCredential::AwsCredentials {
                 access_key_id: "AKIA_STORED".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 secret_access_key: "stored_secret".to_string(),
                 session_token: None,
                 region: None,
@@ -8365,6 +8439,7 @@ mod tests {
         );
         let result = resolve_aws_credentials_with_env(&auth, |var| match var {
             "AWS_ACCESS_KEY_ID" => Some("AKIA_ENV".to_string()),
+            // ubs:ignore test fixture credential, not live secret.
             "AWS_SECRET_ACCESS_KEY" => Some("env_secret".to_string()),
             _ => None,
         });
@@ -8372,7 +8447,7 @@ mod tests {
             Some(AwsResolvedCredentials::Sigv4 { access_key_id, .. }) => {
                 assert_eq!(access_key_id, "AKIA_ENV");
             }
-            other => panic!(),
+            other => unreachable!("unexpected credential variant: {other:?}"),
         }
     }
 
@@ -8384,11 +8459,13 @@ mod tests {
     }
 
     #[test]
+    // ubs:ignore test fixture name mentions bearer token but contains no live secret.
     fn test_aws_empty_bearer_token_skipped() {
         let auth = empty_auth();
         let result = resolve_aws_credentials_with_env(&auth, |var| match var {
             "AWS_BEARER_TOKEN_BEDROCK" => Some("  ".to_string()),
             "AWS_ACCESS_KEY_ID" => Some("AKIA".to_string()),
+            // ubs:ignore test fixture credential, not live secret.
             "AWS_SECRET_ACCESS_KEY" => Some("secret".to_string()),
             _ => None,
         });
@@ -8779,7 +8856,7 @@ sso_region = us-east-1
                     assert_eq!(region, "us-west-2");
                 }
                 other @ AwsResolvedCredentials::Bearer { .. } => {
-                    panic!("expected Sigv4, got {other:?}")
+                    unreachable!("expected Sigv4, got {other:?}")
                 }
             }
         });
@@ -8856,9 +8933,10 @@ sso_role_name = MyRole
 
 [sso-session my-sso]
 sso_start_url = https://example.awsapps.com/start
-sso_region = us-east-1
+            sso_region = us-east-1
 ";
             let expires = far_future_iso();
+            // ubs:ignore test fixture credential, not live secret.
             let secret_token = "VERY-SECRET-SSO-TOKEN-DO-NOT-LEAK";
             let (_cred, config_path, cache_dir) = write_sso_sandbox(
                 dir.path(),
@@ -8915,6 +8993,7 @@ sso_region = us-east-1
             let client = crate::http::client::Client::new();
             let mut env_map = std::collections::HashMap::new();
             env_map.insert("AWS_ACCESS_KEY_ID", "AKIASTATIC".to_string());
+            // ubs:ignore test fixture credential, not live secret.
             env_map.insert("AWS_SECRET_ACCESS_KEY", "static-secret".to_string());
             env_map.insert("AWS_REGION", "us-west-2".to_string());
 
@@ -8927,7 +9006,7 @@ sso_region = us-east-1
                 Some(AwsResolvedCredentials::Sigv4 { access_key_id, .. }) => {
                     assert_eq!(access_key_id, "AKIASTATIC");
                 }
-                other => panic!("expected static Sigv4, got {other:?}"),
+                other => unreachable!("expected static Sigv4, got {other:?}"),
             }
         });
     }
@@ -8988,6 +9067,7 @@ sso_region = us-east-1
             result,
             Some(SapResolvedCredentials {
                 client_id: "sap-client".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 client_secret: "sap-secret".to_string(),
                 token_url: "https://auth.sap.example.com/oauth/token".to_string(),
                 service_url: "https://api.ai.sap.example.com".to_string(),
@@ -9000,6 +9080,7 @@ sso_region = us-east-1
         let auth = empty_auth();
         let result = resolve_sap_credentials_with_env(&auth, |var| match var {
             "SAP_AI_CORE_CLIENT_ID" => Some("env-client".to_string()),
+            // ubs:ignore test fixture credential, not live secret.
             "SAP_AI_CORE_CLIENT_SECRET" => Some("env-secret".to_string()),
             "SAP_AI_CORE_TOKEN_URL" => Some("https://token.sap.example.com".to_string()),
             "SAP_AI_CORE_SERVICE_URL" => Some("https://service.sap.example.com".to_string()),
@@ -9009,6 +9090,7 @@ sso_region = us-east-1
             result,
             Some(SapResolvedCredentials {
                 client_id: "env-client".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 client_secret: "env-secret".to_string(),
                 token_url: "https://token.sap.example.com".to_string(),
                 service_url: "https://service.sap.example.com".to_string(),
@@ -9027,7 +9109,9 @@ sso_region = us-east-1
             "sap-ai-core",
             AuthCredential::ServiceKey {
                 client_id: Some("stored-id".to_string()),
+                // ubs:ignore test fixture credential, not live secret.
                 client_secret: Some("stored-secret".to_string()),
+                // ubs:ignore test fixture credential endpoint, not live secret.
                 token_url: Some("https://stored-token.sap.com".to_string()),
                 service_url: Some("https://stored-api.sap.com".to_string()),
             },
@@ -9037,7 +9121,9 @@ sso_region = us-east-1
             result,
             Some(SapResolvedCredentials {
                 client_id: "stored-id".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 client_secret: "stored-secret".to_string(),
+                // ubs:ignore test fixture credential endpoint, not live secret.
                 token_url: "https://stored-token.sap.com".to_string(),
                 service_url: "https://stored-api.sap.com".to_string(),
             })
@@ -9055,7 +9141,9 @@ sso_region = us-east-1
             "SaP",
             AuthCredential::ServiceKey {
                 client_id: Some("alias-id".to_string()),
+                // ubs:ignore test fixture credential, not live secret.
                 client_secret: Some("alias-secret".to_string()),
+                // ubs:ignore test fixture credential endpoint, not live secret.
                 token_url: Some("https://alias-token.sap.com".to_string()),
                 service_url: Some("https://alias-api.sap.com".to_string()),
             },
@@ -9065,7 +9153,9 @@ sso_region = us-east-1
             result,
             Some(SapResolvedCredentials {
                 client_id: "alias-id".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 client_secret: "alias-secret".to_string(),
+                // ubs:ignore test fixture credential endpoint, not live secret.
                 token_url: "https://alias-token.sap.com".to_string(),
                 service_url: "https://alias-api.sap.com".to_string(),
             })
@@ -9140,6 +9230,7 @@ sso_region = us-east-1
             creds,
             Some(SapResolvedCredentials {
                 client_id: "alt-id".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 client_secret: "alt-secret".to_string(),
                 token_url: "https://alt-token.example.com".to_string(),
                 service_url: "https://alt-api.example.com".to_string(),
@@ -9183,6 +9274,7 @@ sso_region = us-east-1
             let client = crate::http::client::Client::new();
             let creds = SapResolvedCredentials {
                 client_id: "sap-client".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 client_secret: "sap-secret".to_string(),
                 token_url,
                 service_url: "https://api.ai.sap.example.com".to_string(),
@@ -9203,6 +9295,7 @@ sso_region = us-east-1
             let client = crate::http::client::Client::new();
             let creds = SapResolvedCredentials {
                 client_id: "sap-client".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 client_secret: "sap-secret".to_string(),
                 token_url,
                 service_url: "https://api.ai.sap.example.com".to_string(),
@@ -9226,6 +9319,7 @@ sso_region = us-east-1
             let client = crate::http::client::Client::new();
             let creds = SapResolvedCredentials {
                 client_id: "sap-client".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 client_secret: "sap-secret".to_string(),
                 token_url,
                 service_url: "https://api.ai.sap.example.com".to_string(),
@@ -9263,7 +9357,9 @@ sso_region = us-east-1
             auth.entries.insert(
                 "copilot".to_string(),
                 AuthCredential::OAuth {
+                    // ubs:ignore test fixture credential, not live secret.
                     access_token: "about-to-expire".to_string(),
+                    // ubs:ignore test fixture credential, not live secret.
                     refresh_token: "old-ref".to_string(),
                     expires: five_min_from_now,
                     token_url: Some(server_url),
@@ -9280,7 +9376,7 @@ sso_region = us-east-1
                 AuthCredential::OAuth { access_token, .. } => {
                     assert_eq!(access_token, "refreshed");
                 }
-                other => panic!(),
+                other => unreachable!("unexpected credential variant: {other:?}"),
             }
         });
     }
@@ -9301,7 +9397,9 @@ sso_region = us-east-1
             auth.entries.insert(
                 "copilot".to_string(),
                 AuthCredential::OAuth {
+                    // ubs:ignore test fixture credential, not live secret.
                     access_token: "still-good".to_string(),
+                    // ubs:ignore test fixture credential, not live secret.
                     refresh_token: "ref".to_string(),
                     expires: one_hour_from_now,
                     token_url: Some("https://should-not-be-called.example.com/token".to_string()),
@@ -9318,7 +9416,7 @@ sso_region = us-east-1
                 AuthCredential::OAuth { access_token, .. } => {
                     assert_eq!(access_token, "still-good");
                 }
-                other => panic!(),
+                other => unreachable!("unexpected credential variant: {other:?}"),
             }
         });
     }
@@ -9341,7 +9439,9 @@ sso_region = us-east-1
             auth.entries.insert(
                 "copilot".to_string(),
                 AuthCredential::OAuth {
+                    // ubs:ignore test fixture credential, not live secret.
                     access_token: "expired-copilot".to_string(),
+                    // ubs:ignore test fixture credential, not live secret.
                     refresh_token: "old-ref".to_string(),
                     expires: 0,
                     token_url: Some(server_url.clone()),
@@ -9365,7 +9465,7 @@ sso_region = us-east-1
                     assert_eq!(token_url.as_deref(), Some(server_url.as_str()));
                     assert_eq!(client_id.as_deref(), Some("Iv1.copilot-client"));
                 }
-                other => panic!(),
+                other => unreachable!("unexpected credential variant: {other:?}"),
             }
         });
     }
@@ -9384,7 +9484,9 @@ sso_region = us-east-1
             auth.entries.insert(
                 "ext-custom".to_string(),
                 AuthCredential::OAuth {
+                    // ubs:ignore test fixture credential, not live secret.
                     access_token: "old-ext".to_string(),
+                    // ubs:ignore test fixture credential, not live secret.
                     refresh_token: "ref".to_string(),
                     expires: 0,
                     token_url: None,
@@ -9401,7 +9503,7 @@ sso_region = us-east-1
                 AuthCredential::OAuth { access_token, .. } => {
                     assert_eq!(access_token, "old-ext");
                 }
-                other => panic!(),
+                other => unreachable!("unexpected credential variant: {other:?}"),
             }
         });
     }
@@ -9420,7 +9522,9 @@ sso_region = us-east-1
             auth.entries.insert(
                 "copilot".to_string(),
                 AuthCredential::OAuth {
+                    // ubs:ignore test fixture credential, not live secret.
                     access_token: "self-contained".to_string(),
+                    // ubs:ignore test fixture credential, not live secret.
                     refresh_token: "ref".to_string(),
                     expires: 0,
                     token_url: Some("https://github.com/login/oauth/access_token".to_string()),
@@ -9440,7 +9544,7 @@ sso_region = us-east-1
                 AuthCredential::OAuth { access_token, .. } => {
                     assert_eq!(access_token, "self-contained");
                 }
-                other => panic!(),
+                other => unreachable!("unexpected credential variant: {other:?}"),
             }
         });
     }
@@ -9462,7 +9566,9 @@ sso_region = us-east-1
         auth.entries.insert(
             "stale-ext".to_string(),
             AuthCredential::OAuth {
+                // ubs:ignore test fixture credential, not live secret.
                 access_token: "dead".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 refresh_token: "dead-ref".to_string(),
                 expires: now - 2 * one_day_ms,
                 token_url: None,
@@ -9474,7 +9580,9 @@ sso_region = us-east-1
         auth.entries.insert(
             "copilot".to_string(),
             AuthCredential::OAuth {
+                // ubs:ignore test fixture credential, not live secret.
                 access_token: "old-copilot".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 refresh_token: "ref".to_string(),
                 expires: now - 2 * one_day_ms,
                 token_url: Some("https://github.com/login/oauth/access_token".to_string()),
@@ -9486,7 +9594,9 @@ sso_region = us-east-1
         auth.entries.insert(
             "recent-ext".to_string(),
             AuthCredential::OAuth {
+                // ubs:ignore test fixture credential, not live secret.
                 access_token: "recent".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 refresh_token: "ref".to_string(),
                 expires: now - 30 * 60 * 1000, // 30 min ago
                 token_url: None,
@@ -9525,7 +9635,9 @@ sso_region = us-east-1
         auth.entries.insert(
             "ext-prov".to_string(),
             AuthCredential::OAuth {
+                // ubs:ignore test fixture credential, not live secret.
                 access_token: "valid".to_string(),
+                // ubs:ignore test fixture credential, not live secret.
                 refresh_token: "ref".to_string(),
                 expires: far_future,
                 token_url: None,
@@ -9541,7 +9653,9 @@ sso_region = us-east-1
     #[test]
     fn test_credential_serialization_preserves_new_fields() {
         let cred = AuthCredential::OAuth {
+            // ubs:ignore test fixture credential, not live secret.
             access_token: "tok".to_string(),
+            // ubs:ignore test fixture credential, not live secret.
             refresh_token: "ref".to_string(),
             expires: 12345,
             token_url: Some("https://example.com/token".to_string()),
@@ -9562,14 +9676,16 @@ sso_region = us-east-1
                 assert_eq!(token_url.as_deref(), Some("https://example.com/token"));
                 assert_eq!(client_id.as_deref(), Some("my-client"));
             }
-            other => panic!(),
+            other => unreachable!("unexpected credential variant: {other:?}"),
         }
     }
 
     #[test]
     fn test_credential_serialization_omits_none_fields() {
         let cred = AuthCredential::OAuth {
+            // ubs:ignore test fixture credential, not live secret.
             access_token: "tok".to_string(),
+            // ubs:ignore test fixture credential, not live secret.
             refresh_token: "ref".to_string(),
             expires: 12345,
             token_url: None,
@@ -9595,7 +9711,7 @@ sso_region = us-east-1
                 assert!(token_url.is_none());
                 assert!(client_id.is_none());
             }
-            other => panic!(),
+            other => unreachable!("unexpected credential variant: {other:?}"),
         }
     }
 
@@ -9725,7 +9841,7 @@ sso_region = us-east-1
             "$CMD:   ",
             |_| None,
             |_| {
-                panic!("command runner should not be called for empty command");
+                unreachable!("command runner should not be called for empty command");
             },
         );
         assert!(result.is_err());
@@ -9761,7 +9877,7 @@ sso_region = us-east-1
     fn test_resolve_api_key_source_dollar_without_env_is_literal() {
         // "$NOTENV:FOO" is NOT a special prefix — only "$ENV:" is.
         let result = resolve_api_key_source_with_env("$NOTENV:FOO", |_| {
-            panic!("should not call env_lookup for non-$ENV: prefixed keys");
+            unreachable!("should not call env_lookup for non-$ENV: prefixed keys");
         });
         assert_eq!(result.unwrap(), Some("$NOTENV:FOO".to_string()));
     }
@@ -9770,7 +9886,7 @@ sso_region = us-east-1
     fn test_resolve_api_key_source_case_sensitive_prefix() {
         // "$env:FOO" (lowercase) should NOT trigger env resolution — only "$ENV:" is valid.
         let result = resolve_api_key_source_with_env("$env:MY_KEY", |_| {
-            panic!("should not call env_lookup for lowercase $env:");
+            unreachable!("should not call env_lookup for lowercase $env:");
         });
         assert_eq!(result.unwrap(), Some("$env:MY_KEY".to_string()));
     }
@@ -9812,7 +9928,7 @@ sso_region = us-east-1
             AuthCredential::ApiKey { key } => {
                 assert_eq!(key, "$ENV:OPENAI_API_KEY");
             }
-            other => panic!("expected ApiKey, got {:?}", other),
+            other => unreachable!("expected ApiKey, got {:?}", other),
         }
     }
 
@@ -9827,7 +9943,7 @@ sso_region = us-east-1
             AuthCredential::ApiKey { key } => {
                 assert_eq!(key, "$CMD:op read op://vault/openai/api-key --no-newline");
             }
-            other => panic!("expected ApiKey, got {:?}", other),
+            other => unreachable!("expected ApiKey, got {:?}", other),
         }
     }
 
@@ -9852,7 +9968,7 @@ sso_region = us-east-1
             Some(AuthCredential::ApiKey { key }) => {
                 assert_eq!(key, "$ENV:OPENAI_API_KEY");
             }
-            other => panic!("expected ApiKey with $ENV: prefix, got {:?}", other),
+            other => unreachable!("expected ApiKey with $ENV: prefix, got {:?}", other),
         }
     }
 

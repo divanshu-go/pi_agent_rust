@@ -854,11 +854,11 @@ fn bench_extension_scenarios() {
 
 /// Validate that the JSONL output conforms to the schema.
 #[test]
-fn bench_jsonl_schema_valid() {
+fn bench_jsonl_schema_valid() -> Result<(), String> {
     let jsonl_path = output_dir().join("extension_bench.jsonl");
     if !jsonl_path.exists() {
         eprintln!("[schema] No extension_bench.jsonl — run bench_extension_scenarios first");
-        return;
+        return Ok(());
     }
 
     let content = std::fs::read_to_string(&jsonl_path).expect("read JSONL");
@@ -877,7 +877,7 @@ fn bench_jsonl_schema_valid() {
             continue;
         }
         let record: Value =
-            serde_json::from_str(line).unwrap_or_else(|e| panic!("line {i}: invalid JSON: {e}"));
+            serde_json::from_str(line).map_err(|e| format!("line {i}: invalid JSON: {e}"))?;
 
         for field in &required_fields {
             assert!(
@@ -924,6 +924,7 @@ fn bench_jsonl_schema_valid() {
         line_count,
         jsonl_path.display()
     );
+    Ok(())
 }
 
 #[cfg(unix)]
