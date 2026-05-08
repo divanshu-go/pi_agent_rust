@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use asupersync::runtime::RuntimeBuilder;
 use asupersync::runtime::reactor::create_reactor;
-use asupersync::time::{sleep, wall_now};
+use asupersync::time::{sleep, timeout, wall_now};
 use chrono::{SecondsFormat, Utc};
 use clap::{ArgAction, Parser};
 use pi::extensions::{
@@ -18,7 +18,6 @@ use pi::extensions::{
 use pi::extensions_js::PiJsRuntimeConfig;
 use pi::tools::ToolRegistry;
 use serde_json::Value;
-use sysinfo::{ProcessRefreshKind, RefreshKind, System, get_current_pid};
 
 #[derive(Parser, Debug)]
 #[command(name = "ext_stress")]
@@ -81,6 +80,9 @@ struct Args {
     /// Drain budget per dispatch iteration to keep queue depth bounded.
     #[arg(long, default_value_t = 128)]
     reactor_drain_budget: usize,
+    /// Extra per-event harness timeout in milliseconds (0 uses manager defaults only).
+    #[arg(long, default_value_t = 5_000)]
+    dispatch_timeout_ms: u64,
     /// Run a built-in comparison: baseline shard count vs configured reactor mesh.
     #[arg(long, default_value_t = false, action = ArgAction::Set)]
     compare_shard_baseline: bool,
@@ -187,7 +189,7 @@ async fn run(args: Args) -> Result<()> {
         );
     }
 
-    let (run_result, comparison) = if args.compare_shard_baseline {
+    let (run_result, comparison, comparison_ok) = if args.compare_shard_baseline {
         configure_reactor(&manager, true, baseline_shards, lane_capacity);
         let baseline_result = run_profile(
             &manager,
@@ -198,6 +200,7 @@ async fn run(args: Args) -> Result<()> {
             args.duration_secs,
             args.rss_interval_secs,
             args.reactor_drain_budget,
+            args.dispatch_timeout_ms,
         )
         .await?;
 
@@ -211,6 +214,7 @@ async fn run(args: Args) -> Result<()> {
             args.duration_secs,
             args.rss_interval_secs,
             args.reactor_drain_budget,
+            args.dispatch_timeout_ms,
         )
         .await?;
 
@@ -221,7 +225,8 @@ async fn run(args: Args) -> Result<()> {
             baseline_shards,
             target_shards,
         ));
-        (candidate_result, comparison)
+        let comparison_ok = baseline_result.events_ok && candidate_result.events_ok;
+        (candidate_result, comparison, comparison_ok)
     } else {
         configure_reactor(&manager, args.reactor_enabled, target_shards, lane_capacity);
         let result = run_profile(
@@ -233,9 +238,10 @@ async fn run(args: Args) -> Result<()> {
             args.duration_secs,
             args.rss_interval_secs,
             args.reactor_drain_budget,
+            args.dispatch_timeout_ms,
         )
         .await?;
-        (result, None)
+        (result, None, true)
     };
     let latency_summary = summarize_us(&run_result.latencies_us);
     let logical_cpus = std::thread::available_parallelism().map_or(1, usize::from);
@@ -263,6 +269,7 @@ async fn run(args: Args) -> Result<()> {
             "reactor_shards": target_shards,
             "reactor_lane_capacity": lane_capacity,
             "reactor_drain_budget": args.reactor_drain_budget,
+            "dispatch_timeout_ms": args.dispatch_timeout_ms,
             "compare_shard_baseline": args.compare_shard_baseline,
             "compare_baseline_shards": baseline_shards,
         },
@@ -292,6 +299,8 @@ async fn run(args: Args) -> Result<()> {
         },
         "events": {
             "count": run_result.event_count,
+            "target_count": run_result.target_event_count,
+            "min_count": run_result.min_event_count,
             "errors": run_result.error_count,
             "sample_errors": run_result.errors,
         },
@@ -300,7 +309,12 @@ async fn run(args: Args) -> Result<()> {
         "pass": {
             "rss_ok": run_result.rss_ok,
             "latency_ok": run_result.latency_ok,
-            "overall": run_result.rss_ok && run_result.latency_ok,
+            "events_ok": run_result.events_ok,
+            "comparison_ok": comparison_ok,
+            "overall": run_result.rss_ok
+                && run_result.latency_ok
+                && run_result.events_ok
+                && comparison_ok,
         }
     });
 
@@ -336,10 +350,13 @@ struct RunResult {
     p99_first: Option<u64>,
     p99_last: Option<u64>,
     event_count: u64,
+    target_event_count: u64,
+    min_event_count: u64,
     error_count: u64,
     errors: Vec<String>,
     rss_ok: bool,
     latency_ok: bool,
+    events_ok: bool,
     reactor: Value,
 }
 
@@ -410,6 +427,7 @@ async fn run_profile(
     duration_secs: u64,
     rss_interval_secs: u64,
     reactor_drain_budget: usize,
+    dispatch_timeout_ms: u64,
 ) -> Result<RunResult> {
     if warmup_secs > 0 {
         run_loop(
@@ -420,6 +438,7 @@ async fn run_profile(
             Duration::from_secs(warmup_secs),
             rss_interval_secs,
             reactor_drain_budget,
+            dispatch_timeout_ms,
             false,
         )
         .await?;
@@ -433,6 +452,7 @@ async fn run_profile(
         Duration::from_secs(duration_secs),
         rss_interval_secs,
         reactor_drain_budget,
+        dispatch_timeout_ms,
         true,
     )
     .await
@@ -447,6 +467,7 @@ async fn run_loop(
     duration: Duration,
     rss_interval_secs: u64,
     reactor_drain_budget: usize,
+    dispatch_timeout_ms: u64,
     collect: bool,
 ) -> Result<RunResult> {
     #[allow(clippy::cast_precision_loss)]
@@ -455,20 +476,14 @@ async fn run_loop(
     let telemetry_start_index = manager.runtime_hostcall_telemetry_artifact().entries.len();
     let mut next_event = start;
 
-    let pid = get_current_pid().map_err(|err| anyhow::anyhow!(err))?;
-    let refresh = ProcessRefreshKind::nothing().with_memory().with_cpu();
-    let mut system = System::new_with_specifics(RefreshKind::nothing().with_processes(refresh));
-    system.refresh_processes_specifics(sysinfo::ProcessesToUpdate::Some(&[pid]), true, refresh);
-    let initial_rss_bytes = system.process(pid).map_or(0, sysinfo::Process::memory);
-    let initial_cpu_usage_pct = system.process(pid).map_or(0.0, sysinfo::Process::cpu_usage);
+    let mut resource_probe = ResourceProbe::new();
+    let initial_sample = resource_probe.sample(0);
+    let initial_rss_bytes = initial_sample.rss_bytes;
+    let initial_cpu_usage_pct = initial_sample.process_cpu_pct;
     let mut max_rss_bytes = initial_rss_bytes;
     let mut max_cpu_usage_pct = initial_cpu_usage_pct;
     let mut resource_samples = if collect {
-        vec![ResourceSample {
-            t_s: 0,
-            rss_bytes: initial_rss_bytes,
-            process_cpu_pct: initial_cpu_usage_pct,
-        }]
+        vec![initial_sample]
     } else {
         Vec::new()
     };
@@ -493,7 +508,14 @@ async fn run_loop(
         }
 
         let dispatch_start = Instant::now();
-        if let Err(err) = manager.dispatch_event(event, payload.clone()).await {
+        if let Err(err) = dispatch_event_with_harness_timeout(
+            manager,
+            event,
+            payload.clone(),
+            dispatch_timeout_ms,
+        )
+        .await
+        {
             error_count += 1;
             if errors.len() < 5 {
                 errors.push(err.to_string());
@@ -516,27 +538,15 @@ async fn run_loop(
 
         if let Some(next_rss_due) = next_rss {
             if Instant::now() >= next_rss_due {
-                system.refresh_processes_specifics(
-                    sysinfo::ProcessesToUpdate::Some(&[pid]),
-                    true,
-                    refresh,
-                );
-                if let Some(process) = system.process(pid) {
-                    let rss_bytes = process.memory();
-                    let process_cpu_pct = process.cpu_usage();
-                    if rss_bytes > max_rss_bytes {
-                        max_rss_bytes = rss_bytes;
-                    }
-                    if process_cpu_pct > max_cpu_usage_pct {
-                        max_cpu_usage_pct = process_cpu_pct;
-                    }
-                    if collect {
-                        resource_samples.push(ResourceSample {
-                            t_s: start.elapsed().as_secs(),
-                            rss_bytes,
-                            process_cpu_pct,
-                        });
-                    }
+                let sample = resource_probe.sample(start.elapsed().as_secs());
+                if sample.rss_bytes > max_rss_bytes {
+                    max_rss_bytes = sample.rss_bytes;
+                }
+                if sample.process_cpu_pct > max_cpu_usage_pct {
+                    max_cpu_usage_pct = sample.process_cpu_pct;
+                }
+                if collect {
+                    resource_samples.push(sample);
                 }
                 if collect {
                     push_reactor_queue_sample(manager, start.elapsed(), &mut reactor_queue_samples);
@@ -566,6 +576,13 @@ async fn run_loop(
         (Some(first), Some(last)) if first > 0 => last <= first.saturating_mul(2),
         _ => true,
     };
+    let target_event_count = events_per_sec.saturating_mul(duration.as_secs());
+    let min_event_count = if target_event_count == 0 {
+        1
+    } else {
+        target_event_count.saturating_mul(9).div_ceil(10)
+    };
+    let events_ok = event_count >= min_event_count && error_count == 0;
     if collect {
         push_reactor_queue_sample(manager, start.elapsed(), &mut reactor_queue_samples);
     }
@@ -593,12 +610,126 @@ async fn run_loop(
         p99_first,
         p99_last,
         event_count,
+        target_event_count,
+        min_event_count,
         error_count,
         errors,
         rss_ok,
         latency_ok,
+        events_ok,
         reactor,
     })
+}
+
+async fn dispatch_event_with_harness_timeout(
+    manager: &ExtensionManager,
+    event: ExtensionEventName,
+    payload: Option<Value>,
+    dispatch_timeout_ms: u64,
+) -> Result<()> {
+    if dispatch_timeout_ms == 0 {
+        return manager
+            .dispatch_event(event, payload)
+            .await
+            .map_err(Into::into);
+    }
+
+    match timeout(
+        wall_now(),
+        Duration::from_millis(dispatch_timeout_ms),
+        Box::pin(manager.dispatch_event(event, payload)),
+    )
+    .await
+    {
+        Ok(result) => result.map_err(Into::into),
+        Err(_) => Err(anyhow::anyhow!(
+            "event dispatch timed out after {dispatch_timeout_ms}ms"
+        )),
+    }
+}
+
+struct ResourceProbe {
+    last_process_jiffies: Option<u64>,
+    last_total_jiffies: Option<u64>,
+    logical_cpus: usize,
+}
+
+impl ResourceProbe {
+    fn new() -> Self {
+        Self {
+            last_process_jiffies: None,
+            last_total_jiffies: None,
+            logical_cpus: std::thread::available_parallelism().map_or(1, usize::from),
+        }
+    }
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    fn sample(&mut self, t_s: u64) -> ResourceSample {
+        let rss_bytes = read_self_rss_bytes().unwrap_or(0);
+        let process_jiffies = read_self_process_jiffies().unwrap_or(0);
+        let total_jiffies = read_total_cpu_jiffies().unwrap_or(0);
+        let process_cpu_pct = match (self.last_process_jiffies, self.last_total_jiffies) {
+            (Some(last_process), Some(last_total)) => {
+                let process_delta = process_jiffies.saturating_sub(last_process) as f64;
+                let total_delta = total_jiffies.saturating_sub(last_total) as f64;
+                if total_delta > 0.0 {
+                    ((process_delta / total_delta) * self.logical_cpus as f64 * 100.0) as f32
+                } else {
+                    0.0
+                }
+            }
+            _ => 0.0,
+        };
+        self.last_process_jiffies = Some(process_jiffies);
+        self.last_total_jiffies = Some(total_jiffies);
+        ResourceSample {
+            t_s,
+            rss_bytes,
+            process_cpu_pct,
+        }
+    }
+}
+
+fn read_self_rss_bytes() -> Option<u64> {
+    parse_vmrss_bytes(&std::fs::read_to_string("/proc/self/status").ok()?)
+}
+
+fn read_self_process_jiffies() -> Option<u64> {
+    parse_process_jiffies(&std::fs::read_to_string("/proc/self/stat").ok()?)
+}
+
+fn read_total_cpu_jiffies() -> Option<u64> {
+    parse_total_cpu_jiffies(&std::fs::read_to_string("/proc/stat").ok()?)
+}
+
+fn parse_vmrss_bytes(status: &str) -> Option<u64> {
+    for line in status.lines() {
+        let Some(rest) = line.strip_prefix("VmRSS:") else {
+            continue;
+        };
+        let mut fields = rest.split_whitespace();
+        let kib = fields.next()?.parse::<u64>().ok()?;
+        return Some(kib.saturating_mul(1024));
+    }
+    None
+}
+
+fn parse_process_jiffies(stat: &str) -> Option<u64> {
+    let close_paren = stat.rfind(')')?;
+    let rest = stat.get(close_paren + 1..)?;
+    let mut fields = rest.split_whitespace();
+    let utime = fields.nth(11)?.parse::<u64>().ok()?;
+    let stime = fields.next()?.parse::<u64>().ok()?;
+    Some(utime.saturating_add(stime))
+}
+
+fn parse_total_cpu_jiffies(stat: &str) -> Option<u64> {
+    let line = stat.lines().find(|line| line.starts_with("cpu "))?;
+    let mut total = 0_u64;
+    for field in line.split_whitespace().skip(1) {
+        total = total.saturating_add(field.parse::<u64>().ok()?);
+    }
+    Some(total)
 }
 
 fn project_root() -> PathBuf {
@@ -676,7 +807,10 @@ async fn write_events_jsonl(
         "correlation_id": correlation_id,
         "ts": generated_at,
         "event_count": run_result.event_count,
+        "target_event_count": run_result.target_event_count,
+        "min_event_count": run_result.min_event_count,
         "error_count": run_result.error_count,
+        "events_ok": run_result.events_ok,
         "rss": report.get("rss"),
         "cpu": report.get("cpu"),
         "latency_us": report.get("latency_us"),
@@ -876,12 +1010,26 @@ fn build_shard_comparison_report(
         "mode": "shard_baseline_vs_reactor_mesh",
         "baseline": {
             "shards": baseline_shards,
+            "events": {
+                "count": baseline.event_count,
+                "target_count": baseline.target_event_count,
+                "min_count": baseline.min_event_count,
+                "errors": baseline.error_count,
+                "events_ok": baseline.events_ok,
+            },
             "throughput_eps": baseline_throughput,
             "latency_us": baseline_latency,
             "reactor": baseline.reactor.clone(),
         },
         "candidate": {
             "shards": candidate_shards,
+            "events": {
+                "count": candidate.event_count,
+                "target_count": candidate.target_event_count,
+                "min_count": candidate.min_event_count,
+                "errors": candidate.error_count,
+                "events_ok": candidate.events_ok,
+            },
             "throughput_eps": candidate_throughput,
             "latency_us": candidate_latency,
             "reactor": candidate.reactor.clone(),
@@ -1087,10 +1235,13 @@ mod tests {
             p99_first: None,
             p99_last: None,
             event_count,
+            target_event_count: event_count,
+            min_event_count: event_count,
             error_count: 0,
             errors: Vec::new(),
             rss_ok: true,
             latency_ok: true,
+            events_ok: event_count > 0,
             reactor,
         }
     }
@@ -1164,5 +1315,23 @@ mod tests {
         assert_eq!(json["rss_kib"].as_u64(), Some(64));
         assert_eq!(json["rss_kb"].as_u64(), Some(64));
         assert_eq!(json["process_cpu_pct"].as_f64(), Some(12.5));
+    }
+
+    #[test]
+    fn proc_status_parser_extracts_vmrss_bytes() {
+        let status = "Name:\text_stress\nVmRSS:\t   1234 kB\nVmSize:\t9999 kB\n";
+        assert_eq!(parse_vmrss_bytes(status), Some(1_263_616));
+    }
+
+    #[test]
+    fn proc_stat_parser_handles_spaces_in_comm() {
+        let stat = "12345 (name with spaces) S 1 2 3 4 5 6 7 8 9 10 21 34 0 0 0";
+        assert_eq!(parse_process_jiffies(stat), Some(55));
+    }
+
+    #[test]
+    fn proc_cpu_parser_sums_total_jiffies() {
+        let stat = "cpu  1 2 3 4 5 6 7 8 9 10\ncpu0 1 2 3 4\n";
+        assert_eq!(parse_total_cpu_jiffies(stat), Some(55));
     }
 }

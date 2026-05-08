@@ -1,0 +1,371 @@
+{
+  "comparison": {
+    "baseline": {
+      "events": {
+        "count": 1,
+        "errors": 0,
+        "events_ok": false,
+        "min_count": 45,
+        "target_count": 50
+      },
+      "latency_us": {
+        "count": 1,
+        "max": 49,
+        "mean": 49,
+        "min": 49,
+        "p50": 49,
+        "p95": 49,
+        "p99": 49,
+        "p999": 49
+      },
+      "reactor": {
+        "enabled": true,
+        "max_queue_depths": [
+          0
+        ],
+        "migration_events": {
+          "by_transition": {},
+          "total": 0
+        },
+        "queue_depths_final": [
+          0
+        ],
+        "queue_samples": [
+          {
+            "max_queue_depths": [
+              0
+            ],
+            "queue_depths": [
+              0
+            ],
+            "rejected_enqueues": 0,
+            "t_s": 0,
+            "total_dispatched": 0,
+            "total_enqueued_by_shard": [
+              0
+            ]
+          },
+          {
+            "max_queue_depths": [
+              0
+            ],
+            "queue_depths": [
+              0
+            ],
+            "rejected_enqueues": 0,
+            "t_s": 59,
+            "total_dispatched": 0,
+            "total_enqueued_by_shard": [
+              0
+            ]
+          }
+        ],
+        "rejected_enqueues": 0,
+        "shard_count": 1,
+        "stall_reasons": {},
+        "total_dispatched": 0,
+        "total_enqueued_by_shard": [
+          0
+        ]
+      },
+      "shards": 1,
+      "throughput_eps": 0.5
+    },
+    "candidate": {
+      "events": {
+        "count": 50,
+        "errors": 0,
+        "events_ok": true,
+        "min_count": 45,
+        "target_count": 50
+      },
+      "latency_us": {
+        "count": 50,
+        "max": 118,
+        "mean": 38,
+        "min": 14,
+        "p50": 25,
+        "p95": 107,
+        "p99": 118,
+        "p999": 118
+      },
+      "reactor": {
+        "enabled": true,
+        "max_queue_depths": [
+          0,
+          0
+        ],
+        "migration_events": {
+          "by_transition": {},
+          "total": 0
+        },
+        "queue_depths_final": [
+          0,
+          0
+        ],
+        "queue_samples": [
+          {
+            "max_queue_depths": [
+              0,
+              0
+            ],
+            "queue_depths": [
+              0,
+              0
+            ],
+            "rejected_enqueues": 0,
+            "t_s": 0,
+            "total_dispatched": 0,
+            "total_enqueued_by_shard": [
+              0,
+              0
+            ]
+          },
+          {
+            "max_queue_depths": [
+              0,
+              0
+            ],
+            "queue_depths": [
+              0,
+              0
+            ],
+            "rejected_enqueues": 0,
+            "t_s": 1,
+            "total_dispatched": 0,
+            "total_enqueued_by_shard": [
+              0,
+              0
+            ]
+          },
+          {
+            "max_queue_depths": [
+              0,
+              0
+            ],
+            "queue_depths": [
+              0,
+              0
+            ],
+            "rejected_enqueues": 0,
+            "t_s": 2,
+            "total_dispatched": 0,
+            "total_enqueued_by_shard": [
+              0,
+              0
+            ]
+          }
+        ],
+        "rejected_enqueues": 0,
+        "shard_count": 2,
+        "stall_reasons": {},
+        "total_dispatched": 0,
+        "total_enqueued_by_shard": [
+          0,
+          0
+        ]
+      },
+      "shards": 2,
+      "throughput_eps": 25.0
+    },
+    "delta": {
+      "lane_overflow_stalls": 0,
+      "max_queue_depth_total": 0,
+      "p95_us": 58,
+      "p999_us": 69,
+      "p99_us": 69,
+      "rejected_enqueues": 0,
+      "throughput_eps": 24.5,
+      "throughput_gain_pct": 4900.0
+    },
+    "improved": {
+      "contention_proxy": true,
+      "p95": false,
+      "p99": false,
+      "p999": false,
+      "throughput": true
+    },
+    "mode": "shard_baseline_vs_reactor_mesh"
+  },
+  "config": {
+    "compare_baseline_shards": 1,
+    "compare_shard_baseline": true,
+    "dispatch_timeout_ms": 100,
+    "duration_secs": 2,
+    "event": "agent_start",
+    "events_per_sec": 25,
+    "max_extensions": 1,
+    "payload_index": 0,
+    "reactor_drain_budget": 32,
+    "reactor_enabled": true,
+    "reactor_lane_capacity": 64,
+    "reactor_shards": 2,
+    "rss_interval_secs": 1,
+    "tier": "official-pi-mono",
+    "warmup_secs": 0
+  },
+  "correlation_id": "bd-2zcs5.1-jade-tower-bounded",
+  "cpu": {
+    "process_max_pct": 60.32992935180664,
+    "process_mean_pct": 30.16496467590332,
+    "samples": [
+      {
+        "process_cpu_pct": 0.0,
+        "rss_bytes": 63823872,
+        "rss_kb": 62328,
+        "rss_kib": 62328,
+        "t_s": 0
+      },
+      {
+        "process_cpu_pct": 60.32992935180664,
+        "rss_bytes": 63844352,
+        "rss_kb": 62348,
+        "rss_kib": 62348,
+        "t_s": 1
+      }
+    ]
+  },
+  "events": {
+    "count": 50,
+    "errors": 0,
+    "min_count": 45,
+    "sample_errors": [],
+    "target_count": 50
+  },
+  "events_path": "tests/perf/reports/ext_stress_events.jsonl",
+  "extensions": {
+    "count": 1,
+    "names": [
+      "antigravity-image-gen/antigravity-image-gen.ts"
+    ]
+  },
+  "generated_at": "2026-05-08T06:40:04Z",
+  "host": {
+    "logical_cpus": 64,
+    "target_class": "64plus_cpu"
+  },
+  "latency_us": {
+    "p99_first": 118,
+    "p99_last": 92,
+    "summary": {
+      "count": 50,
+      "max": 118,
+      "mean": 38,
+      "min": 14,
+      "p50": 25,
+      "p95": 107,
+      "p99": 118,
+      "p999": 118
+    }
+  },
+  "pass": {
+    "comparison_ok": false,
+    "events_ok": true,
+    "latency_ok": true,
+    "overall": false,
+    "rss_ok": true
+  },
+  "reactor": {
+    "enabled": true,
+    "max_queue_depths": [
+      0,
+      0
+    ],
+    "migration_events": {
+      "by_transition": {},
+      "total": 0
+    },
+    "queue_depths_final": [
+      0,
+      0
+    ],
+    "queue_samples": [
+      {
+        "max_queue_depths": [
+          0,
+          0
+        ],
+        "queue_depths": [
+          0,
+          0
+        ],
+        "rejected_enqueues": 0,
+        "t_s": 0,
+        "total_dispatched": 0,
+        "total_enqueued_by_shard": [
+          0,
+          0
+        ]
+      },
+      {
+        "max_queue_depths": [
+          0,
+          0
+        ],
+        "queue_depths": [
+          0,
+          0
+        ],
+        "rejected_enqueues": 0,
+        "t_s": 1,
+        "total_dispatched": 0,
+        "total_enqueued_by_shard": [
+          0,
+          0
+        ]
+      },
+      {
+        "max_queue_depths": [
+          0,
+          0
+        ],
+        "queue_depths": [
+          0,
+          0
+        ],
+        "rejected_enqueues": 0,
+        "t_s": 2,
+        "total_dispatched": 0,
+        "total_enqueued_by_shard": [
+          0,
+          0
+        ]
+      }
+    ],
+    "rejected_enqueues": 0,
+    "shard_count": 2,
+    "stall_reasons": {},
+    "total_dispatched": 0,
+    "total_enqueued_by_shard": [
+      0,
+      0
+    ]
+  },
+  "rss": {
+    "growth_pct": 0.00032088307020921577,
+    "initial_bytes": 63823872,
+    "initial_kb": 62328,
+    "initial_kib": 62328,
+    "max_bytes": 63844352,
+    "max_kb": 62348,
+    "max_kib": 62348,
+    "samples": [
+      {
+        "process_cpu_pct": 0.0,
+        "rss_bytes": 63823872,
+        "rss_kb": 62328,
+        "rss_kib": 62328,
+        "t_s": 0
+      },
+      {
+        "process_cpu_pct": 60.32992935180664,
+        "rss_bytes": 63844352,
+        "rss_kb": 62348,
+        "rss_kib": 62348,
+        "t_s": 1
+      }
+    ]
+  },
+  "run_id": "jade-tower-bounded-20260508T0643Z",
+  "schema": "pi.ext.stress_profile.v1"
+}
