@@ -51,7 +51,23 @@ rch exec -- cargo test session
 
 For multi-agent sessions, treat `rch exec --` as mandatory for compilation commands. Use
 `./scripts/smoke.sh --require-rch` and `./scripts/ext_quality_pipeline.sh --require-rch`
-to avoid accidental local compile storms.
+to avoid accidental local compile storms. For ad hoc Cargo gates, prefer the
+headroom wrapper because it emits a JSON admission decision before running:
+
+```bash
+# Probe whether a heavy gate is safe to start without running it
+./scripts/cargo_headroom.sh --runner auto --admit-only clippy --all-targets -- -D warnings
+
+# Run through rch with target/tmp directories outside the repo
+PI_CARGO_AGENT_SUFFIX="$USER" ./scripts/cargo_headroom.sh --runner rch clippy --all-targets -- -D warnings
+```
+
+In `--runner auto` mode, the wrapper falls back locally only for safe local
+commands such as `cargo fmt` or when the operator passes
+`--allow-local-fallback` / `PI_CARGO_ALLOW_LOCAL_FALLBACK=1`. If `rch` is
+missing, saturated, or unhealthy for a heavy command, the wrapper returns a
+machine-readable `backoff` decision instead of silently starting a broad local
+Cargo run.
 
 ### Conformance Tests
 

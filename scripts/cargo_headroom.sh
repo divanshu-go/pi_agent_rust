@@ -20,6 +20,9 @@ Options:
   --tmpdir <path>             Override TMPDIR for this invocation
   --min-free-mb <mb>          Required free MB on target/tmp mounts (default: 24576)
   --min-inode-free-pct <pct>  Required free inode percent (default: 5)
+  --admit-only                Emit the admission decision without running cargo
+  --decision-json <path>      Also write the machine-readable decision to <path>
+  --allow-local-fallback      Permit auto-mode local fallback for heavy commands
   -h, --help                  Show this help
 
 Environment:
@@ -29,6 +32,8 @@ Environment:
                               resolves inside this repository)
   PI_CARGO_AGENT_SUFFIX       Per-agent subdirectory suffix (default: $USER)
   PI_CARGO_ALLOW_REPO_TARGET  Set to 1 to allow target dirs under the repo root
+  PI_CARGO_ALLOW_LOCAL_FALLBACK
+                              Set to 1 to permit heavy local fallback in auto mode
 EOF
 }
 
@@ -53,6 +58,9 @@ fi
 BUILD_ROOT="${PI_CARGO_BUILD_ROOT:-$DEFAULT_BUILD_ROOT}"
 TARGET_OVERRIDE=""
 TMPDIR_OVERRIDE=""
+ADMIT_ONLY=0
+DECISION_JSON_PATH=""
+ALLOW_LOCAL_FALLBACK="${PI_CARGO_ALLOW_LOCAL_FALLBACK:-0}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -80,6 +88,19 @@ while [[ $# -gt 0 ]]; do
             [[ $# -ge 2 ]] || die "--min-inode-free-pct requires a value"
             MIN_INODE_FREE_PCT="$2"
             shift 2
+            ;;
+        --admit-only)
+            ADMIT_ONLY=1
+            shift
+            ;;
+        --decision-json)
+            [[ $# -ge 2 ]] || die "--decision-json requires a value"
+            DECISION_JSON_PATH="$2"
+            shift 2
+            ;;
+        --allow-local-fallback)
+            ALLOW_LOCAL_FALLBACK=1
+            shift
             ;;
         -h|--help)
             usage
@@ -158,6 +179,72 @@ write_cache_tag() {
     fi
 }
 
+json_escape() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//$'\n'/\\n}"
+    value="${value//$'\r'/\\r}"
+    value="${value//$'\t'/\\t}"
+    printf '%s' "$value"
+}
+
+cargo_command_string() {
+    local out="" arg
+    for arg in "$@"; do
+        if [[ -n "$out" ]]; then
+            out+=" "
+        fi
+        out+="$arg"
+    done
+    printf '%s' "$out"
+}
+
+is_safe_local_command() {
+    local subcommand="$1"
+    shift || true
+    case "$subcommand" in
+        fmt|metadata|fetch|tree|locate-project|-V|--version|version)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
+emit_admission_decision() {
+    local decision="$1"
+    local resolved_runner="$2"
+    local reason="$3"
+    local command_class="$4"
+    local rch_detail="$5"
+    shift 5
+    local command_text json
+
+    command_text="$(cargo_command_string "$@")"
+    json="{\"schema\":\"pi.cargo_headroom.admission.v1\",\"decision\":\"$(json_escape "$decision")\",\"requested_runner\":\"$(json_escape "$RUNNER")\",\"resolved_runner\":\"$(json_escape "$resolved_runner")\",\"reason\":\"$(json_escape "$reason")\",\"command_class\":\"$(json_escape "$command_class")\",\"allow_local_fallback\":$(if [[ "$ALLOW_LOCAL_FALLBACK" == "1" ]]; then echo true; else echo false; fi),\"cargo_target_dir\":\"$(json_escape "$CARGO_TARGET_DIR")\",\"tmpdir\":\"$(json_escape "$TMPDIR")\",\"cargo_command\":\"$(json_escape "$command_text")\",\"rch_detail\":\"$(json_escape "$rch_detail")\"}"
+
+    echo "$json"
+    if [[ -n "$DECISION_JSON_PATH" ]]; then
+        printf '%s\n' "$json" > "$DECISION_JSON_PATH"
+    fi
+}
+
+check_rch_health() {
+    if ! command -v rch >/dev/null 2>&1; then
+        RCH_DETAIL="rch_not_found"
+        return 1
+    fi
+    if RCH_DETAIL="$(rch check --quiet 2>&1)"; then
+        RCH_DETAIL="rch_check_ok"
+        return 0
+    fi
+    if [[ -z "$RCH_DETAIL" ]]; then
+        RCH_DETAIL="rch_check_failed"
+    fi
+    return 1
+}
+
 if [[ -n "$TARGET_OVERRIDE" ]]; then
     export CARGO_TARGET_DIR="$TARGET_OVERRIDE"
 elif [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
@@ -214,6 +301,9 @@ esac
 
 write_cache_tag "$CARGO_TARGET_DIR"
 
+HEADROOM_OK=1
+HEADROOM_FAILURES=()
+
 probe_headroom() {
     local label="$1"
     local path="$2"
@@ -233,20 +323,33 @@ probe_headroom() {
     echo "[cargo-headroom] $label mount=$mount_point free=${avail_mb}MB inode_free=${inode_free_pct}% path=$path"
 
     if (( avail_mb < MIN_FREE_MB )); then
-        die "$label mount '$mount_point' has ${avail_mb}MB free (< ${MIN_FREE_MB}MB required)"
+        HEADROOM_FAILURES+=("$label mount '$mount_point' has ${avail_mb}MB free (< ${MIN_FREE_MB}MB required)")
+        return 1
     fi
     if (( inode_free_pct < MIN_INODE_FREE_PCT )); then
-        die "$label mount '$mount_point' has ${inode_free_pct}% free inodes (< ${MIN_INODE_FREE_PCT}% required)"
+        HEADROOM_FAILURES+=("$label mount '$mount_point' has ${inode_free_pct}% free inodes (< ${MIN_INODE_FREE_PCT}% required)")
+        return 1
     fi
 }
 
-probe_headroom "cargo_target" "$CARGO_TARGET_DIR"
-probe_headroom "tmp" "$TMPDIR"
+probe_headroom "cargo_target" "$CARGO_TARGET_DIR" || HEADROOM_OK=0
+probe_headroom "tmp" "$TMPDIR" || HEADROOM_OK=0
 
 echo "[cargo-headroom] runner=$RUNNER cargo_target=$CARGO_TARGET_DIR tmp=$TMPDIR"
 
+if (( HEADROOM_OK == 0 )); then
+    emit_admission_decision \
+        "backoff" \
+        "none" \
+        "insufficient_headroom" \
+        "blocked" \
+        "$(cargo_command_string "${HEADROOM_FAILURES[@]}")" \
+        "$@"
+    printf '[cargo-headroom] ERROR: %s\n' "${HEADROOM_FAILURES[@]}" >&2
+    exit 2
+fi
+
 run_with_rch() {
-    command -v rch >/dev/null 2>&1 || die "runner=rch requested, but rch is not available"
     exec env \
         RCH_FORCE_REMOTE="${RCH_FORCE_REMOTE:-true}" \
         CARGO_TARGET_DIR="$CARGO_TARGET_DIR" \
@@ -254,17 +357,57 @@ run_with_rch() {
         rch exec -- cargo "$@"
 }
 
+run_local_cargo() {
+    exec env CARGO_TARGET_DIR="$CARGO_TARGET_DIR" TMPDIR="$TMPDIR" cargo "$@"
+}
+
+COMMAND_CLASS="heavy"
+if is_safe_local_command "$@"; then
+    COMMAND_CLASS="safe_local"
+fi
+
 case "$RUNNER" in
     rch)
+        if ! check_rch_health; then
+            emit_admission_decision "backoff" "none" "rch_unavailable" "$COMMAND_CLASS" "$RCH_DETAIL" "$@"
+            exit 2
+        fi
+        emit_admission_decision "allow" "rch" "rch_available" "$COMMAND_CLASS" "$RCH_DETAIL" "$@"
+        if (( ADMIT_ONLY == 1 )); then
+            exit 0
+        fi
         run_with_rch "$@"
         ;;
     auto)
-        if command -v rch >/dev/null 2>&1 && rch check --quiet >/dev/null 2>&1; then
+        if check_rch_health; then
+            emit_admission_decision "allow" "rch" "rch_available" "$COMMAND_CLASS" "$RCH_DETAIL" "$@"
+            if (( ADMIT_ONLY == 1 )); then
+                exit 0
+            fi
             run_with_rch "$@"
         fi
-        exec env CARGO_TARGET_DIR="$CARGO_TARGET_DIR" TMPDIR="$TMPDIR" cargo "$@"
+        if [[ "$COMMAND_CLASS" == "safe_local" ]]; then
+            emit_admission_decision "degraded" "local" "safe_local_command" "$COMMAND_CLASS" "$RCH_DETAIL" "$@"
+            if (( ADMIT_ONLY == 1 )); then
+                exit 0
+            fi
+            run_local_cargo "$@"
+        fi
+        if [[ "$ALLOW_LOCAL_FALLBACK" == "1" ]]; then
+            emit_admission_decision "degraded" "local" "explicit_local_fallback" "$COMMAND_CLASS" "$RCH_DETAIL" "$@"
+            if (( ADMIT_ONLY == 1 )); then
+                exit 0
+            fi
+            run_local_cargo "$@"
+        fi
+        emit_admission_decision "backoff" "none" "rch_unavailable" "$COMMAND_CLASS" "$RCH_DETAIL" "$@"
+        exit 2
         ;;
     local)
-        exec env CARGO_TARGET_DIR="$CARGO_TARGET_DIR" TMPDIR="$TMPDIR" cargo "$@"
+        emit_admission_decision "allow" "local" "explicit_local_runner" "$COMMAND_CLASS" "not_checked" "$@"
+        if (( ADMIT_ONLY == 1 )); then
+            exit 0
+        fi
+        run_local_cargo "$@"
         ;;
 esac
