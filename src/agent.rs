@@ -57,6 +57,7 @@ use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 use tracing::warn;
 
 const MIN_COMPATIBLE_TOOL_PARALLELISM: usize = 8;
@@ -68,6 +69,8 @@ const MAX_STEERING_QUEUE_SIZE: usize = 100;
 const MAX_FOLLOW_UP_QUEUE_SIZE: usize = 100;
 /// Maximum messages in agent history to prevent unbounded growth
 const MAX_AGENT_MESSAGES: usize = 10_000;
+/// Schema identifier for per-turn latency budget breakdowns.
+pub const TURN_LATENCY_BREAKDOWN_SCHEMA_V1: &str = "pi.agent.turn_latency_breakdown.v1";
 
 fn compatible_tool_parallelism_limit() -> usize {
     static LIMIT: OnceLock<usize> = OnceLock::new();
@@ -115,6 +118,208 @@ fn resolve_compatible_tool_parallelism(
             );
             host_default
         }
+    }
+}
+
+fn duration_millis_saturating(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// Nearest-rank tail percentile summary for a latency sample set.
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LatencyPercentiles {
+    /// Median latency, in milliseconds.
+    pub p50_ms: u64,
+    /// P95 latency, in milliseconds.
+    pub p95_ms: u64,
+    /// P99 latency, in milliseconds.
+    pub p99_ms: u64,
+}
+
+impl LatencyPercentiles {
+    fn from_samples(samples: &[u64]) -> Self {
+        Self {
+            p50_ms: percentile_nearest_rank(samples, 50),
+            p95_ms: percentile_nearest_rank(samples, 95),
+            p99_ms: percentile_nearest_rank(samples, 99),
+        }
+    }
+}
+
+/// Latency budget contribution for one component in a turn.
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LatencyComponentBreakdown {
+    /// Sum of all component samples in the turn, in milliseconds.
+    pub duration_ms: u64,
+    /// Number of samples recorded for the component in the turn.
+    pub samples: usize,
+    /// Tail percentiles for the component samples.
+    pub tail_percentiles: LatencyPercentiles,
+}
+
+impl LatencyComponentBreakdown {
+    /// Build a component breakdown from millisecond samples.
+    #[must_use]
+    pub fn from_millis_samples(samples: &[u64]) -> Self {
+        Self {
+            duration_ms: samples.iter().copied().fold(0u64, u64::saturating_add),
+            samples: samples.len(),
+            tail_percentiles: LatencyPercentiles::from_samples(samples),
+        }
+    }
+}
+
+/// Per-turn breakdown of provider, tool, extension hook, and persistence budgets.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnLatencyBreakdown {
+    /// Versioned schema identifier for downstream evidence consumers.
+    pub schema: &'static str,
+    /// Total measured turn time in the core agent loop, in milliseconds.
+    pub total_ms: u64,
+    /// Provider streaming budget, including stream setup and drain time.
+    pub provider_streaming: LatencyComponentBreakdown,
+    /// Built-in/local tool execution budget.
+    pub local_tools: LatencyComponentBreakdown,
+    /// Extension hook dispatch budget around tool calls.
+    pub extension_hostcalls: LatencyComponentBreakdown,
+    /// Session persistence budget when measured by the current runtime path.
+    pub persistence: LatencyComponentBreakdown,
+    /// Component with the largest measured duration.
+    pub dominant_component: String,
+}
+
+impl TurnLatencyBreakdown {
+    /// Build a latency breakdown from component sample sets.
+    #[must_use]
+    pub fn from_component_samples(
+        total_ms: u64,
+        provider_streaming_ms: &[u64],
+        local_tool_ms: &[u64],
+        extension_hostcall_ms: &[u64],
+        persistence_ms: &[u64],
+    ) -> Self {
+        let provider_streaming =
+            LatencyComponentBreakdown::from_millis_samples(provider_streaming_ms);
+        let local_tools = LatencyComponentBreakdown::from_millis_samples(local_tool_ms);
+        let extension_hostcalls =
+            LatencyComponentBreakdown::from_millis_samples(extension_hostcall_ms);
+        let persistence = LatencyComponentBreakdown::from_millis_samples(persistence_ms);
+        let dominant_component = dominant_latency_component(
+            &provider_streaming,
+            &local_tools,
+            &extension_hostcalls,
+            &persistence,
+        );
+
+        Self {
+            schema: TURN_LATENCY_BREAKDOWN_SCHEMA_V1,
+            total_ms,
+            provider_streaming,
+            local_tools,
+            extension_hostcalls,
+            persistence,
+            dominant_component,
+        }
+    }
+}
+
+fn percentile_nearest_rank(samples: &[u64], percentile: usize) -> u64 {
+    if samples.is_empty() {
+        return 0;
+    }
+
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    let len = sorted.len();
+    let rank = percentile
+        .saturating_mul(len)
+        .div_ceil(100)
+        .saturating_sub(1)
+        .min(len.saturating_sub(1));
+    sorted[rank]
+}
+
+fn dominant_latency_component(
+    provider_streaming: &LatencyComponentBreakdown,
+    local_tools: &LatencyComponentBreakdown,
+    extension_hostcalls: &LatencyComponentBreakdown,
+    persistence: &LatencyComponentBreakdown,
+) -> String {
+    [
+        ("provider_streaming", provider_streaming.duration_ms),
+        ("local_tools", local_tools.duration_ms),
+        ("extension_hostcalls", extension_hostcalls.duration_ms),
+        ("persistence", persistence.duration_ms),
+    ]
+    .into_iter()
+    .max_by_key(|(_, duration_ms)| *duration_ms)
+    .filter(|(_, duration_ms)| *duration_ms > 0)
+    .map_or_else(|| "none".to_string(), |(name, _)| name.to_string())
+}
+
+#[derive(Debug)]
+struct TurnLatencyAccumulator {
+    started_at: Instant,
+    provider_streaming_ms: Vec<u64>,
+    local_tool_ms: Vec<u64>,
+    extension_hostcall_ms: Vec<u64>,
+    persistence_ms: Vec<u64>,
+}
+
+impl TurnLatencyAccumulator {
+    fn started() -> Self {
+        Self {
+            started_at: Instant::now(),
+            provider_streaming_ms: Vec::new(),
+            local_tool_ms: Vec::new(),
+            extension_hostcall_ms: Vec::new(),
+            persistence_ms: Vec::new(),
+        }
+    }
+
+    fn snapshot(&self) -> TurnLatencyBreakdown {
+        TurnLatencyBreakdown::from_component_samples(
+            duration_millis_saturating(self.started_at.elapsed()),
+            &self.provider_streaming_ms,
+            &self.local_tool_ms,
+            &self.extension_hostcall_ms,
+            &self.persistence_ms,
+        )
+    }
+}
+
+type SharedTurnLatencyAccumulator = Arc<StdMutex<TurnLatencyAccumulator>>;
+
+fn snapshot_turn_latency(
+    latency: &SharedTurnLatencyAccumulator,
+) -> Option<Box<TurnLatencyBreakdown>> {
+    latency.lock().ok().map(|guard| Box::new(guard.snapshot()))
+}
+
+fn record_provider_streaming_latency(latency: &SharedTurnLatencyAccumulator, duration: Duration) {
+    if let Ok(mut guard) = latency.lock() {
+        guard
+            .provider_streaming_ms
+            .push(duration_millis_saturating(duration));
+    }
+}
+
+fn record_local_tool_latency(latency: &SharedTurnLatencyAccumulator, duration: Duration) {
+    if let Ok(mut guard) = latency.lock() {
+        guard
+            .local_tool_ms
+            .push(duration_millis_saturating(duration));
+    }
+}
+
+fn record_extension_hostcall_latency(latency: &SharedTurnLatencyAccumulator, duration: Duration) {
+    if let Ok(mut guard) = latency.lock() {
+        guard
+            .extension_hostcall_ms
+            .push(duration_millis_saturating(duration));
     }
 }
 
@@ -495,6 +700,8 @@ pub enum AgentEvent {
         message: Message,
         #[serde(rename = "toolResults")]
         tool_results: Vec<Message>,
+        #[serde(rename = "latencyBreakdown", skip_serializing_if = "Option::is_none")]
+        latency_breakdown: Option<Box<TurnLatencyBreakdown>>,
     },
     /// Message lifecycle start (user, assistant, or tool result).
     MessageStart { message: Message },
@@ -1027,6 +1234,7 @@ impl Agent {
 
             while has_more_tool_calls || !pending_messages.is_empty() {
                 let current_turn_index = turn_index;
+                let turn_latency = Arc::new(StdMutex::new(TurnLatencyAccumulator::started()));
                 let turn_start_event = AgentEvent::TurnStart {
                     session_id: session_id.clone(),
                     turn_index: current_turn_index,
@@ -1065,6 +1273,7 @@ impl Agent {
                         turn_index: current_turn_index,
                         message,
                         tool_results: Vec::new(),
+                        latency_breakdown: snapshot_turn_latency(&turn_latency),
                     };
                     self.dispatch_extension_lifecycle_event(&turn_end_event)
                         .await;
@@ -1085,10 +1294,16 @@ impl Agent {
                     return Ok(abort_message);
                 }
 
-                let assistant_message = match self
+                let provider_streaming_started_at = Instant::now();
+                let assistant_result = self
                     .stream_assistant_response(Arc::clone(&on_event), abort.clone(), &loop_cx)
-                    .await
-                {
+                    .await;
+                record_provider_streaming_latency(
+                    &turn_latency,
+                    provider_streaming_started_at.elapsed(),
+                );
+
+                let assistant_message = match assistant_result {
                     Ok(msg) => msg,
                     Err(err) => {
                         let err_string = err.to_string();
@@ -1120,6 +1335,7 @@ impl Agent {
                             turn_index: current_turn_index,
                             message: assistant_event_message,
                             tool_results: Vec::new(),
+                            latency_breakdown: snapshot_turn_latency(&turn_latency),
                         };
                         self.dispatch_extension_lifecycle_event(&turn_end_event)
                             .await;
@@ -1165,6 +1381,7 @@ impl Agent {
                         turn_index: current_turn_index,
                         message: assistant_event_message.clone(),
                         tool_results: Vec::new(),
+                        latency_breakdown: snapshot_turn_latency(&turn_latency),
                     };
                     self.dispatch_extension_lifecycle_event(&turn_end_event)
                         .await;
@@ -1262,6 +1479,7 @@ impl Agent {
                             turn_index: current_turn_index,
                             message: stop_event_message,
                             tool_results: Vec::new(),
+                            latency_breakdown: snapshot_turn_latency(&turn_latency),
                         };
                         self.dispatch_extension_lifecycle_event(&turn_end_event)
                             .await;
@@ -1285,6 +1503,7 @@ impl Agent {
                             Arc::clone(&on_event),
                             &mut new_messages,
                             abort.clone(),
+                            Arc::clone(&turn_latency),
                         )
                         .await
                     {
@@ -1307,6 +1526,7 @@ impl Agent {
                                 turn_index: current_turn_index,
                                 message: assistant_event_message.clone(),
                                 tool_results: Vec::new(),
+                                latency_breakdown: snapshot_turn_latency(&turn_latency),
                             };
                             self.dispatch_extension_lifecycle_event(&turn_end_event)
                                 .await;
@@ -1337,6 +1557,7 @@ impl Agent {
                     turn_index: current_turn_index,
                     message: assistant_event_message.clone(),
                     tool_results: tool_messages,
+                    latency_breakdown: snapshot_turn_latency(&turn_latency),
                 };
                 self.dispatch_extension_lifecycle_event(&turn_end_event)
                     .await;
@@ -2182,11 +2403,13 @@ impl Agent {
         batch: Vec<(usize, ToolCall)>,
         on_event: AgentEventHandler,
         abort: Option<AbortSignal>,
+        latency: SharedTurnLatencyAccumulator,
     ) -> Vec<(usize, (ToolOutput, bool))> {
         let parallelism = compatible_tool_parallelism_limit();
         let futures = batch.into_iter().map(|(idx, tc)| {
             let on_event = Arc::clone(&on_event);
-            async move { (idx, self.execute_tool_owned(tc, on_event).await) }
+            let latency = Arc::clone(&latency);
+            async move { (idx, self.execute_tool_owned(tc, on_event, latency).await) }
         });
 
         if let Some(signal) = abort.as_ref() {
@@ -2217,6 +2440,7 @@ impl Agent {
         on_event: AgentEventHandler,
         new_messages: &mut Vec<Message>,
         abort: Option<AbortSignal>,
+        latency: SharedTurnLatencyAccumulator,
     ) -> Result<ToolExecutionOutcome> {
         let mut results = Vec::new();
         let mut steering_messages: Option<Vec<Message>> = None;
@@ -2263,7 +2487,12 @@ impl Agent {
                 .take(batch_len)
                 .collect();
             let mut batch_results = self
-                .execute_tool_batch(batch, Arc::clone(&on_event), abort.clone())
+                .execute_tool_batch(
+                    batch,
+                    Arc::clone(&on_event),
+                    abort.clone(),
+                    Arc::clone(&latency),
+                )
                 .await;
             batch_results.sort_by_key(|(idx, _)| *idx);
             for (idx, (output, is_error)) in batch_results {
@@ -2413,30 +2642,43 @@ impl Agent {
         &self,
         tool_call: ToolCall,
         on_event: AgentEventHandler,
+        latency: SharedTurnLatencyAccumulator,
     ) -> (ToolOutput, bool) {
         let extensions = self.extensions.clone();
 
         let (mut output, is_error) = if let Some(extensions) = &extensions {
-            match Self::dispatch_tool_call_hook(
+            let hook_started_at = Instant::now();
+            let hook_outcome = Self::dispatch_tool_call_hook(
                 extensions,
                 &tool_call,
                 self.config.fail_closed_hooks,
             )
-            .await
-            {
-                Some(blocked_output) => (blocked_output, true),
-                None => {
-                    self.execute_tool_without_hooks(&tool_call, Arc::clone(&on_event))
-                        .await
-                }
+            .await;
+            record_extension_hostcall_latency(&latency, hook_started_at.elapsed());
+
+            if let Some(blocked_output) = hook_outcome {
+                (blocked_output, true)
+            } else {
+                let tool_started_at = Instant::now();
+                let outcome = self
+                    .execute_tool_without_hooks(&tool_call, Arc::clone(&on_event))
+                    .await;
+                record_local_tool_latency(&latency, tool_started_at.elapsed());
+                outcome
             }
         } else {
-            self.execute_tool_without_hooks(&tool_call, Arc::clone(&on_event))
-                .await
+            let tool_started_at = Instant::now();
+            let outcome = self
+                .execute_tool_without_hooks(&tool_call, Arc::clone(&on_event))
+                .await;
+            record_local_tool_latency(&latency, tool_started_at.elapsed());
+            outcome
         };
 
         if let Some(extensions) = &extensions {
+            let hook_started_at = Instant::now();
             Self::apply_tool_result_hook(extensions, &tool_call, &mut output, is_error).await;
+            record_extension_hostcall_latency(&latency, hook_started_at.elapsed());
         }
 
         (output, is_error)
@@ -2446,8 +2688,9 @@ impl Agent {
         &self,
         tool_call: ToolCall,
         on_event: AgentEventHandler,
+        latency: SharedTurnLatencyAccumulator,
     ) -> (ToolOutput, bool) {
-        self.execute_tool(tool_call, on_event).await
+        self.execute_tool(tool_call, on_event, latency).await
     }
 
     async fn execute_tool_without_hooks(
@@ -4130,6 +4373,44 @@ mod extensions_integration_tests {
         });
     }
 
+    fn test_turn_latency() -> SharedTurnLatencyAccumulator {
+        Arc::new(StdMutex::new(TurnLatencyAccumulator::started()))
+    }
+
+    #[test]
+    fn latency_breakdown_reports_component_tail_percentiles() {
+        let breakdown =
+            TurnLatencyBreakdown::from_component_samples(250, &[10, 30, 20], &[40, 5], &[2], &[]);
+
+        assert_eq!(breakdown.schema, TURN_LATENCY_BREAKDOWN_SCHEMA_V1);
+        assert_eq!(breakdown.provider_streaming.duration_ms, 60);
+        assert_eq!(breakdown.provider_streaming.samples, 3);
+        assert_eq!(breakdown.provider_streaming.tail_percentiles.p50_ms, 20);
+        assert_eq!(breakdown.provider_streaming.tail_percentiles.p95_ms, 30);
+        assert_eq!(breakdown.provider_streaming.tail_percentiles.p99_ms, 30);
+        assert_eq!(breakdown.local_tools.duration_ms, 45);
+        assert_eq!(breakdown.extension_hostcalls.duration_ms, 2);
+        assert_eq!(breakdown.persistence.duration_ms, 0);
+        assert_eq!(breakdown.dominant_component, "provider_streaming");
+    }
+
+    #[test]
+    fn latency_breakdown_serializes_without_provider_secrets() {
+        let breakdown =
+            TurnLatencyBreakdown::from_component_samples(125, &[100], &[20], &[5], &[0]);
+        let serialized = serde_json::to_string(&breakdown).expect("serialize latency breakdown");
+
+        assert!(serialized.contains(TURN_LATENCY_BREAKDOWN_SCHEMA_V1));
+        assert!(serialized.contains("providerStreaming"));
+        assert!(serialized.contains("localTools"));
+        assert!(serialized.contains("extensionHostcalls"));
+        assert!(serialized.contains("persistence"));
+        assert!(!serialized.contains("api_key"));
+        assert!(!serialized.contains("authorization"));
+        assert!(!serialized.contains("bearer"));
+        assert!(!serialized.contains("sk-"));
+    }
+
     #[test]
     fn tool_call_hook_can_block_tool_execution() {
         let runtime = RuntimeBuilder::current_thread()
@@ -4177,7 +4458,10 @@ mod extensions_integration_tests {
             };
 
             let on_event: Arc<dyn Fn(AgentEvent) + Send + Sync> = Arc::new(|_| {});
-            let (output, is_error) = agent_session.agent.execute_tool(tool_call, on_event).await;
+            let (output, is_error) = agent_session
+                .agent
+                .execute_tool(tool_call, on_event, test_turn_latency())
+                .await;
 
             assert!(is_error);
             assert!(output.is_error);
@@ -4239,7 +4523,10 @@ mod extensions_integration_tests {
             };
 
             let on_event: Arc<dyn Fn(AgentEvent) + Send + Sync> = Arc::new(|_| {});
-            let (output, is_error) = agent_session.agent.execute_tool(tool_call, on_event).await;
+            let (output, is_error) = agent_session
+                .agent
+                .execute_tool(tool_call, on_event, test_turn_latency())
+                .await;
 
             assert!(!is_error);
             assert!(!output.is_error);
@@ -4298,7 +4585,10 @@ mod extensions_integration_tests {
             };
 
             let on_event: Arc<dyn Fn(AgentEvent) + Send + Sync> = Arc::new(|_| {});
-            let (output, is_error) = agent_session.agent.execute_tool(tool_call, on_event).await;
+            let (output, is_error) = agent_session
+                .agent
+                .execute_tool(tool_call, on_event, test_turn_latency())
+                .await;
 
             assert!(is_error);
             assert!(output.is_error);
@@ -4355,7 +4645,10 @@ mod extensions_integration_tests {
             };
 
             let on_event: Arc<dyn Fn(AgentEvent) + Send + Sync> = Arc::new(|_| {});
-            let (output, is_error) = agent_session.agent.execute_tool(tool_call, on_event).await;
+            let (output, is_error) = agent_session
+                .agent
+                .execute_tool(tool_call, on_event, test_turn_latency())
+                .await;
 
             assert!(!is_error);
             assert!(!output.is_error);
@@ -4405,7 +4698,10 @@ mod extensions_integration_tests {
             };
 
             let on_event: Arc<dyn Fn(AgentEvent) + Send + Sync> = Arc::new(|_| {});
-            let (output, is_error) = agent_session.agent.execute_tool(tool_call, on_event).await;
+            let (output, is_error) = agent_session
+                .agent
+                .execute_tool(tool_call, on_event, test_turn_latency())
+                .await;
 
             assert!(!is_error);
             assert!(!output.is_error);
@@ -4456,7 +4752,10 @@ mod extensions_integration_tests {
             };
 
             let on_event: Arc<dyn Fn(AgentEvent) + Send + Sync> = Arc::new(|_| {});
-            let (output, is_error) = agent_session.agent.execute_tool(tool_call, on_event).await;
+            let (output, is_error) = agent_session
+                .agent
+                .execute_tool(tool_call, on_event, test_turn_latency())
+                .await;
 
             assert!(is_error);
             assert!(output.is_error);
@@ -4526,7 +4825,10 @@ mod extensions_integration_tests {
             };
 
             let on_event: Arc<dyn Fn(AgentEvent) + Send + Sync> = Arc::new(|_| {});
-            let (output, is_error) = agent_session.agent.execute_tool(tool_call, on_event).await;
+            let (output, is_error) = agent_session
+                .agent
+                .execute_tool(tool_call, on_event, test_turn_latency())
+                .await;
 
             assert!(!is_error);
             assert!(!output.is_error);
@@ -4591,7 +4893,10 @@ mod extensions_integration_tests {
             };
 
             let on_event: Arc<dyn Fn(AgentEvent) + Send + Sync> = Arc::new(|_| {});
-            let (output, is_error) = agent_session.agent.execute_tool(tool_call, on_event).await;
+            let (output, is_error) = agent_session
+                .agent
+                .execute_tool(tool_call, on_event, test_turn_latency())
+                .await;
 
             assert!(is_error);
             assert!(output.is_error);
@@ -4652,7 +4957,10 @@ mod extensions_integration_tests {
             };
 
             let on_event: Arc<dyn Fn(AgentEvent) + Send + Sync> = Arc::new(|_| {});
-            let (output, is_error) = agent_session.agent.execute_tool(tool_call, on_event).await;
+            let (output, is_error) = agent_session
+                .agent
+                .execute_tool(tool_call, on_event, test_turn_latency())
+                .await;
 
             assert!(!is_error);
             assert!(!output.is_error);
@@ -4724,7 +5032,10 @@ mod extensions_integration_tests {
             };
 
             let on_event: Arc<dyn Fn(AgentEvent) + Send + Sync> = Arc::new(|_| {});
-            let (output, is_error) = agent_session.agent.execute_tool(tool_call, on_event).await;
+            let (output, is_error) = agent_session
+                .agent
+                .execute_tool(tool_call, on_event, test_turn_latency())
+                .await;
 
             assert!(is_error);
             assert!(output.is_error);

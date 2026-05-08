@@ -12,7 +12,7 @@
 mod common;
 
 use common::TestHarness;
-use pi::agent::AgentEvent;
+use pi::agent::{AgentEvent, TURN_LATENCY_BREAKDOWN_SCHEMA_V1, TurnLatencyBreakdown};
 use pi::extensions::{ExtensionEventName, ExtensionUiRequest, extension_event_from_agent};
 use pi::model::{
     AssistantMessage, AssistantMessageEvent, ContentBlock, ImageContent, Message, StopReason,
@@ -210,6 +210,7 @@ fn json_parity_turn_end_schema() {
         turn_index: 0,
         message: assistant_msg,
         tool_results: vec![],
+        latency_breakdown: None,
     };
     let json = event_to_json(&event);
 
@@ -228,6 +229,45 @@ fn json_parity_turn_end_schema() {
         .info_ctx("json_parity", "turn_end schema ok", |ctx| {
             ctx.push(("turnIndex".to_string(), "0".to_string()));
         });
+}
+
+#[test]
+fn json_parity_turn_end_latency_breakdown_schema() {
+    let assistant_msg = Message::Assistant(Arc::new(test_assistant_message()));
+    let event = AgentEvent::TurnEnd {
+        session_id: "session-latency".to_string().into(),
+        turn_index: 7,
+        message: assistant_msg,
+        tool_results: vec![],
+        latency_breakdown: Some(Box::new(TurnLatencyBreakdown::from_component_samples(
+            160,
+            &[90],
+            &[40, 5],
+            &[10],
+            &[15],
+        ))),
+    };
+    let json = event_to_json(&event);
+    let breakdown = json
+        .get("latencyBreakdown")
+        .expect("turn_end should expose latency breakdown");
+
+    assert_eq!(breakdown["schema"], TURN_LATENCY_BREAKDOWN_SCHEMA_V1);
+    assert_eq!(breakdown["totalMs"], 160);
+    assert_eq!(breakdown["providerStreaming"]["durationMs"], 90);
+    assert_eq!(
+        breakdown["providerStreaming"]["tailPercentiles"]["p99Ms"],
+        90
+    );
+    assert_eq!(breakdown["localTools"]["durationMs"], 45);
+    assert_eq!(breakdown["extensionHostcalls"]["samples"], 1);
+    assert_eq!(breakdown["persistence"]["durationMs"], 15);
+    assert_eq!(breakdown["dominantComponent"], "provider_streaming");
+
+    let serialized = serde_json::to_string(&json).expect("serialize event json");
+    assert!(!serialized.contains("api_key"));
+    assert!(!serialized.contains("authorization"));
+    assert!(!serialized.contains("sk-"));
 }
 
 // ============================================================================
@@ -666,6 +706,7 @@ fn json_parity_complete_lifecycle_ordering() {
             turn_index: 0,
             message: Message::Assistant(Arc::clone(&partial)),
             tool_results: vec![],
+            latency_breakdown: None,
         },
         AgentEvent::AgentEnd {
             session_id: session_id.to_string().into(),
@@ -878,6 +919,7 @@ fn json_parity_no_snake_case_leak() {
             turn_index: 0,
             message: test_user_message(),
             tool_results: vec![],
+            latency_breakdown: None,
         },
         AgentEvent::MessageStart {
             message: test_user_message(),
@@ -1061,6 +1103,7 @@ fn json_parity_all_event_type_strings() {
                 turn_index: 0,
                 message: test_user_message(),
                 tool_results: vec![],
+                latency_breakdown: None,
             },
             "turn_end",
         ),
@@ -1755,7 +1798,7 @@ fn json_parity_complete_lifecycle_with_extension_ui() {
 
     // No field name collisions between event types.
     // Tool events use toolCallId/toolName, UI events use id/method.
-    assert!(tool_start.get("id").is_none() || tool_start["id"] != ui_req["id"]);
+    assert!(tool_start.get("id").is_none());
     assert!(ui_req.get("toolCallId").is_none());
     assert!(ui_req.get("toolName").is_none());
 
@@ -1804,6 +1847,7 @@ fn json_parity_extension_event_from_agent_mapping() {
                 turn_index: 0,
                 message: test_user_message(),
                 tool_results: vec![],
+                latency_breakdown: None,
             },
             ExtensionEventName::TurnEnd,
         ),
@@ -3400,6 +3444,7 @@ fn json_parity_full_lifecycle_with_tool_turn() {
             turn_index: 0,
             message: Message::Assistant(Arc::clone(&partial)),
             tool_results: vec![test_user_message()],
+            latency_breakdown: None,
         },
         // Agent end.
         AgentEvent::AgentEnd {
@@ -3515,6 +3560,7 @@ fn json_parity_lifecycle_with_retry() {
             turn_index: 0,
             message: Message::Assistant(Arc::new(test_assistant_message())),
             tool_results: vec![],
+            latency_breakdown: None,
         },
         AgentEvent::AgentEnd {
             session_id: sid.to_string().into(),
@@ -3573,6 +3619,7 @@ fn json_parity_lifecycle_with_compaction() {
             turn_index: 0,
             message: Message::Assistant(Arc::new(test_assistant_message())),
             tool_results: vec![],
+            latency_breakdown: None,
         },
         // Compaction triggered between turns.
         AgentEvent::AutoCompactionStart {
@@ -3599,6 +3646,7 @@ fn json_parity_lifecycle_with_compaction() {
             turn_index: 1,
             message: Message::Assistant(Arc::new(test_assistant_message())),
             tool_results: vec![],
+            latency_breakdown: None,
         },
         AgentEvent::AgentEnd {
             session_id: sid.to_string().into(),
@@ -3669,6 +3717,7 @@ fn json_parity_turn_index_monotonic() {
             turn_index: turn,
             message: Message::Assistant(Arc::new(test_assistant_message())),
             tool_results: vec![],
+            latency_breakdown: None,
         });
     }
 
@@ -3784,6 +3833,7 @@ fn json_parity_turn_end_multiple_tool_results() {
             test_user_message(),
             test_user_message(),
         ],
+        latency_breakdown: None,
     };
     let json = event_to_json(&event);
 
@@ -3876,6 +3926,7 @@ fn json_parity_extension_event_payload_all_forwarded() {
                 turn_index: 3,
                 message: test_user_message(),
                 tool_results: vec![],
+                latency_breakdown: None,
             },
             "turnIndex",
         ),
