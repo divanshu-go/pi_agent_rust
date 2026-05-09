@@ -122,6 +122,11 @@ preflight and staging JSON label reused artifacts with `source_kind=cache` or
 `rejected_evidence_cache_entries`. Use `PI_PERF_EVIDENCE_CACHE_TTL_HOURS` to
 shorten the maximum accepted cache lifetime.
 
+The orchestrator's `env_fingerprint.json` is cgroup-aware. It records cgroup v2
+CPU quota, cpuset size, memory limit, NUMA node count, host-vs-container
+caveats, and a `budget_profile` whose target CPU/memory values use constrained
+container resources when they are lower than the host totals.
+
 Run heavyweight checks with remote offload:
 
 ```bash

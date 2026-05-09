@@ -13,6 +13,7 @@ import argparse
 import glob
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -30,6 +31,7 @@ from typing import Any
 SCHEMA = "pi.perf.budget_preflight.v1"
 EVIDENCE_CACHE_SCHEMA = "pi.perf.evidence_cache.v1"
 EVIDENCE_CACHE_ENTRY_SCHEMA = "pi.perf.evidence_cache_entry.v1"
+HOST_TOPOLOGY_SCHEMA = "pi.perf.host_topology_fingerprint.v1"
 DEFAULT_MAX_ARTIFACT_AGE_HOURS = 24.0
 DEFAULT_EVIDENCE_CACHE_TTL_HOURS = 168.0
 EXTENSION_BLOCKER_BEAD = "bd-2zcs5.51"
@@ -136,12 +138,282 @@ def current_toolchain() -> str:
 
 
 def current_host_fingerprint() -> dict[str, Any]:
-    return {
+    return build_host_topology_fingerprint()["host_fingerprint"]
+
+
+def read_text_optional(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
+def parse_meminfo_total_mb(raw: str | None) -> int | None:
+    if raw is None:
+        return None
+    for line in raw.splitlines():
+        if not line.startswith("MemTotal:"):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            return None
+        try:
+            return max(1, int(parts[1]) // 1024)
+        except ValueError:
+            return None
+    return None
+
+
+def parse_cpuinfo(raw: str | None) -> tuple[int | None, str | None]:
+    if raw is None:
+        return None, None
+    cpu_count = 0
+    cpu_model: str | None = None
+    for line in raw.splitlines():
+        if line.startswith("processor"):
+            cpu_count += 1
+        if cpu_model is None and line.startswith("model name"):
+            _, _, value = line.partition(":")
+            cpu_model = value.strip() or None
+    return (cpu_count or None), cpu_model
+
+
+def parse_cpu_max(raw: str | None) -> tuple[float | None, str | None]:
+    if raw is None:
+        return None, None
+    parts = raw.split()
+    if len(parts) != 2:
+        return None, "malformed_cpu_max"
+    quota_raw, period_raw = parts
+    if quota_raw == "max":
+        return None, None
+    try:
+        quota = int(quota_raw)
+        period = int(period_raw)
+    except ValueError:
+        return None, "malformed_cpu_max"
+    if quota <= 0 or period <= 0:
+        return None, "malformed_cpu_max"
+    return quota / period, None
+
+
+def parse_memory_max_mb(raw: str | None) -> tuple[int | None, str | None]:
+    if raw is None:
+        return None, None
+    if raw == "max":
+        return None, None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None, "malformed_memory_max"
+    if value <= 0:
+        return None, "malformed_memory_max"
+    return max(1, value // (1024 * 1024)), None
+
+
+def parse_cpuset_cpu_count(raw: str | None) -> tuple[int | None, str | None]:
+    if raw is None:
+        return None, None
+    value = raw.strip()
+    if not value:
+        return None, None
+    cpus: set[int] = set()
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            return None, "malformed_cpuset"
+        if "-" in part:
+            start_raw, end_raw = part.split("-", 1)
+            try:
+                start = int(start_raw)
+                end = int(end_raw)
+            except ValueError:
+                return None, "malformed_cpuset"
+            if start < 0 or end < start:
+                return None, "malformed_cpuset"
+            cpus.update(range(start, end + 1))
+        else:
+            try:
+                cpu = int(part)
+            except ValueError:
+                return None, "malformed_cpuset"
+            if cpu < 0:
+                return None, "malformed_cpuset"
+            cpus.add(cpu)
+    return (len(cpus) or None), None
+
+
+def parse_cgroup_v2_relative_path(proc_root: Path) -> tuple[Path | None, str | None]:
+    raw = read_text_optional(proc_root / "self/cgroup")
+    if raw is None:
+        return None, "missing_procfs_cgroup"
+    for line in raw.splitlines():
+        parts = line.split(":", 2)
+        if len(parts) == 3 and parts[0] == "0" and parts[1] == "":
+            relative = parts[2].strip().lstrip("/")
+            return Path(relative) if relative else Path(), None
+    return None, "missing_cgroup_v2_membership"
+
+
+def numa_node_count(sys_root: Path) -> int | None:
+    node_root = sys_root / "devices/system/node"
+    try:
+        nodes = [
+            entry
+            for entry in node_root.iterdir()
+            if entry.is_dir() and re.fullmatch(r"node\d+", entry.name)
+        ]
+    except OSError:
+        return None
+    return len(nodes) or None
+
+
+def constrained_cpu_cores(
+    host_cpu_count: int | None,
+    quota_cores: float | None,
+    cpuset_count: int | None,
+) -> int:
+    candidates: list[float] = []
+    if host_cpu_count is not None and host_cpu_count > 0:
+        candidates.append(float(host_cpu_count))
+    if quota_cores is not None and quota_cores > 0:
+        candidates.append(quota_cores)
+    if cpuset_count is not None and cpuset_count > 0:
+        candidates.append(float(cpuset_count))
+    if not candidates:
+        return max(1, os.cpu_count() or 1)
+    return max(1, math.floor(min(candidates)))
+
+
+def constrained_memory_mb(host_mem_total_mb: int | None, memory_limit_mb: int | None) -> int:
+    candidates = [value for value in (host_mem_total_mb, memory_limit_mb) if value is not None and value > 0]
+    if not candidates:
+        return 1
+    return max(1, min(candidates))
+
+
+def build_host_topology_fingerprint(
+    *,
+    proc_root: Path = Path("/proc"),
+    sys_root: Path = Path("/sys"),
+    timestamp: str | None = None,
+    build_profile: str | None = None,
+    pgo_mode: str | None = None,
+    pgo_profile_data: str | None = None,
+    pgo_allow_fallback: str | None = None,
+    git_commit: str | None = None,
+    git_dirty: bool | None = None,
+    rust_version: str | None = None,
+    cargo_runner_mode: str | None = None,
+    cargo_runner_request: str | None = None,
+    correlation_id: str | None = None,
+) -> dict[str, Any]:
+    caveats: list[str] = []
+    cpuinfo = read_text_optional(proc_root / "cpuinfo")
+    meminfo = read_text_optional(proc_root / "meminfo")
+    if not proc_root.exists():
+        caveats.append("missing_procfs")
+    host_cpu_count, cpu_model = parse_cpuinfo(cpuinfo)
+    if host_cpu_count is None:
+        host_cpu_count = os.cpu_count()
+        caveats.append("cpuinfo_unavailable")
+    host_mem_total_mb = parse_meminfo_total_mb(meminfo)
+    if host_mem_total_mb is None:
+        caveats.append("meminfo_unavailable")
+
+    relative_cgroup_path, cgroup_caveat = parse_cgroup_v2_relative_path(proc_root)
+    if cgroup_caveat:
+        caveats.append(cgroup_caveat)
+    cgroup_root = sys_root / "fs/cgroup"
+    cgroup_path = cgroup_root / relative_cgroup_path if relative_cgroup_path is not None else None
+    if cgroup_path is not None and not cgroup_path.exists():
+        caveats.append("missing_cgroupfs")
+
+    cpu_quota_cores: float | None = None
+    cpuset_count: int | None = None
+    memory_limit_mb: int | None = None
+    if cgroup_path is not None and cgroup_path.exists():
+        cpu_quota_cores, cpu_max_caveat = parse_cpu_max(read_text_optional(cgroup_path / "cpu.max"))
+        if cpu_max_caveat:
+            caveats.append(cpu_max_caveat)
+        cpuset_raw = read_text_optional(cgroup_path / "cpuset.cpus.effective")
+        if cpuset_raw is None:
+            cpuset_raw = read_text_optional(cgroup_path / "cpuset.cpus")
+        cpuset_count, cpuset_caveat = parse_cpuset_cpu_count(cpuset_raw)
+        if cpuset_caveat:
+            caveats.append(cpuset_caveat)
+        memory_limit_mb, memory_caveat = parse_memory_max_mb(
+            read_text_optional(cgroup_path / "memory.max")
+        )
+        if memory_caveat:
+            caveats.append(memory_caveat)
+
+    effective_cpu_cores = constrained_cpu_cores(host_cpu_count, cpu_quota_cores, cpuset_count)
+    effective_mem_total_mb = constrained_memory_mb(host_mem_total_mb, memory_limit_mb)
+    if host_cpu_count is not None and effective_cpu_cores < host_cpu_count:
+        caveats.append("container_cpu_constraint_below_host")
+    if host_mem_total_mb is not None and effective_mem_total_mb < host_mem_total_mb:
+        caveats.append("container_memory_constraint_below_host")
+
+    numa_nodes = numa_node_count(sys_root)
+    if numa_nodes is None:
+        caveats.append("numa_topology_unavailable")
+
+    caveats = list(dict.fromkeys(caveats))
+    host_fingerprint = {
+        "schema": HOST_TOPOLOGY_SCHEMA,
         "hostname": socket.gethostname(),
         "machine": platform.machine(),
         "platform": platform.platform(),
-        "processor": platform.processor() or "unknown",
-        "cpu_count": os.cpu_count(),
+        "processor": platform.processor() or cpu_model or "unknown",
+        "host_cpu_cores": host_cpu_count,
+        "host_mem_total_mb": host_mem_total_mb,
+        "effective_cpu_cores": effective_cpu_cores,
+        "effective_mem_total_mb": effective_mem_total_mb,
+        "cgroup": {
+            "version": "v2" if relative_cgroup_path is not None else "unknown",
+            "relative_path": str(relative_cgroup_path) if relative_cgroup_path is not None else None,
+            "path": str(cgroup_path) if cgroup_path is not None else None,
+            "cpu_quota_cores": cpu_quota_cores,
+            "cpuset_cpu_count": cpuset_count,
+            "memory_limit_mb": memory_limit_mb,
+        },
+        "numa": {
+            "node_count": numa_nodes,
+        },
+        "caveats": caveats,
+    }
+    budget_profile = {
+        "target_cpu_cores": effective_cpu_cores,
+        "observed_cpu_cores": host_cpu_count or effective_cpu_cores,
+        "mem_total_mb": effective_mem_total_mb,
+        "host_mem_total_mb": host_mem_total_mb,
+        "source": "cgroup_constrained" if any(caveat.startswith("container_") for caveat in caveats) else "host",
+    }
+    return {
+        "schema": "pi.perf.env_fingerprint.v1",
+        "host_topology_schema": HOST_TOPOLOGY_SCHEMA,
+        "timestamp": timestamp or iso_now(),
+        "os": platform.platform(),
+        "cpu_model": cpu_model or platform.processor() or "unknown",
+        "cpu_cores": effective_cpu_cores,
+        "observed_cpu_cores": host_cpu_count,
+        "host_cpu_cores": host_cpu_count,
+        "mem_total_mb": effective_mem_total_mb,
+        "host_mem_total_mb": host_mem_total_mb,
+        "build_profile": build_profile,
+        "pgo_mode": pgo_mode,
+        "pgo_profile_data": pgo_profile_data,
+        "pgo_allow_fallback": pgo_allow_fallback,
+        "git_commit": git_commit,
+        "git_dirty": git_dirty,
+        "rust_version": rust_version,
+        "cargo_runner_mode": cargo_runner_mode,
+        "cargo_runner_request": cargo_runner_request,
+        "correlation_id": correlation_id,
+        "host_fingerprint": host_fingerprint,
+        "budget_profile": budget_profile,
+        "caveats": caveats,
     }
 
 
@@ -881,6 +1153,38 @@ def write_json(payload: dict[str, Any]) -> None:
 
 
 def run_self_test() -> int:
+    def write_host_fixture(
+        root: Path,
+        *,
+        cpu_count: int = 8,
+        mem_kb: int = 16 * 1024 * 1024,
+        cgroup_rel: str = "agent.slice/pi.scope",
+        cpu_max: str = "max 100000",
+        cpuset: str | None = "0-7",
+        memory_max: str = "max",
+        numa_nodes: int = 2,
+    ) -> tuple[Path, Path]:
+        proc_root = root / "proc"
+        sys_root = root / "sys"
+        (proc_root / "self").mkdir(parents=True)
+        (proc_root / "self/cgroup").write_text(f"0::/{cgroup_rel}\n", encoding="utf-8")
+        cpuinfo = []
+        for index in range(cpu_count):
+            cpuinfo.append(f"processor\t: {index}\nmodel name\t: Fixture CPU\n")
+        (proc_root / "cpuinfo").write_text("\n".join(cpuinfo), encoding="utf-8")
+        (proc_root / "meminfo").write_text(f"MemTotal:       {mem_kb} kB\n", encoding="utf-8")
+
+        cgroup_dir = sys_root / "fs/cgroup" / cgroup_rel
+        cgroup_dir.mkdir(parents=True)
+        (cgroup_dir / "cpu.max").write_text(f"{cpu_max}\n", encoding="utf-8")
+        if cpuset is not None:
+            (cgroup_dir / "cpuset.cpus.effective").write_text(f"{cpuset}\n", encoding="utf-8")
+        (cgroup_dir / "memory.max").write_text(f"{memory_max}\n", encoding="utf-8")
+        node_root = sys_root / "devices/system/node"
+        for index in range(numa_nodes):
+            (node_root / f"node{index}").mkdir(parents=True)
+        return proc_root, sys_root
+
     def build_args(
         root: Path,
         *,
@@ -1114,6 +1418,77 @@ def run_self_test() -> int:
         entry["reason"] == "missing_lineage"
         for entry in missing_lineage_payload["rejected_evidence_cache_entries"]
     ), missing_lineage_payload
+
+    bare_root = Path(tempfile.mkdtemp(prefix="pi-perf-host-bare-"))
+    bare_proc, bare_sys = write_host_fixture(bare_root)
+    bare_fingerprint = build_host_topology_fingerprint(
+        proc_root=bare_proc,
+        sys_root=bare_sys,
+        timestamp="2026-05-09T00:00:00Z",
+        build_profile="perf",
+    )
+    assert bare_fingerprint["schema"] == "pi.perf.env_fingerprint.v1", bare_fingerprint
+    assert bare_fingerprint["host_topology_schema"] == HOST_TOPOLOGY_SCHEMA, bare_fingerprint
+    assert bare_fingerprint["cpu_cores"] == 8, bare_fingerprint
+    assert bare_fingerprint["mem_total_mb"] == 16 * 1024, bare_fingerprint
+    assert bare_fingerprint["host_fingerprint"]["numa"]["node_count"] == 2, bare_fingerprint
+
+    quota_root = Path(tempfile.mkdtemp(prefix="pi-perf-host-quota-"))
+    quota_proc, quota_sys = write_host_fixture(
+        quota_root,
+        cpu_max="200000 100000",
+        cpuset="0-7",
+        memory_max=str(2 * 1024 * 1024 * 1024),
+    )
+    quota_fingerprint = build_host_topology_fingerprint(
+        proc_root=quota_proc,
+        sys_root=quota_sys,
+        timestamp="2026-05-09T00:00:00Z",
+    )
+    assert quota_fingerprint["cpu_cores"] == 2, quota_fingerprint
+    assert quota_fingerprint["mem_total_mb"] == 2048, quota_fingerprint
+    assert quota_fingerprint["budget_profile"]["target_cpu_cores"] == 2, quota_fingerprint
+    assert "container_cpu_constraint_below_host" in quota_fingerprint["caveats"], quota_fingerprint
+    assert "container_memory_constraint_below_host" in quota_fingerprint["caveats"], quota_fingerprint
+
+    cpuset_root = Path(tempfile.mkdtemp(prefix="pi-perf-host-cpuset-"))
+    cpuset_proc, cpuset_sys = write_host_fixture(
+        cpuset_root,
+        cpu_max="max 100000",
+        cpuset="1,3-4",
+    )
+    cpuset_fingerprint = build_host_topology_fingerprint(
+        proc_root=cpuset_proc,
+        sys_root=cpuset_sys,
+        timestamp="2026-05-09T00:00:00Z",
+    )
+    assert cpuset_fingerprint["cpu_cores"] == 3, cpuset_fingerprint
+    assert cpuset_fingerprint["host_fingerprint"]["cgroup"]["cpuset_cpu_count"] == 3, cpuset_fingerprint
+
+    missing_proc_root = Path(tempfile.mkdtemp(prefix="pi-perf-host-missing-proc-"))
+    missing_fingerprint = build_host_topology_fingerprint(
+        proc_root=missing_proc_root / "missing-proc",
+        sys_root=missing_proc_root / "missing-sys",
+        timestamp="2026-05-09T00:00:00Z",
+    )
+    assert "missing_procfs" in missing_fingerprint["caveats"], missing_fingerprint
+    assert missing_fingerprint["cpu_cores"] >= 1, missing_fingerprint
+
+    malformed_root = Path(tempfile.mkdtemp(prefix="pi-perf-host-malformed-"))
+    malformed_proc, malformed_sys = write_host_fixture(
+        malformed_root,
+        cpu_max="not-a-quota",
+        cpuset="x-y",
+        memory_max="nope",
+    )
+    malformed_fingerprint = build_host_topology_fingerprint(
+        proc_root=malformed_proc,
+        sys_root=malformed_sys,
+        timestamp="2026-05-09T00:00:00Z",
+    )
+    assert "malformed_cpu_max" in malformed_fingerprint["caveats"], malformed_fingerprint
+    assert "malformed_cpuset" in malformed_fingerprint["caveats"], malformed_fingerprint
+    assert "malformed_memory_max" in malformed_fingerprint["caveats"], malformed_fingerprint
     return 0
 
 
@@ -1155,6 +1530,28 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Do not run rch check --quiet; useful in hermetic self-tests.",
     )
+    parser.add_argument(
+        "--host-fingerprint",
+        action="store_true",
+        help="Emit cgroup-aware host topology fingerprint JSON and exit.",
+    )
+    parser.add_argument("--proc-root", default="/proc", help="procfs root for --host-fingerprint.")
+    parser.add_argument("--sys-root", default="/sys", help="sysfs root for --host-fingerprint.")
+    parser.add_argument("--fingerprint-timestamp", help="Timestamp recorded in host fingerprint.")
+    parser.add_argument("--fingerprint-build-profile", help="Build profile recorded in host fingerprint.")
+    parser.add_argument("--fingerprint-pgo-mode", help="PGO mode recorded in host fingerprint.")
+    parser.add_argument("--fingerprint-pgo-profile-data", help="PGO profile path recorded in host fingerprint.")
+    parser.add_argument("--fingerprint-pgo-allow-fallback", help="PGO fallback flag recorded in host fingerprint.")
+    parser.add_argument("--fingerprint-git-commit", help="Git commit recorded in host fingerprint.")
+    parser.add_argument(
+        "--fingerprint-git-dirty",
+        choices=("true", "false"),
+        help="Git dirty flag recorded in host fingerprint.",
+    )
+    parser.add_argument("--fingerprint-rust-version", help="Rust version recorded in host fingerprint.")
+    parser.add_argument("--fingerprint-cargo-runner-mode", help="Resolved cargo runner mode.")
+    parser.add_argument("--fingerprint-cargo-runner-request", help="Requested cargo runner mode.")
+    parser.add_argument("--fingerprint-correlation-id", help="Correlation ID recorded in host fingerprint.")
     parser.add_argument("--self-test", action="store_true", help="Run disposable self-tests.")
     return parser.parse_args(argv)
 
@@ -1163,6 +1560,29 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     if args.self_test:
         return run_self_test()
+    if args.host_fingerprint:
+        write_json(
+            build_host_topology_fingerprint(
+                proc_root=Path(args.proc_root).expanduser(),
+                sys_root=Path(args.sys_root).expanduser(),
+                timestamp=args.fingerprint_timestamp,
+                build_profile=args.fingerprint_build_profile,
+                pgo_mode=args.fingerprint_pgo_mode,
+                pgo_profile_data=args.fingerprint_pgo_profile_data,
+                pgo_allow_fallback=args.fingerprint_pgo_allow_fallback,
+                git_commit=args.fingerprint_git_commit,
+                git_dirty=(
+                    None
+                    if args.fingerprint_git_dirty is None
+                    else args.fingerprint_git_dirty == "true"
+                ),
+                rust_version=args.fingerprint_rust_version,
+                cargo_runner_mode=args.fingerprint_cargo_runner_mode,
+                cargo_runner_request=args.fingerprint_cargo_runner_request,
+                correlation_id=args.fingerprint_correlation_id,
+            )
+        )
+        return 0
     code, payload = build_report(args)
     write_json(payload)
     return code

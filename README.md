@@ -1856,6 +1856,10 @@ Current checked-in performance evidence state:
   artifacts are labeled `source_kind=cache`/`evidence_source=cache` in the JSON
   outputs. Override the cache lifetime with
   `PI_PERF_EVIDENCE_CACHE_TTL_HOURS`.
+- `env_fingerprint.json` records cgroup-aware host topology with schema
+  `pi.perf.host_topology_fingerprint.v1`: cgroup v2 CPU quota, cpuset size,
+  memory limits, NUMA node count, caveats, and a constrained `budget_profile`
+  for containerized hosts.
 - Regenerate the perf evidence bundle before adding release-facing speed,
   throughput, memory, or startup numbers to this README.
 

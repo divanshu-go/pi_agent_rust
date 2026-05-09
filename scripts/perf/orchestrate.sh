@@ -447,37 +447,69 @@ if [[ "$SKIP_ENV_CHECK" -eq 0 ]]; then
     die "cargo/rustc not found in PATH"
   fi
 
-  # Generate environment fingerprint
-  cpu_model="$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | xargs || echo "unknown")"
-  cpu_cores="$(nproc 2>/dev/null || echo "1")"
-  mem_total_mb="$(free -m 2>/dev/null | awk '/^Mem:/ {print $2}' || echo "0")"
-  os_info="$(uname -srm 2>/dev/null || echo "unknown")"
+  # Write cgroup-aware environment fingerprint.
+  python3 "$SCRIPT_DIR/preflight_budget_inputs.py" \
+    --host-fingerprint \
+    --fingerprint-timestamp "$TIMESTAMP" \
+    --fingerprint-build-profile "$CARGO_PROFILE" \
+    --fingerprint-pgo-mode "$PGO_MODE" \
+    --fingerprint-pgo-profile-data "$PGO_PROFILE_DATA" \
+    --fingerprint-pgo-allow-fallback "$PGO_ALLOW_FALLBACK" \
+    --fingerprint-git-commit "$GIT_COMMIT_FULL" \
+    --fingerprint-git-dirty "$GIT_DIRTY" \
+    --fingerprint-rust-version "$rust_version" \
+    --fingerprint-cargo-runner-mode "$CARGO_RUNNER_MODE" \
+    --fingerprint-cargo-runner-request "$CARGO_RUNNER_REQUEST" \
+    --fingerprint-correlation-id "$CORRELATION_ID" \
+    > "$OUTPUT_DIR/env_fingerprint.json"
+  fingerprint_summary="$(
+    python3 - "$OUTPUT_DIR/env_fingerprint.json" <<'PY'
+import json
+import sys
 
-  log_ok "CPU: $cpu_model ($cpu_cores cores)"
-  log_ok "Memory: ${mem_total_mb}MB"
-  log_ok "OS: $os_info"
-
-  # Write environment fingerprint
-  cat > "$OUTPUT_DIR/env_fingerprint.json" <<EOF
-{
-  "schema": "pi.perf.env_fingerprint.v1",
-  "timestamp": "$TIMESTAMP",
-  "os": "$os_info",
-  "cpu_model": "$cpu_model",
-  "cpu_cores": $cpu_cores,
-  "mem_total_mb": $mem_total_mb,
-  "build_profile": "$CARGO_PROFILE",
-  "pgo_mode": "$PGO_MODE",
-  "pgo_profile_data": "$PGO_PROFILE_DATA",
-  "pgo_allow_fallback": "$PGO_ALLOW_FALLBACK",
-  "git_commit": "$GIT_COMMIT",
-  "git_dirty": $GIT_DIRTY,
-  "rust_version": "$rust_version",
-  "cargo_runner_mode": "$CARGO_RUNNER_MODE",
-  "cargo_runner_request": "$CARGO_RUNNER_REQUEST",
-  "correlation_id": "$CORRELATION_ID"
-}
-EOF
+payload = json.loads(open(sys.argv[1], encoding="utf-8").read())
+host = payload.get("host_fingerprint", {})
+cgroup = host.get("cgroup", {})
+numa = host.get("numa", {})
+budget = payload.get("budget_profile", {})
+print(
+    "|".join(
+        str(value)
+        for value in (
+            payload.get("cpu_model", "unknown"),
+            payload.get("cpu_cores", "unknown"),
+            payload.get("host_cpu_cores", "unknown"),
+            payload.get("mem_total_mb", "unknown"),
+            payload.get("host_mem_total_mb", "unknown"),
+            cgroup.get("cpu_quota_cores"),
+            cgroup.get("cpuset_cpu_count"),
+            cgroup.get("memory_limit_mb"),
+            numa.get("node_count"),
+            budget.get("source", "unknown"),
+            ",".join(payload.get("caveats", [])),
+        )
+    )
+)
+PY
+  )"
+  IFS='|' read -r \
+    cpu_model \
+    cpu_cores \
+    host_cpu_cores \
+    mem_total_mb \
+    host_mem_total_mb \
+    cpu_quota_cores \
+    cpuset_cpu_count \
+    memory_limit_mb \
+    numa_node_count \
+    budget_profile_source \
+    fingerprint_caveats <<< "$fingerprint_summary"
+  log_ok "CPU: $cpu_model (target=$cpu_cores, host=$host_cpu_cores, quota=$cpu_quota_cores, cpuset=$cpuset_cpu_count)"
+  log_ok "Memory: target=${mem_total_mb}MB host=${host_mem_total_mb}MB cgroup_limit=${memory_limit_mb}MB"
+  log_ok "NUMA nodes: ${numa_node_count:-unknown}; budget profile source=$budget_profile_source"
+  if [[ -n "$fingerprint_caveats" ]]; then
+    log_warn "Host fingerprint caveats: $fingerprint_caveats"
+  fi
   log_ok "Environment fingerprint written"
 
   if [[ "$env_warnings" -gt 0 ]]; then
