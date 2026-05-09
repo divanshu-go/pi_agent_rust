@@ -1,11 +1,14 @@
 //! Differential test harness for slash command parity between pi-mono and Rust Pi.
 //!
-//! This module provides automated testing to verify that every slash command
-//! in pi-mono produces equivalent observable behavior in Rust Pi.
+//! This module guards slash-command parity coverage until the real pi-mono and
+//! Rust Pi RPC runner is wired.
 
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use tempfile::TempDir;
+
+const DIFFERENTIAL_RUNNER_NOT_IMPLEMENTED: &str =
+    "RPC slash-command differential runner is not implemented";
 
 /// A slash command test scenario.
 #[derive(Debug, Clone)]
@@ -242,14 +245,20 @@ impl DifferentialTester {
 
     /// Run a single scenario.
     pub fn run_scenario(scenario: &SlashCommandScenario) -> TestResult {
-        // TODO: Implement actual RPC-based testing against both pi-mono and Rust Pi
-        // For now, return a placeholder
         TestResult {
             scenario_name: scenario.name.clone(),
-            success: true,
-            rust_response: json!({"status": "success", "command": scenario.command}),
-            pi_mono_response: json!({"status": "success", "command": scenario.command}),
-            differences: vec![],
+            success: false,
+            rust_response: json!({
+                "status": "not_run",
+                "command": scenario.command,
+                "reason": DIFFERENTIAL_RUNNER_NOT_IMPLEMENTED,
+            }),
+            pi_mono_response: json!({
+                "status": "not_run",
+                "command": scenario.command,
+                "reason": DIFFERENTIAL_RUNNER_NOT_IMPLEMENTED,
+            }),
+            differences: vec![DIFFERENTIAL_RUNNER_NOT_IMPLEMENTED.to_string()],
         }
     }
 }
@@ -326,16 +335,24 @@ mod tests {
     }
 
     #[test]
-    fn test_placeholder_scenario_run() {
+    fn test_scenario_run_fails_closed_until_runner_is_wired() {
         let tester = DifferentialTester::new().unwrap();
 
         if let Some(scenario) = tester.scenarios.first() {
             let result = DifferentialTester::run_scenario(scenario);
             assert_eq!(result.scenario_name, scenario.name);
-            // Placeholder implementation should succeed
-            assert!(result.success);
+            assert!(!result.success);
+            assert_eq!(result.rust_response["status"], "not_run");
+            assert_eq!(result.pi_mono_response["status"], "not_run");
             assert_eq!(result.rust_response["command"], scenario.command);
             assert_eq!(result.pi_mono_response["command"], scenario.command);
+            assert!(
+                result
+                    .differences
+                    .iter()
+                    .any(|diff| diff.contains(DIFFERENTIAL_RUNNER_NOT_IMPLEMENTED)),
+                "runner should fail closed with a clear implementation gap"
+            );
         }
     }
 }

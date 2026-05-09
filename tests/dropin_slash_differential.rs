@@ -1,57 +1,60 @@
 //! Integration tests for slash command differential parity.
 //!
-//! This test suite verifies that slash commands in Rust Pi produce
-//! equivalent behavior to pi-mono through automated RPC testing.
+//! This test suite tracks slash-command differential coverage and fails closed
+//! until the real pi-mono/Rust Pi RPC runner is wired.
 
 #[path = "dropin_slash_differential/mod.rs"]
 mod dropin_slash_differential;
 use dropin_slash_differential::*;
 
-/// Comprehensive test of slash command parity across all supported commands.
+fn assert_runner_not_implemented(scenario: &SlashCommandScenario, result: &TestResult) {
+    assert!(
+        !result.success,
+        "scenario '{}' must not report synthetic differential success",
+        scenario.name
+    );
+    assert_eq!(result.scenario_name, scenario.name);
+    assert_eq!(result.rust_response["status"], "not_run");
+    assert_eq!(result.pi_mono_response["status"], "not_run");
+    assert_eq!(result.rust_response["command"], scenario.command);
+    assert_eq!(result.pi_mono_response["command"], scenario.command);
+    assert!(
+        result
+            .differences
+            .iter()
+            .any(|diff| diff.contains("not implemented")),
+        "scenario '{}' should explain that the real runner is not implemented",
+        scenario.name
+    );
+}
+
+/// The harness must not report slash-command parity until real RPC execution exists.
 #[test]
-fn test_slash_command_differential_parity() {
+fn test_slash_command_differential_harness_fails_closed() {
     let tester = DifferentialTester::new().expect("Failed to create differential tester");
 
     let results = tester.run_all_scenarios();
+    assert!(!results.is_empty(), "expected slash command scenarios");
 
-    // Collect any failures
-    let mut failures = Vec::new();
-    let mut total_scenarios = 0;
-    let mut successful_scenarios = 0;
-
-    for (scenario_name, result) in &results {
-        total_scenarios += 1;
+    let mut unexpected_successes = Vec::new();
+    for (scenario_name, result) in results {
         if result.success {
-            successful_scenarios += 1;
-        } else {
-            failures.push(format!(
-                "Scenario '{}' failed with differences: {:?}",
-                scenario_name, result.differences
-            ));
+            unexpected_successes.push(scenario_name);
+            continue;
         }
+        assert!(
+            result
+                .differences
+                .iter()
+                .any(|diff| diff.contains("not implemented")),
+            "scenario '{scenario_name}' should fail closed with an implementation gap"
+        );
     }
 
-    // Print summary
-    println!(
-        "\n=== Slash Command Differential Test Summary ===\n\
-         Total scenarios: {}\n\
-         Successful: {}\n\
-         Failed: {}\n",
-        total_scenarios,
-        successful_scenarios,
-        total_scenarios - successful_scenarios
+    assert!(
+        unexpected_successes.is_empty(),
+        "slash differential harness reported synthetic success for: {unexpected_successes:?}"
     );
-
-    if !failures.is_empty() {
-        println!("Failures:");
-        for failure in &failures {
-            println!("  - {failure}");
-        }
-    }
-
-    // Test should pass for now since we're using placeholders
-    // TODO: Update this when implementing actual differential testing
-    assert_eq!(failures.len(), 0, "Differential test failures detected");
 }
 
 /// Test that basic slash command parsing works correctly.
@@ -171,13 +174,7 @@ fn test_combinatorial_slash_commands() {
 
     for scenario in combinatorial_scenarios {
         let result = DifferentialTester::run_scenario(&scenario);
-
-        // For now, expect success with placeholder implementation
-        assert!(
-            result.success,
-            "Combinatorial scenario '{}' should succeed",
-            scenario.name
-        );
+        assert_runner_not_implemented(&scenario, &result);
     }
 }
 
@@ -214,13 +211,6 @@ fn test_invalid_slash_command_handling() {
     for scenario in invalid_scenarios {
         tester.add_scenario(scenario.clone());
         let result = DifferentialTester::run_scenario(&scenario);
-
-        // Invalid commands should still complete (with appropriate error responses)
-        // For placeholder implementation, expect success
-        assert!(
-            result.success,
-            "Invalid command scenario '{}' should handle errors gracefully",
-            scenario.name
-        );
+        assert_runner_not_implemented(&scenario, &result);
     }
 }
