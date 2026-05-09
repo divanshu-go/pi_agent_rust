@@ -1,0 +1,54 @@
+[
+  {
+    "name": "queue_saturated",
+    "path_mode": "mock_rch",
+    "mock_rch_stderr": "queue saturated",
+    "args": ["--runner", "auto", "test", "--all-targets"],
+    "expected_status": 2,
+    "expected_decision": "backoff",
+    "expected_reason": "rch_unavailable",
+    "expected_command_class": "heavy",
+    "expected_resolved_runner": "none",
+    "expected_rch_detail": "queue saturated",
+    "expected_allow_local_fallback": false
+  },
+  {
+    "name": "no_workers",
+    "path_mode": "mock_rch",
+    "mock_rch_stderr": "no workers available",
+    "args": ["--runner", "auto", "test", "--all-targets"],
+    "expected_status": 2,
+    "expected_decision": "backoff",
+    "expected_reason": "rch_unavailable",
+    "expected_command_class": "heavy",
+    "expected_resolved_runner": "none",
+    "expected_rch_detail": "no workers available",
+    "expected_allow_local_fallback": false
+  },
+  {
+    "name": "local_fallback_blocked",
+    "path_mode": "without_rch",
+    "mock_rch_stderr": null,
+    "args": ["--runner", "auto", "clippy", "--all-targets", "--", "-D", "warnings"],
+    "expected_status": 2,
+    "expected_decision": "backoff",
+    "expected_reason": "rch_unavailable",
+    "expected_command_class": "heavy",
+    "expected_resolved_runner": "none",
+    "expected_rch_detail": "rch_not_found",
+    "expected_allow_local_fallback": false
+  },
+  {
+    "name": "safe_narrow_local_command",
+    "path_mode": "without_rch",
+    "mock_rch_stderr": null,
+    "args": ["--runner", "auto", "fmt", "--check"],
+    "expected_status": 0,
+    "expected_decision": "degraded",
+    "expected_reason": "safe_local_command",
+    "expected_command_class": "safe_local",
+    "expected_resolved_runner": "local",
+    "expected_rch_detail": "rch_not_found",
+    "expected_allow_local_fallback": false
+  }
+]
