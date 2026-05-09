@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -32,6 +33,13 @@ HARNESS_SCHEMA = "pi.swarm.smoke_harness.v1"
 EVENT_SCHEMA = "pi.swarm.smoke_harness.event.v1"
 DEFAULT_AGENTS = ("BlueLake", "GreenStone", "PurpleBridge")
 DEFAULT_MCP_URL = "http://127.0.0.1:8765/mcp"
+FORBIDDEN_WORKTREE_COMMAND_FRAGMENTS = (
+    "git stash",
+    "git reset",
+    "git clean",
+    "git checkout --",
+    "git restore",
+)
 SENSITIVE_KEY_FRAGMENTS = (
     "authorization",
     "bearer",
@@ -157,6 +165,10 @@ def artifact_manifest_entry(artifact_id: str, path: Path) -> dict[str, Any]:
     }
 
 
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def parse_json_line(text: str) -> dict[str, Any]:
     for line in text.splitlines():
         stripped = line.strip()
@@ -175,6 +187,35 @@ def parse_json_document(text: str) -> Any:
     if not stripped:
         raise HarnessError("command emitted no JSON")
     return json.loads(stripped)
+
+
+def issue_status_from_payload(payload: Any, issue_id: str) -> str | None:
+    if isinstance(payload, dict):
+        if payload.get("id") == issue_id:
+            status = payload.get("status")
+            return str(status) if status is not None else None
+        for key in ("issue", "updated", "created"):
+            nested = payload.get(key)
+            status = issue_status_from_payload(nested, issue_id)
+            if status is not None:
+                return status
+        issues = payload.get("issues")
+        if isinstance(issues, list):
+            return issue_status_from_payload(issues, issue_id)
+    if isinstance(payload, list):
+        for item in payload:
+            status = issue_status_from_payload(item, issue_id)
+            if status is not None:
+                return status
+    return None
+
+
+def forbidden_worktree_command(command_text: str) -> str | None:
+    lowered = command_text.lower()
+    for fragment in FORBIDDEN_WORKTREE_COMMAND_FRAGMENTS:
+        if fragment in lowered:
+            return fragment
+    return None
 
 
 class EventLog:
@@ -456,10 +497,33 @@ class SwarmSmokeHarness:
             cwd=self.project_dir,
             phase="beads.claim",
         )
+        claimed = self.runner.run(
+            [br, "show", bead_id, "--json"],
+            cwd=self.project_dir,
+            phase="beads.verify_claim",
+        )
+        claimed_status = issue_status_from_payload(parse_json_document(claimed.stdout), bead_id)
         self.runner.run(
             [br, "close", bead_id, "--reason", "Completed by swarm smoke harness", "--json"],
             cwd=self.project_dir,
             phase="beads.close",
+        )
+        closed = self.runner.run(
+            [br, "show", bead_id, "--json"],
+            cwd=self.project_dir,
+            phase="beads.verify_close",
+        )
+        closed_status = issue_status_from_payload(parse_json_document(closed.stdout), bead_id)
+        transition_ok = claimed_status == "in_progress" and closed_status == "closed"
+        self.event_log.emit(
+            kind="bead_status",
+            phase="beads.transition_verify",
+            status="ok" if transition_ok else "failed",
+            bead_ids=[bead_id],
+            details={
+                "claimed_status": claimed_status,
+                "closed_status": closed_status,
+            },
         )
 
         stale_created = self.runner.run(
@@ -517,8 +581,10 @@ class SwarmSmokeHarness:
         )
         self.runner.run([br, "sync", "--flush-only"], cwd=self.project_dir, phase="beads.sync")
         self.scenarios["healthy_beads_flow"] = {
-            "status": "pass",
+            "status": "pass" if transition_ok else "fail",
             "created_claimed_closed_bead": bead_id,
+            "claimed_status": claimed_status,
+            "closed_status": closed_status,
             "temp_project": str(self.project_dir),
         }
 
@@ -632,6 +698,163 @@ class SwarmSmokeHarness:
             details={"reservation": reservation, "conflict": conflict},
         )
 
+    def run_dirty_worktree_flow(self) -> None:
+        git = shutil.which("git")
+        if git is None:
+            raise HarnessError("git executable not found")
+
+        self.runner.run([git, "init", "-b", "main"], cwd=self.project_dir, phase="dirty.git_init")
+        self.runner.run(
+            [git, "config", "user.email", "swarm-smoke@example.invalid"],
+            cwd=self.project_dir,
+            phase="dirty.git_config_email",
+        )
+        self.runner.run(
+            [git, "config", "user.name", "Swarm Smoke Harness"],
+            cwd=self.project_dir,
+            phase="dirty.git_config_name",
+        )
+        self.runner.run(
+            [git, "add", "README.md", "src/demo.rs", ".beads"],
+            cwd=self.project_dir,
+            phase="dirty.git_add_baseline",
+        )
+        self.runner.run(
+            [git, "commit", "-m", "seed swarm smoke fixture"],
+            cwd=self.project_dir,
+            phase="dirty.git_commit_baseline",
+        )
+
+        unrelated_dir = self.project_dir / "unrelated"
+        unrelated_dir.mkdir()
+        unrelated_note = unrelated_dir / "agent-notes.txt"
+        unrelated_note.write_text(
+            "unrelated dirty fixture: preserve me\n",
+            encoding="utf-8",
+        )
+        readme = self.project_dir / "README.md"
+        with readme.open("a", encoding="utf-8") as handle:
+            handle.write("\nDirty worktree fixture: preserve this tracked edit.\n")
+        protected_files = {
+            str(readme.relative_to(self.project_dir)): file_sha256(readme),
+            str(unrelated_note.relative_to(self.project_dir)): file_sha256(unrelated_note),
+            "src/demo.rs": file_sha256(self.project_dir / "src" / "demo.rs"),
+        }
+        before_status = self.runner.run(
+            [git, "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=self.project_dir,
+            phase="dirty.status_before_agents",
+        )
+
+        agent_results: list[dict[str, Any]] = []
+        agent_errors: list[str] = []
+        agent_lock = threading.Lock()
+        barrier = threading.Barrier(2)
+
+        def simulate_agent(agent_name: str, assigned_file: Path) -> None:
+            try:
+                barrier.wait(timeout=self.config.command_timeout_seconds)
+                assigned_file.parent.mkdir(parents=True, exist_ok=True)
+                assigned_file.write_text(
+                    f"agent={agent_name}\ncorrelation_id={self.config.correlation_id}\n",
+                    encoding="utf-8",
+                )
+                payload = {
+                    "agent_name": agent_name,
+                    "assigned_file": str(assigned_file.relative_to(self.project_dir)),
+                    "sha256": file_sha256(assigned_file),
+                }
+                with agent_lock:
+                    agent_results.append(payload)
+            except (OSError, RuntimeError, threading.BrokenBarrierError) as exc:
+                with agent_lock:
+                    agent_errors.append(f"{agent_name}: {exc}")
+
+        threads = [
+            threading.Thread(
+                target=simulate_agent,
+                args=(agent_name, self.project_dir / "agent_work" / f"{agent_name}.txt"),
+                name=f"swarm-smoke-{agent_name}",
+            )
+            for agent_name in self.agent_names[:2]
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=self.config.command_timeout_seconds)
+        alive_threads = [thread.name for thread in threads if thread.is_alive()]
+
+        after_status = self.runner.run(
+            [git, "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=self.project_dir,
+            phase="dirty.status_after_agents",
+        )
+        missing_files: list[str] = []
+        mutated_files: list[str] = []
+        for relative_path, expected_hash in protected_files.items():
+            path = self.project_dir / relative_path
+            if not path.exists():
+                missing_files.append(relative_path)
+                continue
+            if file_sha256(path) != expected_hash:
+                mutated_files.append(relative_path)
+        forbidden_commands = [
+            {
+                "command": result.command_text(),
+                "forbidden_fragment": fragment,
+            }
+            for result in self.runner.results
+            if (fragment := forbidden_worktree_command(result.command_text())) is not None
+        ]
+        status_lines = after_status.stdout.splitlines()
+        dirty_readme_preserved = any(line.endswith("README.md") for line in status_lines)
+        dirty_untracked_preserved = any(line.endswith("unrelated/agent-notes.txt") for line in status_lines)
+        dirty_ok = (
+            not missing_files
+            and not mutated_files
+            and not forbidden_commands
+            and not agent_errors
+            and not alive_threads
+            and dirty_readme_preserved
+            and dirty_untracked_preserved
+            and len(agent_results) == 2
+        )
+        details = {
+            "status_before": before_status.stdout.splitlines(),
+            "status_after": status_lines,
+            "protected_files": protected_files,
+            "missing_files": missing_files,
+            "mutated_files": mutated_files,
+            "forbidden_commands": forbidden_commands,
+            "agent_results": sorted(agent_results, key=lambda item: item["agent_name"]),
+            "agent_errors": agent_errors,
+            "alive_threads": alive_threads,
+            "dirty_readme_preserved": dirty_readme_preserved,
+            "dirty_untracked_preserved": dirty_untracked_preserved,
+        }
+        self.scenarios["dirty_worktree_preserved"] = {
+            "status": "pass" if dirty_ok else "fail",
+            **details,
+        }
+        self.scenarios["concurrent_simulated_agents"] = {
+            "status": "pass" if len(agent_results) == 2 and not agent_errors and not alive_threads else "fail",
+            "agent_results": sorted(agent_results, key=lambda item: item["agent_name"]),
+            "agent_errors": agent_errors,
+            "alive_threads": alive_threads,
+        }
+        self.scenarios["unsafe_worktree_command_guard"] = {
+            "status": "pass" if not forbidden_commands else "fail",
+            "forbidden_commands": forbidden_commands,
+            "forbidden_fragments": list(FORBIDDEN_WORKTREE_COMMAND_FRAGMENTS),
+        }
+        self.event_log.emit(
+            kind="dirty_worktree",
+            phase="dirty.verify_preservation",
+            status="ok" if dirty_ok else "failed",
+            agent_names=self.agent_names[:2],
+            details=details,
+        )
+
     def run_rch_admission_flow(self) -> None:
         script = self.config.repo_root / "scripts" / "cargo_headroom.sh"
         if not script.exists():
@@ -701,6 +924,7 @@ class SwarmSmokeHarness:
     def run(self) -> dict[str, Any]:
         self.prepare_project()
         self.run_beads_flow()
+        self.run_dirty_worktree_flow()
         self.run_agent_mail_flow()
         self.run_rch_admission_flow()
         return self.write_artifacts()
@@ -787,6 +1011,26 @@ def run_self_test(args: argparse.Namespace) -> int:
         assert_condition(
             bool(summary["scenarios"]["stale_in_progress_bead"]["stale_bead_ids"]),
             "stale in-progress bead should be detected",
+        )
+        assert_condition(
+            summary["scenarios"]["healthy_beads_flow"]["claimed_status"] == "in_progress",
+            "claimed bead status transition should be verified",
+        )
+        assert_condition(
+            summary["scenarios"]["healthy_beads_flow"]["closed_status"] == "closed",
+            "closed bead status transition should be verified",
+        )
+        assert_condition(
+            summary["scenarios"]["dirty_worktree_preserved"]["status"] == "pass",
+            "unrelated dirty worktree files should be preserved",
+        )
+        assert_condition(
+            summary["scenarios"]["concurrent_simulated_agents"]["status"] == "pass",
+            "concurrent simulated agents should complete assigned writes",
+        )
+        assert_condition(
+            summary["scenarios"]["unsafe_worktree_command_guard"]["status"] == "pass",
+            "stash/reset/revert-style worktree commands should not be used",
         )
         assert_condition(
             summary["scenarios"]["rch_unavailable_or_degraded"]["decision"]

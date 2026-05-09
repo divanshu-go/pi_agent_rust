@@ -101,7 +101,7 @@ When the digest is saturated, replay must show backpressure, denial, or a fail-c
 
 ## No-mock swarm smoke harness
 
-`scripts/run_swarm_smoke_harness.py` exercises the operator workflow against real local coordination surfaces in a retained temp project. It creates a disposable Beads workspace, registers three Agent Mail identities through the MCP HTTP endpoint, sends a fixture thread message, reserves and releases a real file reservation, forces a reservation conflict, scans an in-progress bead as stale, and records `scripts/cargo_headroom.sh --admit-only` decisions for the live RCH posture plus an isolated PATH where RCH is unavailable.
+`scripts/run_swarm_smoke_harness.py` exercises the operator workflow against real local coordination surfaces in a retained temp project. It creates a disposable Beads workspace, verifies claim-to-close status transitions, initializes a temp git repo with unrelated dirty files, runs concurrent simulated agents against assigned files, checks that dirty files are not removed or mutated, registers three Agent Mail identities through the MCP HTTP endpoint, sends a fixture thread message, reserves and releases a real file reservation, forces a reservation conflict, scans an in-progress bead as stale, and records `scripts/cargo_headroom.sh --admit-only` decisions for the live RCH posture plus an isolated PATH where RCH is unavailable.
 
 Safe self-test:
 
@@ -117,7 +117,7 @@ python3 scripts/run_swarm_smoke_harness.py \
   --out-dir /data/tmp/pi_swarm_smoke_artifacts/bd-2zcs5.26
 ```
 
-The harness writes schema `pi.swarm.smoke_harness.v1` summaries and `pi.swarm.smoke_harness.event.v1` JSONL events. Every event includes the correlation ID, command timing when a command ran, redaction metadata, and the relevant agent names, bead IDs, reservation IDs, or RCH admission decision. Agent Mail registration tokens and sensitive-looking command output are redacted before they reach the artifact bundle. The smoke fixture treats any in-progress temp bead as stale by default; pass `--stale-after-seconds` to test a longer operator threshold. If `events.jsonl` or `summary.json` already exists in the requested output directory, the harness fails rather than overwriting evidence.
+The harness writes schema `pi.swarm.smoke_harness.v1` summaries and `pi.swarm.smoke_harness.event.v1` JSONL events. Every event includes the correlation ID, command timing when a command ran, redaction metadata, and the relevant agent names, bead IDs, reservation IDs, or RCH admission decision. Agent Mail registration tokens and sensitive-looking command output are redacted before they reach the artifact bundle. The smoke fixture treats any in-progress temp bead as stale by default; pass `--stale-after-seconds` to test a longer operator threshold. Dirty-worktree scenarios fail if protected unrelated files disappear, change unexpectedly, lose their dirty git status, or if the harness command log contains stash/reset/clean/restore-style worktree mutation commands. If `events.jsonl` or `summary.json` already exists in the requested output directory, the harness fails rather than overwriting evidence.
 
 The harness does not delete or reset production files. Generated fixture projects and artifacts are intentionally left under `TMPDIR` or `/data/tmp` so operators can inspect them after a failed smoke run. If the live RCH posture is degraded, the RCH admission scenario records the backoff decision instead of forcing a local heavy cargo fallback.
 
