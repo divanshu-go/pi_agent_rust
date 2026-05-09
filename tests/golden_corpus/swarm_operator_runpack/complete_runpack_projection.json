@@ -266,6 +266,15 @@
       "sha256": "[SHA256]",
       "size_bytes": 40,
       "status": "ok"
+    },
+    {
+      "id": "tail_latency",
+      "issue": null,
+      "path": "[WORKSPACE]/tail-latency.json",
+      "schema": "pi.operator_tail_latency.v1",
+      "sha256": "[SHA256]",
+      "size_bytes": 688,
+      "status": "ok"
     }
   ],
   "status": "degraded",
@@ -469,5 +478,29 @@
       "yellow": 2
     },
     "total_score": 6
+  },
+  "tail_latency": {
+    "metrics": [
+      {
+        "count": 3,
+        "id": "provider_streaming",
+        "label": "Provider streaming",
+        "max_us": 300,
+        "p95_us": 300,
+        "p999_us": 300,
+        "p99_us": 300,
+        "sample_count": 3
+      }
+    ],
+    "purpose": "operator_observability_not_release_performance_claim",
+    "redaction_summary": {
+      "fields": [],
+      "policy": "timing_only_no_prompt_or_tool_payload_fields",
+      "redacted_count": 0
+    },
+    "sample_window": 512,
+    "schema": "pi.operator_tail_latency.v1",
+    "status": "ok",
+    "telemetry_enabled": true
   }
 }

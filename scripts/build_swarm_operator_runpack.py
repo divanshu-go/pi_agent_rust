@@ -1074,9 +1074,17 @@ def assert_runpack_contract(runpack: dict[str, Any]) -> None:
         for item in runpack.get("source_statuses", [])
         if isinstance(item, dict)
     }
-    assert source_ids == set(contract.get("required_source_ids", []))
+    required_source_ids = set(contract.get("required_source_ids", []))
+    optional_source_ids = set(contract.get("optional_source_ids", []))
+    assert source_ids.issuperset(required_source_ids)
+    unknown_source_ids = source_ids - required_source_ids - optional_source_ids
+    assert not unknown_source_ids, f"unexpected source ids: {sorted(unknown_source_ids)}"
     for path in contract.get("required_summary_paths", []):
         get_dotted(runpack, path)
+    for path in contract.get("optional_summary_paths", []):
+        top_level_key = path.split(".", maxsplit=1)[0]
+        if top_level_key in runpack:
+            get_dotted(runpack, path)
     scorecard = runpack.get("swarm_scale_safety_scorecard")
     assert isinstance(scorecard, dict)
     assert scorecard.get("schema") == contract.get("scorecard_schema")
@@ -1303,6 +1311,39 @@ def run_self_test() -> int:
     )
     git_path = workspace / "git-status.txt"
     git_path.write_text(" M src/doctor.rs\n?? scripts/new-tool.py\n", encoding="utf-8")
+    tail_latency_path = write_json(
+        workspace / "tail-latency.json",
+        {
+            "schema": TAIL_LATENCY_SCHEMA,
+            "purpose": "operator_observability_not_release_performance_claim",
+            "telemetry_enabled": True,
+            "sample_window": 512,
+            "redaction_summary": {
+                "redacted_count": 0,
+                "fields": [],
+                "policy": "timing_only_no_prompt_or_tool_payload_fields",
+            },
+            "metrics": [
+                {
+                    "id": "provider_streaming",
+                    "label": "Provider streaming",
+                    "snapshot": {
+                        "count": 3,
+                        "total_us": 600,
+                        "max_us": 300,
+                        "avg_us": 200,
+                        "tail": {
+                            "sample_window": 512,
+                            "sample_count": 3,
+                            "p95_us": 300,
+                            "p99_us": 300,
+                            "p999_us": 300,
+                        },
+                    },
+                }
+            ],
+        },
+    )
 
     args = argparse.Namespace(
         doctor_json=doctor_path,
@@ -1312,7 +1353,7 @@ def run_self_test() -> int:
         cargo_admission_json=cargo_path,
         beads_json=beads_path,
         git_status_file=git_path,
-        tail_latency_json=None,
+        tail_latency_json=tail_latency_path,
         out_json=workspace / "runpack.json",
         out_md=workspace / "runpack.md",
         generated_at=generated_at,
@@ -1350,12 +1391,18 @@ def run_self_test() -> int:
             assert dimension["evidence_paths"]
             if dimension["status"] == "green":
                 assert dimension["missing_evidence"] == []
+        assert runpack["tail_latency"]["schema"] == TAIL_LATENCY_SCHEMA
+        assert runpack["tail_latency"]["redaction_summary"]["policy"] == (
+            "timing_only_no_prompt_or_tool_payload_fields"
+        )
+        assert runpack["tail_latency"]["metrics"][0]["p999_us"] == 300
         assert runpack["smoke_harness"]["artifact_manifest"][0]["sha256"] == "a" * 64
         for source in runpack["source_statuses"]:
             assert source["size_bytes"] is not None
             assert len(source["sha256"]) == 64
         assert runpack["redaction_summary"]["redacted_count"] >= 1
         assert args.out_json.exists() and args.out_md.exists()
+        assert "Tail latency telemetry" in args.out_md.read_text(encoding="utf-8")
         assert_runpack_contract(runpack)
         assert_runpack_golden(runpack, workspace)
         malformed = workspace / "malformed.json"
@@ -1367,46 +1414,10 @@ def run_self_test() -> int:
             assert "malformed JSON" in str(exc)
         else:
             raise AssertionError("malformed provided source should fail closed")
-        tail_latency_path = write_json(
-            workspace / "tail-latency.json",
-            {
-                "schema": TAIL_LATENCY_SCHEMA,
-                "purpose": "operator_observability_not_release_performance_claim",
-                "telemetry_enabled": True,
-                "sample_window": 512,
-                "redaction_summary": {
-                    "redacted_count": 0,
-                    "fields": [],
-                    "policy": "timing_only_no_prompt_or_tool_payload_fields",
-                },
-                "metrics": [
-                    {
-                        "id": "provider_streaming",
-                        "label": "Provider streaming",
-                        "snapshot": {
-                            "count": 3,
-                            "total_us": 600,
-                            "max_us": 300,
-                            "avg_us": 200,
-                            "tail": {
-                                "sample_window": 512,
-                                "sample_count": 3,
-                                "p95_us": 300,
-                                "p99_us": 300,
-                                "p999_us": 300,
-                            },
-                        },
-                    }
-                ],
-            },
-        )
-        tail_args = argparse.Namespace(**{**vars(args), "tail_latency_json": tail_latency_path})
-        tail_runpack = build_runpack(tail_args)
-        assert tail_runpack["tail_latency"]["schema"] == TAIL_LATENCY_SCHEMA
-        assert tail_runpack["tail_latency"]["redaction_summary"]["policy"] == (
-            "timing_only_no_prompt_or_tool_payload_fields"
-        )
-        assert tail_runpack["tail_latency"]["metrics"][0]["p999_us"] == 300
+        no_tail_args = argparse.Namespace(**{**vars(args), "tail_latency_json": None})
+        no_tail_runpack = build_runpack(no_tail_args)
+        assert "tail_latency" not in no_tail_runpack
+        assert_runpack_contract(no_tail_runpack)
     except (AssertionError, RunpackError) as exc:
         print(f"SELF-TEST FAIL: {exc}")
         return 2

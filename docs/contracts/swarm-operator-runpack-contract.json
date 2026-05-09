@@ -31,6 +31,9 @@
     "beads",
     "git_status"
   ],
+  "optional_source_ids": [
+    "tail_latency"
+  ],
   "required_summary_paths": [
     "doctor_swarm.agent_mail_build_slots",
     "beads.stale",
@@ -47,6 +50,12 @@
     "swarm_scale_safety_scorecard.green_requires_all_required_evidence",
     "redaction_summary.redacted_count",
     "operator_next_actions"
+  ],
+  "optional_summary_paths": [
+    "tail_latency.schema",
+    "tail_latency.telemetry_enabled",
+    "tail_latency.redaction_summary",
+    "tail_latency.metrics"
   ],
   "required_source_status_fields": [
     "size_bytes",
@@ -144,6 +153,14 @@
         "scorecard_schema",
         "required_scorecard_dimensions",
         "allowed_dimension_statuses"
+      ]
+    },
+    {
+      "id": "RUNPACK-MUST-008",
+      "description": "When optional operator tail-latency telemetry is supplied, the runpack projects the redaction-safe timing-only summary into the handoff bundle and source statuses.",
+      "validated_by": [
+        "optional_source_ids",
+        "optional_summary_paths"
       ]
     }
   ]
