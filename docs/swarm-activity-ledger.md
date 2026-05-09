@@ -125,6 +125,8 @@ The harness does not delete or reset production files. Generated fixture project
 
 `scripts/build_swarm_operator_runpack.py` assembles schema `pi.swarm.operator_runpack.v1` from existing source artifacts for a single operator handoff view. It accepts captured JSON from `pi doctor --only swarm --format json`, `scripts/report_swarm_claim_readiness.py`, `scripts/run_swarm_smoke_harness.py`, `scripts/cargo_headroom.sh --admit-only`, Beads JSON, git porcelain output, and the latest `pi.swarm.activity_digest.v1` digest. The script reads only the files passed to it, redacts sensitive fields and token-shaped values, and refuses malformed provided sources instead of emitting partial optimistic evidence.
 
+The runpack includes schema `pi.swarm.safety_scorecard.v1` as `swarm_scale_safety_scorecard`. Its seven dimensions cover coordination health, cargo/RCH posture, perf evidence freshness, dirty-worktree tolerance, stalled-Bead hygiene, resource-governor readiness, and smoke-test coverage. A dimension cannot score green unless the required source artifacts loaded successfully and the dimension retains dotted evidence paths back to the summarized runpack fields.
+
 Safe self-test:
 
 ```bash

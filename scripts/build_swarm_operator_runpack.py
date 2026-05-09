@@ -26,12 +26,14 @@ from typing import Any
 
 RUNPACK_SCHEMA = "pi.swarm.operator_runpack.v1"
 RUNPACK_CONTRACT_SCHEMA = "pi.swarm.operator_runpack_contract.v1"
+SAFETY_SCORECARD_SCHEMA = "pi.swarm.safety_scorecard.v1"
 RUNPACK_CONTRACT_PATH = Path("docs/contracts/swarm-operator-runpack-contract.json")
 GOLDEN_REPORT_DIRECTORY = Path("tests/golden_corpus/swarm_operator_runpack")
 COMPLETE_RUNPACK_GOLDEN = "complete_runpack_projection.json"
 UPDATE_GOLDEN_ENV = "UPDATE_SWARM_OPERATOR_RUNPACK_GOLDEN"
 DEFAULT_MAX_ITEMS = 8
 DEFAULT_STALE_AFTER_HOURS = 24
+SCORECARD_MAX_PER_DIMENSION = 2
 SENSITIVE_KEY_FRAGMENTS = (
     "authorization",
     "bearer",
@@ -511,6 +513,325 @@ def summarize_git_status(source: SourcePayload, max_items: int) -> dict[str, Any
     }
 
 
+def int_value(value: Any) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    return 0
+
+
+def source_status_for(runpack: dict[str, Any], source_id: str) -> str | None:
+    for source in runpack.get("source_statuses", []):
+        if isinstance(source, dict) and source.get("id") == source_id:
+            status = source.get("status")
+            return str(status) if status is not None else None
+    return None
+
+
+def required_evidence_gaps(
+    runpack: dict[str, Any],
+    *,
+    required_source_ids: tuple[str, ...],
+    evidence_paths: tuple[str, ...],
+) -> list[str]:
+    missing = [
+        f"source_statuses[{source_id}].status"
+        for source_id in required_source_ids
+        if source_status_for(runpack, source_id) != "ok"
+    ]
+    for path in evidence_paths:
+        try:
+            value = get_dotted(runpack, path)
+        except KeyError:
+            missing.append(path)
+            continue
+        if value is None:
+            missing.append(path)
+    return missing
+
+
+def scorecard_dimension(
+    *,
+    runpack: dict[str, Any],
+    dimension_id: str,
+    title: str,
+    required_source_ids: tuple[str, ...],
+    evidence_paths: tuple[str, ...],
+    blockers: list[str],
+    warnings: list[str],
+    detail: str,
+) -> dict[str, Any]:
+    missing_evidence = required_evidence_gaps(
+        runpack,
+        required_source_ids=required_source_ids,
+        evidence_paths=evidence_paths,
+    )
+    all_blockers = list(blockers)
+    if missing_evidence:
+        all_blockers.insert(0, "missing required evidence")
+    if all_blockers:
+        score = 0
+        status = "red"
+    elif warnings:
+        score = 1
+        status = "yellow"
+    else:
+        score = SCORECARD_MAX_PER_DIMENSION
+        status = "green"
+    return {
+        "id": dimension_id,
+        "title": title,
+        "status": status,
+        "score": score,
+        "max_score": SCORECARD_MAX_PER_DIMENSION,
+        "required_source_ids": list(required_source_ids),
+        "evidence_paths": list(evidence_paths),
+        "missing_evidence": missing_evidence,
+        "green_requires": {
+            "all_required_sources_ok": all(
+                source_status_for(runpack, source_id) == "ok"
+                for source_id in required_source_ids
+            ),
+            "all_required_evidence_present": not missing_evidence,
+            "no_blockers": not all_blockers,
+        },
+        "blockers": all_blockers,
+        "warnings": warnings,
+        "detail": detail,
+    }
+
+
+def build_swarm_scale_safety_scorecard(runpack: dict[str, Any]) -> dict[str, Any]:
+    doctor = runpack["doctor_swarm"]
+    agent_mail = runpack["agent_mail"]
+    rch = runpack["rch_admission"]
+    evidence = runpack["evidence_readiness"]
+    git_state = runpack["git_state"]
+    beads = runpack["beads"]
+    activity = runpack["activity_digest"]
+    smoke = runpack["smoke_harness"]
+
+    severity_counts = (
+        doctor.get("severity_counts")
+        if isinstance(doctor.get("severity_counts"), dict)
+        else {}
+    )
+    coordination_blockers: list[str] = []
+    coordination_warnings: list[str] = []
+    if doctor.get("overall") == "fail" or int_value(severity_counts.get("fail")):
+        coordination_blockers.append("doctor swarm findings include failures")
+    if doctor.get("overall") == "warn" or int_value(severity_counts.get("warn")):
+        coordination_warnings.append("doctor swarm findings include warnings")
+    if not agent_mail.get("build_slots"):
+        coordination_blockers.append("Agent Mail build-slot evidence is absent")
+
+    queue_forecast = (
+        rch.get("queue_forecast")
+        if isinstance(rch.get("queue_forecast"), dict)
+        else {}
+    )
+    rch_decision = rch.get("decision")
+    queue_action = queue_forecast.get("recommended_action")
+    cargo_blockers: list[str] = []
+    cargo_warnings: list[str] = []
+    if rch_decision in {"backoff", "deny"}:
+        cargo_blockers.append(f"cargo/RCH admission decision is {rch_decision}")
+    elif rch_decision == "degraded":
+        cargo_warnings.append("cargo/RCH admission fell back to degraded mode")
+    elif rch_decision not in {"allow", "admit"}:
+        cargo_warnings.append(f"cargo/RCH admission decision is {rch_decision}")
+    if queue_action == "backoff":
+        cargo_blockers.append("RCH queue forecast recommends backoff")
+    elif queue_action == "split":
+        cargo_warnings.append("RCH queue forecast recommends split validation")
+    if queue_forecast.get("slot_pressure") == "saturated":
+        cargo_blockers.append("RCH queue forecast reports saturated slots")
+
+    stale_claims = (
+        evidence.get("stale_claims")
+        if isinstance(evidence.get("stale_claims"), dict)
+        else {}
+    )
+    stale_count = int_value(stale_claims.get("stale_count"))
+    perf_blockers: list[str] = []
+    perf_warnings: list[str] = []
+    if evidence.get("overall_status") != "ready":
+        perf_blockers.append("claim-readiness evidence is not ready")
+    if evidence.get("blocking_artifacts"):
+        perf_blockers.append("claim-readiness evidence has blocking artifacts")
+    if stale_count:
+        perf_warnings.append(f"claim-readiness evidence has {stale_count} stale claims")
+
+    scenario_statuses = (
+        smoke.get("scenario_statuses")
+        if isinstance(smoke.get("scenario_statuses"), dict)
+        else {}
+    )
+    dirty_scenario = scenario_statuses.get("dirty_worktree_preserved")
+    dirty_blockers: list[str] = []
+    dirty_warnings: list[str] = []
+    if dirty_scenario != "pass":
+        dirty_blockers.append("smoke harness did not prove dirty-worktree preservation")
+    if git_state.get("dirty"):
+        dirty_warnings.append("current captured git state is dirty")
+
+    stalled_blockers: list[str] = []
+    stalled_warnings: list[str] = []
+    stale_beads = beads.get("stale") if isinstance(beads.get("stale"), list) else []
+    if stale_beads:
+        stalled_blockers.append(f"{len(stale_beads)} active Beads entries are stale")
+    if int_value(beads.get("active_count")) == 0:
+        stalled_warnings.append("Beads capture has no active work entries")
+
+    resource_blockers: list[str] = []
+    resource_warnings: list[str] = []
+    if activity.get("saturated") is True:
+        resource_blockers.append("activity digest reports swarm saturation")
+    if queue_action == "backoff":
+        resource_blockers.append("RCH queue forecast is in backoff")
+    elif queue_action == "split":
+        resource_warnings.append("RCH queue forecast needs split validation")
+    if queue_forecast.get("slot_pressure") == "saturated":
+        resource_blockers.append("RCH slot pressure is saturated")
+
+    failed_scenarios = (
+        smoke.get("failed_scenarios")
+        if isinstance(smoke.get("failed_scenarios"), list)
+        else []
+    )
+    non_pass_scenarios = [
+        name
+        for name, status in scenario_statuses.items()
+        if status != "pass"
+    ]
+    coverage_blockers: list[str] = []
+    coverage_warnings: list[str] = []
+    if smoke.get("harness_status") != "pass":
+        coverage_blockers.append("smoke harness status is not pass")
+    if failed_scenarios:
+        coverage_blockers.append("smoke harness reports failed scenarios")
+    if non_pass_scenarios:
+        coverage_blockers.append("smoke harness has non-pass scenario statuses")
+    if not smoke.get("artifact_manifest"):
+        coverage_blockers.append("smoke harness artifact manifest is empty")
+
+    dimensions = [
+        scorecard_dimension(
+            runpack=runpack,
+            dimension_id="coordination_health",
+            title="Coordination health",
+            required_source_ids=("doctor_swarm", "smoke_harness"),
+            evidence_paths=(
+                "doctor_swarm.overall",
+                "doctor_swarm.agent_mail_build_slots",
+                "agent_mail.build_slots",
+                "agent_mail.smoke_reservation_count",
+            ),
+            blockers=coordination_blockers,
+            warnings=coordination_warnings,
+            detail="Agent Mail and doctor evidence show whether coordination lanes are observable and unstuck.",
+        ),
+        scorecard_dimension(
+            runpack=runpack,
+            dimension_id="cargo_rch_posture",
+            title="Cargo/RCH posture",
+            required_source_ids=("cargo_admission",),
+            evidence_paths=(
+                "rch_admission.decision",
+                "rch_admission.queue_forecast.status",
+                "rch_admission.queue_forecast.recommended_action",
+            ),
+            blockers=cargo_blockers,
+            warnings=cargo_warnings,
+            detail="Cargo admission and RCH queue evidence decide whether heavy validation can start safely.",
+        ),
+        scorecard_dimension(
+            runpack=runpack,
+            dimension_id="perf_evidence_freshness",
+            title="Performance evidence freshness",
+            required_source_ids=("claim_readiness",),
+            evidence_paths=(
+                "evidence_readiness.overall_status",
+                "evidence_readiness.blocking_artifacts",
+                "evidence_readiness.stale_claims",
+            ),
+            blockers=perf_blockers,
+            warnings=perf_warnings,
+            detail="Claim-readiness artifacts must be ready, non-blocking, and fresh enough for release handoff.",
+        ),
+        scorecard_dimension(
+            runpack=runpack,
+            dimension_id="dirty_worktree_tolerance",
+            title="Dirty-worktree tolerance",
+            required_source_ids=("git_status", "smoke_harness"),
+            evidence_paths=(
+                "git_state.dirty",
+                "git_state.sample",
+                "smoke_harness.scenario_statuses",
+            ),
+            blockers=dirty_blockers,
+            warnings=dirty_warnings,
+            detail="Git status and the smoke harness prove unrelated dirty files are accounted for and preserved.",
+        ),
+        scorecard_dimension(
+            runpack=runpack,
+            dimension_id="stalled_bead_hygiene",
+            title="Stalled-Bead hygiene",
+            required_source_ids=("beads",),
+            evidence_paths=(
+                "beads.stale",
+                "beads.stale_after_hours",
+                "beads.active_count",
+            ),
+            blockers=stalled_blockers,
+            warnings=stalled_warnings,
+            detail="Beads evidence must not show stale active ownership before launching more swarm work.",
+        ),
+        scorecard_dimension(
+            runpack=runpack,
+            dimension_id="resource_governor_readiness",
+            title="Resource-governor readiness",
+            required_source_ids=("activity_digest", "cargo_admission"),
+            evidence_paths=(
+                "activity_digest.saturated",
+                "activity_digest.evidence_pointers",
+                "rch_admission.queue_forecast.recommended_action",
+                "rch_admission.queue_forecast.slot_pressure",
+            ),
+            blockers=resource_blockers,
+            warnings=resource_warnings,
+            detail="Activity saturation and RCH queue posture decide whether the swarm should admit more work.",
+        ),
+        scorecard_dimension(
+            runpack=runpack,
+            dimension_id="test_coverage",
+            title="Test coverage",
+            required_source_ids=("smoke_harness",),
+            evidence_paths=(
+                "smoke_harness.harness_status",
+                "smoke_harness.scenario_statuses",
+                "smoke_harness.artifact_manifest",
+            ),
+            blockers=coverage_blockers,
+            warnings=coverage_warnings,
+            detail="The smoke harness must pass and retain artifact-manifest evidence for the operator workflow.",
+        ),
+    ]
+    total_score = sum(int_value(dimension["score"]) for dimension in dimensions)
+    max_score = SCORECARD_MAX_PER_DIMENSION * len(dimensions)
+    status_counts = Counter(str(dimension["status"]) for dimension in dimensions)
+    return {
+        "schema": SAFETY_SCORECARD_SCHEMA,
+        "overall_status": "ready" if status_counts.get("green") == len(dimensions) else "degraded",
+        "total_score": total_score,
+        "max_score": max_score,
+        "status_counts": dict(sorted(status_counts.items())),
+        "green_requires_all_required_evidence": True,
+        "dimensions": dimensions,
+    }
+
+
 def derive_status(runpack: dict[str, Any]) -> str:
     source_statuses = [item["status"] for item in runpack["source_statuses"]]
     if any(status == "ok" for status in source_statuses):
@@ -528,6 +849,9 @@ def derive_status(runpack: dict[str, Any]) -> str:
         status = "degraded"
     if runpack["smoke_harness"].get("harness_status") == "fail":
         status = "degraded"
+    scorecard = runpack.get("swarm_scale_safety_scorecard")
+    if isinstance(scorecard, dict) and scorecard.get("overall_status") != "ready":
+        status = "degraded"
     return status
 
 
@@ -539,13 +863,15 @@ def build_runpack(args: argparse.Namespace) -> dict[str, Any]:
     for source in sources:
         redaction.redacted_count += source.redacted_count
         redaction.fields.update(source.redacted_fields)
+    doctor_summary = summarize_doctor(by_id["doctor_swarm"], args.max_items)
+    smoke_summary = summarize_smoke_harness(by_id["smoke_harness"], args.max_items)
     runpack = {
         "schema": RUNPACK_SCHEMA,
         "generated_at": generated_at.isoformat(),
         "status": "unknown",
         "purpose": "operator_handoff_not_release_performance_claim",
         "source_statuses": [source.to_status() for source in sources],
-        "doctor_swarm": summarize_doctor(by_id["doctor_swarm"], args.max_items),
+        "doctor_swarm": doctor_summary,
         "beads": summarize_beads(
             by_id["beads"],
             generated_at=generated_at,
@@ -553,23 +879,18 @@ def build_runpack(args: argparse.Namespace) -> dict[str, Any]:
             max_items=args.max_items,
         ),
         "agent_mail": {
-            "doctor_findings": summarize_doctor(by_id["doctor_swarm"], args.max_items).get(
-                "agent_mail_findings", []
-            ),
-            "build_slots": summarize_doctor(by_id["doctor_swarm"], args.max_items).get(
-                "agent_mail_build_slots"
-            ),
-            "smoke_reservation_count": summarize_smoke_harness(
-                by_id["smoke_harness"], args.max_items
-            ).get("reservation_count"),
+            "doctor_findings": doctor_summary.get("agent_mail_findings", []),
+            "build_slots": doctor_summary.get("agent_mail_build_slots"),
+            "smoke_reservation_count": smoke_summary.get("reservation_count"),
         },
         "rch_admission": summarize_cargo_admission(by_id["cargo_admission"]),
         "evidence_readiness": summarize_claim_readiness(by_id["claim_readiness"], args.max_items),
         "git_state": summarize_git_status(by_id["git_status"], args.max_items),
         "activity_digest": summarize_activity_digest(by_id["activity_digest"], args.max_items),
-        "smoke_harness": summarize_smoke_harness(by_id["smoke_harness"], args.max_items),
+        "smoke_harness": smoke_summary,
         "redaction_summary": redaction.to_json(),
     }
+    runpack["swarm_scale_safety_scorecard"] = build_swarm_scale_safety_scorecard(runpack)
     runpack["status"] = derive_status(runpack)
     runpack["operator_next_actions"] = operator_next_actions(runpack)
     return runpack
@@ -599,6 +920,9 @@ def operator_next_actions(runpack: dict[str, Any]) -> list[str]:
         actions.append("Use activity-digest saturation evidence to narrow or redirect the swarm")
     if runpack["git_state"].get("dirty"):
         actions.append("Account for dirty files before using the runpack as handoff evidence")
+    scorecard = runpack.get("swarm_scale_safety_scorecard")
+    if isinstance(scorecard, dict) and scorecard.get("overall_status") != "ready":
+        actions.append("Review degraded swarm-scale safety scorecard dimensions before release runpack signoff")
     if not actions:
         actions.append("Runpack sources are ready; proceed with the next unblocked Beads task")
     return actions
@@ -630,6 +954,17 @@ def render_markdown(runpack: dict[str, Any]) -> str:
     lines.append(f"- Evidence readiness: `{runpack['evidence_readiness'].get('overall_status')}`")
     lines.append(f"- Git dirty: `{runpack['git_state'].get('dirty')}`")
     lines.append(f"- Activity saturated: `{runpack['activity_digest'].get('saturated')}`")
+    scorecard = runpack["swarm_scale_safety_scorecard"]
+    lines.extend(["", "## Safety Scorecard"])
+    lines.append(
+        f"- Overall: `{scorecard.get('overall_status')}` "
+        f"({scorecard.get('total_score')}/{scorecard.get('max_score')})"
+    )
+    for dimension in scorecard.get("dimensions", []):
+        lines.append(
+            f"- `{dimension['id']}`: `{dimension['status']}` "
+            f"({dimension['score']}/{dimension['max_score']})"
+        )
     lines.append("")
     return "\n".join(lines)
 
@@ -685,6 +1020,39 @@ def assert_runpack_contract(runpack: dict[str, Any]) -> None:
     assert source_ids == set(contract.get("required_source_ids", []))
     for path in contract.get("required_summary_paths", []):
         get_dotted(runpack, path)
+    scorecard = runpack.get("swarm_scale_safety_scorecard")
+    assert isinstance(scorecard, dict)
+    assert scorecard.get("schema") == contract.get("scorecard_schema")
+    assert scorecard.get("overall_status") in set(contract.get("allowed_scorecard_statuses", []))
+    dimensions = scorecard.get("dimensions")
+    assert isinstance(dimensions, list) and dimensions
+    dimension_ids = {
+        dimension.get("id")
+        for dimension in dimensions
+        if isinstance(dimension, dict)
+    }
+    assert dimension_ids == set(contract.get("required_scorecard_dimensions", []))
+    for dimension in dimensions:
+        assert isinstance(dimension, dict)
+        assert dimension.get("status") in set(contract.get("allowed_dimension_statuses", []))
+        assert dimension.get("max_score") == SCORECARD_MAX_PER_DIMENSION
+        assert isinstance(dimension.get("required_source_ids"), list) and dimension.get(
+            "required_source_ids"
+        )
+        assert isinstance(dimension.get("evidence_paths"), list) and dimension.get("evidence_paths")
+        assert isinstance(dimension.get("missing_evidence"), list)
+        green_requires = dimension.get("green_requires")
+        assert isinstance(green_requires, dict)
+        all_required_evidence_present = not dimension["missing_evidence"]
+        assert (
+            green_requires.get("all_required_evidence_present")
+            is all_required_evidence_present
+        )
+        if dimension.get("status") == "green":
+            assert not dimension["missing_evidence"]
+            assert green_requires.get("all_required_sources_ok") is True
+            assert green_requires.get("all_required_evidence_present") is True
+            assert green_requires.get("no_blockers") is True
     for field in contract.get("required_source_status_fields", []):
         for source in runpack.get("source_statuses", []):
             if isinstance(source, dict) and source.get("status") == "ok":
@@ -799,7 +1167,10 @@ def run_self_test() -> int:
             "correlation_id": "selftest",
             "reservation_ids": [1],
             "failed_scenarios": [],
-            "scenarios": {"reservation_conflict": {"status": "pass"}},
+            "scenarios": {
+                "reservation_conflict": {"status": "pass"},
+                "dirty_worktree_preserved": {"status": "pass"},
+            },
             "artifacts": {"summary_json": str(workspace / "smoke.json")},
             "artifact_manifest": [
                 {
@@ -900,6 +1271,27 @@ def run_self_test() -> int:
         assert runpack["rch_admission"]["queue_forecast"]["recommended_action"] == "backoff"
         assert runpack["activity_digest"]["saturated"] is True
         assert runpack["git_state"]["dirty"] is True
+        scorecard = runpack["swarm_scale_safety_scorecard"]
+        assert scorecard["schema"] == SAFETY_SCORECARD_SCHEMA
+        assert scorecard["overall_status"] == "degraded"
+        scorecard_dimensions = {
+            dimension["id"]: dimension for dimension in scorecard["dimensions"]
+        }
+        assert set(scorecard_dimensions) == {
+            "coordination_health",
+            "cargo_rch_posture",
+            "perf_evidence_freshness",
+            "dirty_worktree_tolerance",
+            "stalled_bead_hygiene",
+            "resource_governor_readiness",
+            "test_coverage",
+        }
+        assert scorecard_dimensions["cargo_rch_posture"]["status"] == "red"
+        assert scorecard_dimensions["test_coverage"]["status"] == "green"
+        for dimension in scorecard_dimensions.values():
+            assert dimension["evidence_paths"]
+            if dimension["status"] == "green":
+                assert dimension["missing_evidence"] == []
         assert runpack["smoke_harness"]["artifact_manifest"][0]["sha256"] == "a" * 64
         for source in runpack["source_statuses"]:
             assert source["size_bytes"] is not None

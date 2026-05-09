@@ -1,6 +1,7 @@
 {
   "schema": "pi.swarm.operator_runpack_contract.v1",
   "runpack_schema": "pi.swarm.operator_runpack.v1",
+  "scorecard_schema": "pi.swarm.safety_scorecard.v1",
   "purpose": "operator_handoff_not_release_performance_claim",
   "minimum_redacted_count": 1,
   "required_top_level_keys": [
@@ -17,6 +18,7 @@
     "git_state",
     "activity_digest",
     "smoke_harness",
+    "swarm_scale_safety_scorecard",
     "redaction_summary",
     "operator_next_actions"
   ],
@@ -40,6 +42,9 @@
     "activity_digest.evidence_pointers",
     "smoke_harness.artifact_manifest",
     "smoke_harness.scenario_statuses",
+    "swarm_scale_safety_scorecard.overall_status",
+    "swarm_scale_safety_scorecard.dimensions",
+    "swarm_scale_safety_scorecard.green_requires_all_required_evidence",
     "redaction_summary.redacted_count",
     "operator_next_actions"
   ],
@@ -55,11 +60,30 @@
     "Treat cargo/RCH admission",
     "Back off heavy cargo validation",
     "Use activity-digest saturation evidence",
-    "Account for dirty files"
+    "Account for dirty files",
+    "Review degraded swarm-scale safety scorecard"
   ],
   "allowed_statuses": [
     "ready",
     "degraded"
+  ],
+  "allowed_scorecard_statuses": [
+    "ready",
+    "degraded"
+  ],
+  "allowed_dimension_statuses": [
+    "green",
+    "yellow",
+    "red"
+  ],
+  "required_scorecard_dimensions": [
+    "coordination_health",
+    "cargo_rch_posture",
+    "perf_evidence_freshness",
+    "dirty_worktree_tolerance",
+    "stalled_bead_hygiene",
+    "resource_governor_readiness",
+    "test_coverage"
   ],
   "must_requirements": [
     {
@@ -111,6 +135,15 @@
       "description": "Runpack next actions include operator-facing remediation text for stale beads, cargo/RCH admission, activity saturation, and dirty git state.",
       "validated_by": [
         "required_next_action_fragments"
+      ]
+    },
+    {
+      "id": "RUNPACK-MUST-007",
+      "description": "Runpack output includes a swarm-scale safety scorecard with coordination health, cargo/RCH posture, perf evidence freshness, dirty-worktree tolerance, stalled-Bead hygiene, resource-governor readiness, and test coverage dimensions; every green dimension must retain required source IDs and evidence paths.",
+      "validated_by": [
+        "scorecard_schema",
+        "required_scorecard_dimensions",
+        "allowed_dimension_statuses"
       ]
     }
   ]

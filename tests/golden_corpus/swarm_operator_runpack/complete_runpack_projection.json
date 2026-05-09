@@ -144,7 +144,8 @@
     "Treat cargo/RCH admission as blocked or degraded before heavy builds",
     "Back off heavy cargo validation until the RCH queue forecast recovers",
     "Use activity-digest saturation evidence to narrow or redirect the swarm",
-    "Account for dirty files before using the runpack as handoff evidence"
+    "Account for dirty files before using the runpack as handoff evidence",
+    "Review degraded swarm-scale safety scorecard dimensions before release runpack signoff"
   ],
   "purpose": "operator_handoff_not_release_performance_claim",
   "rch_admission": {
@@ -197,6 +198,7 @@
     "harness_status": "pass",
     "reservation_count": 1,
     "scenario_statuses": {
+      "dirty_worktree_preserved": "pass",
       "reservation_conflict": "pass"
     },
     "status": "ok"
@@ -226,7 +228,7 @@
       "path": "[WORKSPACE]/smoke.json",
       "schema": "pi.swarm.smoke_harness.v1",
       "sha256": "[SHA256]",
-      "size_bytes": 572,
+      "size_bytes": 636,
       "status": "ok"
     },
     {
@@ -266,5 +268,206 @@
       "status": "ok"
     }
   ],
-  "status": "degraded"
+  "status": "degraded",
+  "swarm_scale_safety_scorecard": {
+    "dimensions": [
+      {
+        "blockers": [],
+        "detail": "Agent Mail and doctor evidence show whether coordination lanes are observable and unstuck.",
+        "evidence_paths": [
+          "doctor_swarm.overall",
+          "doctor_swarm.agent_mail_build_slots",
+          "agent_mail.build_slots",
+          "agent_mail.smoke_reservation_count"
+        ],
+        "green_requires": {
+          "all_required_evidence_present": true,
+          "all_required_sources_ok": true,
+          "no_blockers": true
+        },
+        "id": "coordination_health",
+        "max_score": 2,
+        "missing_evidence": [],
+        "required_source_ids": [
+          "doctor_swarm",
+          "smoke_harness"
+        ],
+        "score": 1,
+        "status": "yellow",
+        "title": "Coordination health",
+        "warnings": [
+          "doctor swarm findings include warnings"
+        ]
+      },
+      {
+        "blockers": [
+          "cargo/RCH admission decision is backoff",
+          "RCH queue forecast recommends backoff",
+          "RCH queue forecast reports saturated slots"
+        ],
+        "detail": "Cargo admission and RCH queue evidence decide whether heavy validation can start safely.",
+        "evidence_paths": [
+          "rch_admission.decision",
+          "rch_admission.queue_forecast.status",
+          "rch_admission.queue_forecast.recommended_action"
+        ],
+        "green_requires": {
+          "all_required_evidence_present": true,
+          "all_required_sources_ok": true,
+          "no_blockers": false
+        },
+        "id": "cargo_rch_posture",
+        "max_score": 2,
+        "missing_evidence": [],
+        "required_source_ids": [
+          "cargo_admission"
+        ],
+        "score": 0,
+        "status": "red",
+        "title": "Cargo/RCH posture",
+        "warnings": []
+      },
+      {
+        "blockers": [],
+        "detail": "Claim-readiness artifacts must be ready, non-blocking, and fresh enough for release handoff.",
+        "evidence_paths": [
+          "evidence_readiness.overall_status",
+          "evidence_readiness.blocking_artifacts",
+          "evidence_readiness.stale_claims"
+        ],
+        "green_requires": {
+          "all_required_evidence_present": true,
+          "all_required_sources_ok": true,
+          "no_blockers": true
+        },
+        "id": "perf_evidence_freshness",
+        "max_score": 2,
+        "missing_evidence": [],
+        "required_source_ids": [
+          "claim_readiness"
+        ],
+        "score": 2,
+        "status": "green",
+        "title": "Performance evidence freshness",
+        "warnings": []
+      },
+      {
+        "blockers": [],
+        "detail": "Git status and the smoke harness prove unrelated dirty files are accounted for and preserved.",
+        "evidence_paths": [
+          "git_state.dirty",
+          "git_state.sample",
+          "smoke_harness.scenario_statuses"
+        ],
+        "green_requires": {
+          "all_required_evidence_present": true,
+          "all_required_sources_ok": true,
+          "no_blockers": true
+        },
+        "id": "dirty_worktree_tolerance",
+        "max_score": 2,
+        "missing_evidence": [],
+        "required_source_ids": [
+          "git_status",
+          "smoke_harness"
+        ],
+        "score": 1,
+        "status": "yellow",
+        "title": "Dirty-worktree tolerance",
+        "warnings": [
+          "current captured git state is dirty"
+        ]
+      },
+      {
+        "blockers": [
+          "1 active Beads entries are stale"
+        ],
+        "detail": "Beads evidence must not show stale active ownership before launching more swarm work.",
+        "evidence_paths": [
+          "beads.stale",
+          "beads.stale_after_hours",
+          "beads.active_count"
+        ],
+        "green_requires": {
+          "all_required_evidence_present": true,
+          "all_required_sources_ok": true,
+          "no_blockers": false
+        },
+        "id": "stalled_bead_hygiene",
+        "max_score": 2,
+        "missing_evidence": [],
+        "required_source_ids": [
+          "beads"
+        ],
+        "score": 0,
+        "status": "red",
+        "title": "Stalled-Bead hygiene",
+        "warnings": []
+      },
+      {
+        "blockers": [
+          "activity digest reports swarm saturation",
+          "RCH queue forecast is in backoff",
+          "RCH slot pressure is saturated"
+        ],
+        "detail": "Activity saturation and RCH queue posture decide whether the swarm should admit more work.",
+        "evidence_paths": [
+          "activity_digest.saturated",
+          "activity_digest.evidence_pointers",
+          "rch_admission.queue_forecast.recommended_action",
+          "rch_admission.queue_forecast.slot_pressure"
+        ],
+        "green_requires": {
+          "all_required_evidence_present": true,
+          "all_required_sources_ok": true,
+          "no_blockers": false
+        },
+        "id": "resource_governor_readiness",
+        "max_score": 2,
+        "missing_evidence": [],
+        "required_source_ids": [
+          "activity_digest",
+          "cargo_admission"
+        ],
+        "score": 0,
+        "status": "red",
+        "title": "Resource-governor readiness",
+        "warnings": []
+      },
+      {
+        "blockers": [],
+        "detail": "The smoke harness must pass and retain artifact-manifest evidence for the operator workflow.",
+        "evidence_paths": [
+          "smoke_harness.harness_status",
+          "smoke_harness.scenario_statuses",
+          "smoke_harness.artifact_manifest"
+        ],
+        "green_requires": {
+          "all_required_evidence_present": true,
+          "all_required_sources_ok": true,
+          "no_blockers": true
+        },
+        "id": "test_coverage",
+        "max_score": 2,
+        "missing_evidence": [],
+        "required_source_ids": [
+          "smoke_harness"
+        ],
+        "score": 2,
+        "status": "green",
+        "title": "Test coverage",
+        "warnings": []
+      }
+    ],
+    "green_requires_all_required_evidence": true,
+    "max_score": 14,
+    "overall_status": "degraded",
+    "schema": "pi.swarm.safety_scorecard.v1",
+    "status_counts": {
+      "green": 2,
+      "red": 3,
+      "yellow": 2
+    },
+    "total_score": 6
+  }
 }
