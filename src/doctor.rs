@@ -8,6 +8,12 @@ use crate::auth::{AuthStorage, CredentialStatus};
 use crate::config::Config;
 use crate::error::Result;
 use crate::provider_metadata::provider_auth_env_keys;
+use crate::resource_governor::{
+    AdmissionAction, HostResourceBudgets, HostResourceSample, ResourceOperationKind,
+    ResourceRequest, SwarmAdmissionController, SwarmCapacityDimension,
+    SwarmCapacityEvidenceSummary, SwarmCapacityPlan, SwarmCapacityPlanError,
+    SwarmCapacityPlannerConfig, SwarmHostInventory, SwarmLiveLoad, TailLatencyRegimeSample,
+};
 use crate::session::SessionHeader;
 use crate::session_index::walk_sessions;
 use chrono::{DateTime, Utc};
@@ -25,6 +31,8 @@ const SWARM_STALE_IN_PROGRESS_HOURS: i64 = 24;
 const SWARM_DETAIL_LIMIT: usize = 5;
 const SWARM_DISK_WARN_AVAILABLE_KB: u64 = 10 * 1024 * 1024;
 const SWARM_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const SWARM_DOCTOR_ADMISSION_SCHEMA: &str = "pi.doctor.swarm_admission.v1";
+const MIB_BYTES: u64 = 1024 * 1024;
 
 // ── Core Types ──────────────────────────────────────────────────────
 
@@ -120,6 +128,8 @@ pub struct Finding {
     pub detail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remediation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
     pub fixability: Fixability,
 }
 
@@ -131,6 +141,7 @@ impl Finding {
             title: title.into(),
             detail: None,
             remediation: None,
+            data: None,
             fixability: Fixability::NotFixable,
         }
     }
@@ -142,6 +153,7 @@ impl Finding {
             title: title.into(),
             detail: None,
             remediation: None,
+            data: None,
             fixability: Fixability::NotFixable,
         }
     }
@@ -153,6 +165,7 @@ impl Finding {
             title: title.into(),
             detail: None,
             remediation: None,
+            data: None,
             fixability: Fixability::NotFixable,
         }
     }
@@ -164,6 +177,7 @@ impl Finding {
             title: title.into(),
             detail: None,
             remediation: None,
+            data: None,
             fixability: Fixability::NotFixable,
         }
     }
@@ -175,6 +189,11 @@ impl Finding {
 
     fn with_remediation(mut self, remediation: impl Into<String>) -> Self {
         self.remediation = Some(remediation.into());
+        self
+    }
+
+    fn with_data(mut self, data: serde_json::Value) -> Self {
+        self.data = Some(data);
         self
     }
 
@@ -929,6 +948,7 @@ fn check_tool(
                 remediation: discovered_path
                     .as_ref()
                     .map(|path| format!("Verify this executable is healthy: {path}")),
+                data: None,
                 fixability: Fixability::NotFixable,
             });
         }
@@ -947,6 +967,7 @@ fn check_tool(
                     remediation: discovered_path
                         .as_ref()
                         .map(|path| format!("Verify this executable is healthy: {path}")),
+                    data: None,
                     fixability: Fixability::NotFixable,
                 });
             } else {
@@ -973,6 +994,7 @@ fn report_missing_tool(
         title: format!("{tool}: not found{suffix}"),
         detail: None,
         remediation: None,
+        data: None,
         fixability: Fixability::NotFixable,
     };
     if tool.eq("gh") {
@@ -1063,6 +1085,7 @@ fn is_executable(path: &Path) -> bool {
 #[allow(clippy::too_many_lines)]
 fn check_swarm(cwd: &Path, findings: &mut Vec<Finding>) {
     check_swarm_beads(cwd, findings);
+    check_swarm_live_admission(cwd, findings);
     check_swarm_br_status(cwd, findings);
     check_swarm_agent_mail(cwd, findings);
     check_swarm_git(cwd, findings);
@@ -1149,6 +1172,367 @@ fn check_swarm_beads(cwd: &Path, findings: &mut Vec<Finding>) {
                 .with_remediation("Use Agent Mail to contact owners; only reset a bead after confirming the owner is stale"),
         );
     }
+}
+
+fn check_swarm_live_admission(cwd: &Path, findings: &mut Vec<Finding>) {
+    let ledger_path = cwd.join(".beads/issues.jsonl");
+    let content = match std::fs::read_to_string(&ledger_path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let warnings = vec!["Beads ledger missing".to_string()];
+            findings.push(swarm_admission_blocked_finding(
+                Severity::Warn,
+                "Live swarm admission decision denies new work",
+                format!("Beads ledger not found at {}", ledger_path.display()),
+                &warnings,
+            ));
+            return;
+        }
+        Err(err) => {
+            let warnings = vec!["Beads ledger unreadable".to_string()];
+            findings.push(swarm_admission_blocked_finding(
+                Severity::Fail,
+                "Live swarm admission decision unavailable",
+                format!("{} is not readable: {err}", ledger_path.display()),
+                &warnings,
+            ));
+            return;
+        }
+    };
+
+    let summary = summarize_beads_ledger(&content, Utc::now(), SWARM_STALE_IN_PROGRESS_HOURS);
+    if summary.parse_errors > 0 {
+        let warnings = vec!["Beads ledger has malformed JSONL rows".to_string()];
+        findings.push(swarm_admission_blocked_finding(
+            Severity::Fail,
+            "Live swarm admission decision denies new work",
+            format!(
+                "Beads ledger has {} malformed JSONL row(s); coordination state is corrupted",
+                summary.parse_errors
+            ),
+            &warnings,
+        ));
+        return;
+    }
+
+    let sample = HostResourceSample::current();
+    let mut warnings = resource_sample_warnings(&sample);
+    if !summary.stale_in_progress.is_empty() {
+        warnings.push(format!(
+            "{} stale in_progress bead(s) may overstate live agent load",
+            summary.stale_in_progress.len()
+        ));
+    }
+
+    let plan = match build_swarm_doctor_capacity_plan(&sample) {
+        Ok(plan) => plan,
+        Err(err) => {
+            findings.push(swarm_admission_blocked_finding(
+                Severity::Fail,
+                "Live swarm admission decision unavailable",
+                format!("capacity plan could not be built from live host sample: {err}"),
+                &warnings,
+            ));
+            return;
+        }
+    };
+
+    let live_load = live_load_from_beads_summary(&summary);
+    findings.push(classify_swarm_admission(plan, sample, live_load, &warnings));
+}
+
+fn build_swarm_doctor_capacity_plan(
+    sample: &HostResourceSample,
+) -> std::result::Result<SwarmCapacityPlan, SwarmCapacityPlanError> {
+    let budgets = HostResourceBudgets::from_host();
+    let cpu_cores = budgets.cpu_cores.max(1);
+    let inventory = SwarmHostInventory::new(
+        cpu_cores,
+        cpu_cores,
+        bytes_to_mib_ceil(budgets.max_rss_bytes.saturating_mul(2)).max(1),
+    );
+    let evidence = SwarmCapacityEvidenceSummary {
+        complete_records: 1,
+        host_capacity_rows: 1,
+        host_capacity_mismatch_rows: 0,
+        max_p99_ms: 250,
+        max_p999_ms: 1_000,
+        max_queue_depth: budgets.max_queue_depth.max(1),
+        max_rss_mb: sample.rss_bytes.map_or(256, bytes_to_mib_ceil).max(1),
+        max_cpu_pct: 1.0,
+    };
+
+    SwarmCapacityPlannerConfig::default().plan_from_summary(evidence, inventory)
+}
+
+fn live_load_from_beads_summary(summary: &BeadsLedgerSummary) -> SwarmLiveLoad {
+    SwarmLiveLoad::empty()
+        .with_active_agents(
+            env_u64("PI_DOCTOR_SWARM_ACTIVE_AGENTS")
+                .unwrap_or_else(|| usize_to_u64(summary.in_progress)),
+        )
+        .with_active_tool_calls(env_u64("PI_DOCTOR_SWARM_ACTIVE_TOOL_CALLS").unwrap_or(0))
+        .with_extension_hostcall_lanes(
+            env_u64("PI_DOCTOR_SWARM_EXTENSION_HOSTCALL_LANES").unwrap_or(0),
+        )
+        .with_active_rch_jobs(env_u64("PI_DOCTOR_SWARM_ACTIVE_RCH_JOBS").unwrap_or(0))
+}
+
+fn classify_swarm_admission(
+    plan: SwarmCapacityPlan,
+    sample: HostResourceSample,
+    live_load: SwarmLiveLoad,
+    warnings: &[String],
+) -> Finding {
+    let mut controller = SwarmAdmissionController::from_plan(plan);
+    let queue_depth = u64_to_usize_saturating(live_load.active_tool_calls.saturating_add(1));
+    let resource_pressure_ratio =
+        resource_pressure_ratio(&sample, &controller.plan().resource_budgets);
+    let tail_latency_sample = TailLatencyRegimeSample::new(
+        controller.plan().evidence.max_p99_ms,
+        controller.plan().evidence.max_p999_ms,
+        queue_depth,
+        resource_pressure_ratio,
+    );
+    let request = ResourceRequest::new(ResourceOperationKind::Tool, "doctor.swarm_admission")
+        .with_estimated_tool_output_bytes(
+            controller
+                .plan()
+                .resource_budgets
+                .max_tool_output_bytes
+                .min(MIB_BYTES),
+        )
+        .with_queue_depth(queue_depth);
+    let decision = controller.decide(&request, sample, tail_latency_sample, live_load);
+    let next_actions = swarm_admission_next_actions(decision.action, !warnings.is_empty());
+    let remediation = next_actions.join("; ");
+    let detail = format_swarm_admission_detail(&decision, warnings);
+    let data = swarm_admission_data(&decision, warnings, &next_actions);
+
+    match (decision.action, warnings.is_empty()) {
+        (AdmissionAction::Admit, true) => {
+            Finding::pass(CheckCategory::Swarm, "Live swarm admission decision: admit")
+        }
+        (AdmissionAction::Admit, false) => Finding::warn(
+            CheckCategory::Swarm,
+            "Live swarm admission decision degraded: admit",
+        ),
+        (AdmissionAction::Backpressure, _) => Finding::warn(
+            CheckCategory::Swarm,
+            "Live swarm admission decision: backpressure",
+        ),
+        (AdmissionAction::Deny, _) => {
+            Finding::fail(CheckCategory::Swarm, "Live swarm admission decision: deny")
+        }
+    }
+    .with_detail(detail)
+    .with_remediation(remediation)
+    .with_data(data)
+}
+
+fn swarm_admission_blocked_finding(
+    severity: Severity,
+    title: impl Into<String>,
+    detail: String,
+    warnings: &[String],
+) -> Finding {
+    let next_actions = vec![
+        "Do not launch new swarm work while the admission action is deny".to_string(),
+        "Repair or refresh the coordination inputs".to_string(),
+        "Rerun `pi doctor --only swarm --format json`".to_string(),
+    ];
+    let remediation = next_actions.join("; ");
+    let data = serde_json::json!({
+        "schema": SWARM_DOCTOR_ADMISSION_SCHEMA,
+        "source": {
+            "capacity_plan": "unavailable",
+            "live_load": "unavailable",
+            "resource_sample": "unavailable"
+        },
+        "action": action_label(AdmissionAction::Deny),
+        "reason": detail,
+        "retry_after_ms": 0,
+        "pressure_dimension": capacity_dimension_label(SwarmCapacityDimension::None),
+        "capacity_pressure": null,
+        "planned_budgets": null,
+        "live_counts": null,
+        "resource_sample": null,
+        "admission_decision": null,
+        "stale_data_warnings": warnings,
+        "next_actions": next_actions
+    });
+
+    match severity {
+        Severity::Pass => Finding::pass(CheckCategory::Swarm, title),
+        Severity::Info => Finding::info(CheckCategory::Swarm, title),
+        Severity::Warn => Finding::warn(CheckCategory::Swarm, title),
+        Severity::Fail => Finding::fail(CheckCategory::Swarm, title),
+    }
+    .with_detail(detail)
+    .with_remediation(remediation)
+    .with_data(data)
+}
+
+fn swarm_admission_data(
+    decision: &crate::resource_governor::SwarmAdmissionControllerDecision,
+    warnings: &[String],
+    next_actions: &[String],
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema": SWARM_DOCTOR_ADMISSION_SCHEMA,
+        "source": {
+            "capacity_plan": "doctor_live_host_sample",
+            "live_load": "beads_ledger_with_env_overrides",
+            "resource_sample": "host_resource_sample_current"
+        },
+        "action": action_label(decision.action),
+        "reason": decision.reason,
+        "retry_after_ms": decision.retry_after_ms,
+        "pressure_dimension": capacity_dimension_label(decision.capacity_pressure.dimension),
+        "capacity_pressure": decision.capacity_pressure,
+        "planned_budgets": {
+            "agent_concurrency": decision.recommended_agent_concurrency,
+            "tool_concurrency": decision.recommended_tool_concurrency,
+            "extension_hostcall_lanes": decision.recommended_extension_hostcall_lanes,
+            "rch_verification_fanout": decision.recommended_rch_verification_fanout,
+            "max_queue_depth": decision.resource_decision.budgets.max_queue_depth,
+            "max_tool_output_bytes": decision.resource_decision.budgets.max_tool_output_bytes,
+            "memory_pressure_threshold_ratio": decision.resource_decision.budgets.backpressure_ratio,
+            "deny_ratio": decision.resource_decision.budgets.deny_ratio,
+            "plan_confidence": decision.plan_confidence
+        },
+        "live_counts": decision.live_load,
+        "resource_sample": decision.resource_decision.sample,
+        "admission_decision": decision.telemetry(),
+        "stale_data_warnings": warnings,
+        "next_actions": next_actions
+    })
+}
+
+fn format_swarm_admission_detail(
+    decision: &crate::resource_governor::SwarmAdmissionControllerDecision,
+    warnings: &[String],
+) -> String {
+    let pressure = decision.capacity_pressure;
+    let mut detail = format!(
+        "action={}, reason={}, retry_after_ms={}, pressure={} {}/{} ({:.2}x), live_agents={}, live_tool_calls={}, live_extension_lanes={}, live_rch_jobs={}, planned_agents={}, planned_tool_calls={}, planned_extension_lanes={}, planned_rch_jobs={}",
+        action_label(decision.action),
+        decision.reason,
+        decision.retry_after_ms,
+        capacity_dimension_label(pressure.dimension),
+        pressure.observed,
+        pressure.budget,
+        pressure.ratio,
+        decision.live_load.active_agents,
+        decision.live_load.active_tool_calls,
+        decision.live_load.extension_hostcall_lanes,
+        decision.live_load.active_rch_jobs,
+        decision.recommended_agent_concurrency,
+        decision.recommended_tool_concurrency,
+        decision.recommended_extension_hostcall_lanes,
+        decision.recommended_rch_verification_fanout
+    );
+    if !warnings.is_empty() {
+        detail.push_str("; stale_data_warnings=");
+        detail.push_str(&warnings.join("; "));
+    }
+    detail
+}
+
+fn swarm_admission_next_actions(action: AdmissionAction, has_warnings: bool) -> Vec<String> {
+    let mut actions = match action {
+        AdmissionAction::Admit => vec![
+            "Proceed with new swarm work only after current leases are visible".to_string(),
+            "Keep CARGO_TARGET_DIR and TMPDIR on high-capacity storage before cargo checks"
+                .to_string(),
+        ],
+        AdmissionAction::Backpressure => vec![
+            "Delay new swarm work until the reported retry_after_ms has elapsed".to_string(),
+            "Reduce active agents or tool calls on the pressure dimension".to_string(),
+            "Rerun `pi doctor --only swarm --format json` before heavyweight cargo checks"
+                .to_string(),
+        ],
+        AdmissionAction::Deny => vec![
+            "Do not launch new swarm work while the admission action is deny".to_string(),
+            "Stop or defer agents on the pressure dimension".to_string(),
+            "Rerun `pi doctor --only swarm --format json` after pressure clears".to_string(),
+        ],
+    };
+    if has_warnings {
+        actions.push(
+            "Repair stale or missing inputs before treating the decision as healthy".to_string(),
+        );
+    }
+    actions
+}
+
+const fn action_label(action: AdmissionAction) -> &'static str {
+    match action {
+        AdmissionAction::Admit => "admit",
+        AdmissionAction::Backpressure => "backpressure",
+        AdmissionAction::Deny => "deny",
+    }
+}
+
+const fn capacity_dimension_label(dimension: SwarmCapacityDimension) -> &'static str {
+    match dimension {
+        SwarmCapacityDimension::ActiveAgents => "active_agents",
+        SwarmCapacityDimension::ActiveToolCalls => "active_tool_calls",
+        SwarmCapacityDimension::ExtensionHostcallLanes => "extension_hostcall_lanes",
+        SwarmCapacityDimension::RchVerificationFanout => "rch_verification_fanout",
+        SwarmCapacityDimension::None => "none",
+    }
+}
+
+fn resource_sample_warnings(sample: &HostResourceSample) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if sample.load_avg_1m.is_none() {
+        warnings.push("host load average unavailable".to_string());
+    }
+    if sample.rss_bytes.is_none() {
+        warnings.push("process RSS sample unavailable".to_string());
+    }
+    if sample.process_count.is_none() {
+        warnings.push("host process-count sample unavailable".to_string());
+    }
+    if sample.fd_count.is_none() {
+        warnings.push("file-descriptor sample unavailable".to_string());
+    }
+    warnings
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn resource_pressure_ratio(sample: &HostResourceSample, budgets: &HostResourceBudgets) -> f64 {
+    let mut ratio = 0.0_f64;
+    if let Some(load_avg_1m) = sample.load_avg_1m {
+        ratio = ratio.max(load_avg_1m / budgets.max_load_avg_1m.max(f64::EPSILON));
+    }
+    if let Some(rss_bytes) = sample.rss_bytes {
+        ratio = ratio.max((rss_bytes as f64) / (budgets.max_rss_bytes.max(1) as f64));
+    }
+    if let Some(process_count) = sample.process_count {
+        ratio = ratio.max((process_count as f64) / (budgets.max_processes.max(1) as f64));
+    }
+    if let Some(fd_count) = sample.fd_count {
+        ratio = ratio.max((fd_count as f64) / (budgets.max_fds.max(1) as f64));
+    }
+    ratio
+}
+
+fn env_u64(key: &str) -> Option<u64> {
+    std::env::var(key).ok()?.trim().parse::<u64>().ok()
+}
+
+const fn bytes_to_mib_ceil(bytes: u64) -> u64 {
+    bytes.saturating_add(MIB_BYTES - 1) / MIB_BYTES
+}
+
+fn usize_to_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+fn u64_to_usize_saturating(value: u64) -> usize {
+    usize::try_from(value).unwrap_or(usize::MAX)
 }
 
 fn summarize_beads_ledger(
@@ -2113,6 +2497,7 @@ fn check_extension(
                     .map_or_else(|| format!("at {file}"), |line| format!("at {file}:{line}"))
             }),
             remediation: pf.remediation.clone(),
+            data: None,
             fixability: Fixability::NotFixable,
         };
         // Ensure we don't lose location info
@@ -2135,6 +2520,35 @@ mod tests {
         std::fs::create_dir_all(&extension_dir).expect("create extension dir");
         std::fs::write(extension_dir.join("index.js"), source).expect("write extension source");
         extension_dir
+    }
+
+    fn test_swarm_capacity_plan() -> SwarmCapacityPlan {
+        let evidence = SwarmCapacityEvidenceSummary {
+            complete_records: 5,
+            host_capacity_rows: 5,
+            host_capacity_mismatch_rows: 0,
+            max_p99_ms: 100,
+            max_p999_ms: 300,
+            max_queue_depth: 16,
+            max_rss_mb: 256,
+            max_cpu_pct: 40.0,
+        };
+        SwarmCapacityPlannerConfig::default()
+            .plan_from_summary(evidence, SwarmHostInventory::new(8, 8, 32_768))
+            .expect("test capacity plan")
+    }
+
+    fn healthy_resource_sample() -> HostResourceSample {
+        HostResourceSample {
+            load_avg_1m: Some(1.0),
+            rss_bytes: Some(128 * MIB_BYTES),
+            process_count: Some(16),
+            fd_count: Some(64),
+        }
+    }
+
+    fn finding_data(finding: &Finding) -> &serde_json::Value {
+        finding.data.as_ref().expect("structured finding data")
     }
 
     #[test]
@@ -2323,6 +2737,121 @@ not-json
         assert_eq!(summary.total, 2);
         assert_eq!(summary.open, 1);
         assert_eq!(summary.parse_errors, 1);
+    }
+
+    #[test]
+    fn swarm_admission_reports_healthy_decision_data() {
+        let finding = classify_swarm_admission(
+            test_swarm_capacity_plan(),
+            healthy_resource_sample(),
+            SwarmLiveLoad::empty()
+                .with_active_agents(1)
+                .with_active_tool_calls(1),
+            &[],
+        );
+
+        assert_eq!(finding.severity, Severity::Pass);
+        let data = finding_data(&finding);
+        assert_eq!(data["schema"], SWARM_DOCTOR_ADMISSION_SCHEMA);
+        assert_eq!(data["action"], "admit");
+        assert_eq!(data["pressure_dimension"], "active_agents");
+        assert_eq!(data["live_counts"]["active_agents"], serde_json::json!(1));
+        assert_eq!(
+            data["planned_budgets"]["agent_concurrency"],
+            serde_json::json!(4)
+        );
+        assert!(data["admission_decision"].is_object());
+    }
+
+    #[test]
+    fn swarm_admission_reports_backpressure_guidance() {
+        let finding = classify_swarm_admission(
+            test_swarm_capacity_plan(),
+            healthy_resource_sample(),
+            SwarmLiveLoad::empty().with_active_agents(3),
+            &[],
+        );
+
+        assert_eq!(finding.severity, Severity::Warn);
+        let data = finding_data(&finding);
+        assert_eq!(data["action"], "backpressure");
+        assert_eq!(data["pressure_dimension"], "active_agents");
+        assert!(data["retry_after_ms"].as_u64().unwrap_or(0) > 0);
+        assert!(
+            finding
+                .remediation
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Delay new swarm work")
+        );
+    }
+
+    #[test]
+    fn swarm_admission_reports_deny_guidance() {
+        let finding = classify_swarm_admission(
+            test_swarm_capacity_plan(),
+            healthy_resource_sample(),
+            SwarmLiveLoad::empty().with_active_tool_calls(8),
+            &[],
+        );
+
+        assert_eq!(finding.severity, Severity::Fail);
+        let data = finding_data(&finding);
+        assert_eq!(data["action"], "deny");
+        assert_eq!(data["pressure_dimension"], "active_tool_calls");
+        assert!(
+            finding
+                .remediation
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Do not launch new swarm work")
+        );
+    }
+
+    #[test]
+    fn swarm_admission_marks_stale_input_degraded() {
+        let warnings = vec!["host load average unavailable".to_string()];
+        let finding = classify_swarm_admission(
+            test_swarm_capacity_plan(),
+            healthy_resource_sample(),
+            SwarmLiveLoad::empty().with_active_agents(1),
+            &warnings,
+        );
+
+        assert_eq!(finding.severity, Severity::Warn);
+        let data = finding_data(&finding);
+        assert_eq!(data["action"], "admit");
+        assert_eq!(
+            data["stale_data_warnings"][0],
+            "host load average unavailable"
+        );
+        assert!(
+            finding
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("stale_data_warnings")
+        );
+    }
+
+    #[test]
+    fn swarm_admission_blocks_corrupted_coordination() {
+        let warnings = vec!["Beads ledger has malformed JSONL rows".to_string()];
+        let finding = swarm_admission_blocked_finding(
+            Severity::Fail,
+            "Live swarm admission decision denies new work",
+            "Beads ledger has 1 malformed JSONL row; coordination state is corrupted".to_string(),
+            &warnings,
+        );
+
+        assert_eq!(finding.severity, Severity::Fail);
+        let data = finding_data(&finding);
+        assert_eq!(data["action"], "deny");
+        assert!(data["admission_decision"].is_null());
+        assert_eq!(
+            data["stale_data_warnings"][0],
+            "Beads ledger has malformed JSONL rows"
+        );
     }
 
     #[test]

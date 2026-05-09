@@ -603,6 +603,13 @@ command, and artifact pointers together so triage can be reproduced exactly.
 - Confirms:
   Beads JSONL health, stale `in_progress` work, Agent Mail status/inbox/reservations,
   git dirty-state, `rch status`, and `CARGO_TARGET_DIR`/`TMPDIR` headroom.
+- Admission interpretation:
+  In JSON output, inspect the swarm finding whose `data.schema` is
+  `pi.doctor.swarm_admission.v1`. Its `action` is `admit`, `backpressure`,
+  or `deny`; `pressure_dimension` names the active bottleneck; `planned_budgets`
+  lists the current agent/tool/extension/RCH limits; `live_counts` records the
+  counts used for the decision; `stale_data_warnings` must be empty before
+  treating an `admit` as healthy; and `next_actions` is the operator handoff.
 - Next actions:
   Contact active owners through Agent Mail before resetting stale beads, resolve
   reservation conflicts before editing overlapping files, and move heavyweight
