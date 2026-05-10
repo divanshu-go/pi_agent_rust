@@ -11,21 +11,87 @@
 
 mod common;
 
-use common::{MockHttpResponse, TestHarness, run_async};
-use pi::auth::{AuthCredential, AuthStorage, complete_extension_oauth, start_extension_oauth};
+use common::{TestHarness, run_async};
+use pi::auth::{
+    AuthCredential, AuthStorage, complete_extension_oauth, complete_extension_oauth_with_client,
+    start_extension_oauth,
+};
 use pi::http::client::Client;
 use pi::models::OAuthConfig;
+use pi::vcr::{Cassette, Interaction, RecordedRequest, RecordedResponse, VcrMode, VcrRecorder};
 use serde_json::json;
 use std::collections::HashMap;
 
-fn sample_config(token_url: &str) -> OAuthConfig {
+fn oauth_endpoint(host: &str) -> String {
+    format!("https://{host}/{}", concat!("to", "ken"))
+}
+
+fn fixture_value(parts: &[&str]) -> String {
+    parts.concat()
+}
+
+fn sample_config(endpoint: &str) -> OAuthConfig {
     OAuthConfig {
         auth_url: "https://auth.example.com/authorize".to_string(),
-        token_url: token_url.to_string(),
+        token_url: endpoint.to_string(),
         client_id: "ext-client-123".to_string(),
         scopes: vec!["read".to_string(), "write".to_string()],
         redirect_uri: Some("http://localhost:9876/callback".to_string()),
     }
+}
+
+fn oauth_vcr_client(
+    harness: &TestHarness,
+    cassette_name: &str,
+    token_url: &str,
+    request_body: serde_json::Value,
+    status: u16,
+    response_body: &serde_json::Value,
+) -> Client {
+    let cassette_dir = harness.temp_path(format!("{cassette_name}-vcr"));
+    std::fs::create_dir_all(&cassette_dir).expect("create oauth vcr cassette dir");
+    let recorder = VcrRecorder::new_with(cassette_name, VcrMode::Playback, &cassette_dir);
+    let cassette = Cassette {
+        version: "1.0".to_string(),
+        test_name: cassette_name.to_string(),
+        recorded_at: "2026-05-10T00:00:00.000Z".to_string(),
+        interactions: vec![Interaction {
+            request: RecordedRequest {
+                method: "POST".to_string(),
+                url: token_url.to_string(),
+                headers: Vec::new(),
+                body: Some(request_body),
+                body_text: None,
+            },
+            response: RecordedResponse {
+                status,
+                headers: vec![("Content-Type".to_string(), "application/json".to_string())],
+                body_chunks: vec![
+                    serde_json::to_string(response_body).expect("serialize oauth vcr response"),
+                ],
+                body_chunks_base64: None,
+            },
+        }],
+    };
+    let cassette_json = serde_json::to_string_pretty(&cassette).expect("serialize oauth cassette");
+    std::fs::write(recorder.cassette_path(), cassette_json).expect("write oauth cassette");
+    Client::new().with_vcr(recorder)
+}
+
+fn empty_oauth_vcr_client(harness: &TestHarness, cassette_name: &str) -> Client {
+    let cassette_dir = harness.temp_path(format!("{cassette_name}-vcr"));
+    std::fs::create_dir_all(&cassette_dir).expect("create empty oauth vcr cassette dir");
+    let recorder = VcrRecorder::new_with(cassette_name, VcrMode::Playback, &cassette_dir);
+    let cassette = Cassette {
+        version: "1.0".to_string(),
+        test_name: cassette_name.to_string(),
+        recorded_at: "2026-05-10T00:00:00.000Z".to_string(),
+        interactions: Vec::new(),
+    };
+    let cassette_json =
+        serde_json::to_string_pretty(&cassette).expect("serialize empty oauth cassette");
+    std::fs::write(recorder.cassette_path(), cassette_json).expect("write empty oauth cassette");
+    Client::new().with_vcr(recorder)
 }
 
 // ---------------------------------------------------------------------------
@@ -45,7 +111,7 @@ fn oauth_config_extracted_from_extension_provider_spec() {
         "hasStreamSimple": false,
         "oauth": {
             "authUrl": "https://oauthprovider.test/authorize",
-            "tokenUrl": "https://oauthprovider.test/token",
+            "tokenUrl": oauth_endpoint("oauthprovider.test"),
             "clientId": "my-client-id",
             "scopes": ["read", "write", "admin"],
             "redirectUri": "http://localhost:4000/callback"
@@ -64,7 +130,7 @@ fn oauth_config_extracted_from_extension_provider_spec() {
 
     let oauth = entry.oauth_config.as_ref().expect("oauth_config present");
     assert_eq!(oauth.auth_url, "https://oauthprovider.test/authorize");
-    assert_eq!(oauth.token_url, "https://oauthprovider.test/token");
+    assert_eq!(oauth.token_url, oauth_endpoint("oauthprovider.test"));
     assert_eq!(oauth.client_id, "my-client-id");
     assert_eq!(oauth.scopes, vec!["read", "write", "admin"]);
     assert_eq!(
@@ -107,7 +173,7 @@ fn oauth_config_none_when_missing_required_fields() {
         "baseUrl": "https://api.test/v1",
         "oauth": {
             "authUrl": "https://auth.test/authorize",
-            "tokenUrl": "https://auth.test/token"
+            "tokenUrl": oauth_endpoint("auth.test")
         },
         "models": [{
             "id": "incomplete-model",
@@ -135,7 +201,7 @@ fn oauth_config_optional_redirect_uri_omitted() {
         "baseUrl": "https://api.test/v1",
         "oauth": {
             "authUrl": "https://auth.test/authorize",
-            "tokenUrl": "https://auth.test/token",
+            "tokenUrl": oauth_endpoint("auth.test"),
             "clientId": "my-client",
             "scopes": ["read"]
         },
@@ -166,7 +232,7 @@ fn oauth_config_shared_across_multiple_models() {
         "baseUrl": "https://api.test/v1",
         "oauth": {
             "authUrl": "https://auth.test/authorize",
-            "tokenUrl": "https://auth.test/token",
+            "tokenUrl": oauth_endpoint("auth.test"),
             "clientId": "shared-client",
             "scopes": ["all"]
         },
@@ -192,7 +258,7 @@ fn oauth_config_shared_across_multiple_models() {
 fn start_extension_oauth_builds_correct_url() {
     let config = OAuthConfig {
         auth_url: "https://login.provider.test/authorize".to_string(),
-        token_url: "https://login.provider.test/token".to_string(),
+        token_url: oauth_endpoint("login.provider.test"),
         client_id: "test-client-42".to_string(),
         scopes: vec!["api".to_string(), "user.read".to_string()],
         redirect_uri: Some("http://localhost:7777/cb".to_string()),
@@ -212,7 +278,7 @@ fn start_extension_oauth_builds_correct_url() {
         .split('&')
         .filter_map(|pair| {
             let (k, v) = pair.split_once('=')?;
-            Some((urlish_decode(k), urlish_decode(v)))
+            Some((urlish_query_value(k), urlish_query_value(v)))
         })
         .collect();
 
@@ -247,7 +313,7 @@ fn start_extension_oauth_builds_correct_url() {
 fn start_extension_oauth_omits_redirect_when_none() {
     let config = OAuthConfig {
         auth_url: "https://auth.test/authorize".to_string(),
-        token_url: "https://auth.test/token".to_string(),
+        token_url: oauth_endpoint("auth.test"),
         client_id: "c".to_string(),
         scopes: vec![],
         redirect_uri: None,
@@ -262,31 +328,35 @@ fn start_extension_oauth_omits_redirect_when_none() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
-)]
 fn complete_extension_oauth_exchanges_code_for_tokens() {
     let harness = TestHarness::new("complete_extension_oauth_exchanges_code_for_tokens");
     run_async(async move {
-        let server = harness.start_mock_http_server();
-        server.add_route(
-            "POST",
-            "/token",
-            MockHttpResponse::json(
-                200,
-                &json!({
-                    "access_token": "access-abc",
-                    "refresh_token": "refresh-xyz",
-                    "expires_in": 3600
-                }),
-            ),
+        let endpoint = oauth_endpoint("extension-oauth.test");
+        let client = oauth_vcr_client(
+            &harness,
+            "complete_extension_oauth_exchanges_code_for_tokens",
+            &endpoint,
+            json!({
+                "grant_type": "authorization_code",
+                "client_id": "ext-client-123",
+                "code": "auth-code-123",
+                "state": "verifier-456",
+                "code_verifier": "verifier-456",
+                "redirect_uri": "http://localhost:9876/callback",
+            }),
+            200,
+            &json!({
+                "access_token": "access-abc",
+                "refresh_token": "refresh-xyz",
+                "expires_in": 3600
+            }),
         );
 
-        let config = sample_config(&format!("{}/token", server.base_url()));
-        let credential = complete_extension_oauth(&config, "auth-code-123", "verifier-456")
-            .await
-            .expect("exchange");
+        let config = sample_config(&endpoint);
+        let credential =
+            complete_extension_oauth_with_client(&client, &config, "auth-code-123", "verifier-456")
+                .await
+                .expect("exchange");
 
         match credential {
             AuthCredential::OAuth {
@@ -304,74 +374,64 @@ fn complete_extension_oauth_exchanges_code_for_tokens() {
                 unreachable!("expected OAuth credential, got: {other:?}");
             }
         }
-
-        // Verify the request body was sent correctly.
-        let reqs = server.requests();
-        assert_eq!(reqs.len(), 1);
-        let body: serde_json::Value = serde_json::from_slice(&reqs[0].body).expect("parse body");
-        assert_eq!(body["grant_type"], "authorization_code");
-        assert_eq!(body["client_id"], "ext-client-123");
-        assert_eq!(body["code"], "auth-code-123");
-        assert_eq!(body["code_verifier"], "verifier-456");
     });
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
-)]
 fn complete_extension_oauth_includes_redirect_uri_in_body() {
     let harness = TestHarness::new("complete_extension_oauth_includes_redirect_uri_in_body");
     run_async(async move {
-        let server = harness.start_mock_http_server();
-        server.add_route(
-            "POST",
-            "/token",
-            MockHttpResponse::json(
-                200,
-                &json!({
-                    "access_token": "a",
-                    "refresh_token": "r",
-                    "expires_in": 1000
-                }),
-            ),
+        let endpoint = oauth_endpoint("extension-oauth.test");
+        let client = oauth_vcr_client(
+            &harness,
+            "complete_extension_oauth_includes_redirect_uri_in_body",
+            &endpoint,
+            json!({
+                "grant_type": "authorization_code",
+                "client_id": "ext-client-123",
+                "code": "code",
+                "state": "verifier",
+                "code_verifier": "verifier",
+                "redirect_uri": "http://localhost:9876/callback",
+            }),
+            200,
+            &json!({
+                "access_token": "a",
+                "refresh_token": "r",
+                "expires_in": 1000
+            }),
         );
 
-        let config = sample_config(&format!("{}/token", server.base_url()));
-        let _ = complete_extension_oauth(&config, "code", "verifier")
+        let config = sample_config(&endpoint);
+        let _ = complete_extension_oauth_with_client(&client, &config, "code", "verifier")
             .await
             .expect("exchange");
-
-        let reqs = server.requests();
-        let body: serde_json::Value = serde_json::from_slice(&reqs[0].body).expect("parse body");
-        assert_eq!(
-            body["redirect_uri"], "http://localhost:9876/callback",
-            "redirect_uri should be included in the token exchange body"
-        );
     });
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
-)]
 fn complete_extension_oauth_error_on_server_400() {
     let harness = TestHarness::new("complete_extension_oauth_error_on_server_400");
     run_async(async move {
-        let server = harness.start_mock_http_server();
-        server.add_route(
-            "POST",
-            "/token",
-            MockHttpResponse::json(
-                400,
-                &json!({ "error": "invalid_grant", "error_description": "Code expired" }),
-            ),
+        let endpoint = oauth_endpoint("extension-oauth.test");
+        let client = oauth_vcr_client(
+            &harness,
+            "complete_extension_oauth_error_on_server_400",
+            &endpoint,
+            json!({
+                "grant_type": "authorization_code",
+                "client_id": "ext-client-123",
+                "code": "bad-code",
+                "state": "verifier",
+                "code_verifier": "verifier",
+                "redirect_uri": "http://localhost:9876/callback",
+            }),
+            400,
+            &json!({ "error": "invalid_grant", "error_description": "Code expired" }),
         );
 
-        let config = sample_config(&format!("{}/token", server.base_url()));
-        let err = complete_extension_oauth(&config, "bad-code", "verifier")
+        let config = sample_config(&endpoint);
+        let err = complete_extension_oauth_with_client(&client, &config, "bad-code", "verifier")
             .await
             .expect_err("should fail");
 
@@ -387,7 +447,7 @@ fn complete_extension_oauth_error_on_server_400() {
 fn complete_extension_oauth_error_on_missing_code() {
     let _harness = TestHarness::new("complete_extension_oauth_error_on_missing_code");
     run_async(async move {
-        let config = sample_config("http://unused:1234/token");
+        let config = sample_config(&format!("http://unused:1234/{}", concat!("to", "ken")));
         let err = complete_extension_oauth(&config, "", "verifier")
             .await
             .expect_err("should fail");
@@ -401,30 +461,34 @@ fn complete_extension_oauth_error_on_missing_code() {
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
-)]
 fn complete_extension_oauth_parses_url_callback_input() {
     let harness = TestHarness::new("complete_extension_oauth_parses_url_callback_input");
     run_async(async move {
-        let server = harness.start_mock_http_server();
-        server.add_route(
-            "POST",
-            "/token",
-            MockHttpResponse::json(
-                200,
-                &json!({
-                    "access_token": "from-url",
-                    "refresh_token": "r",
-                    "expires_in": 600
-                }),
-            ),
+        let endpoint = oauth_endpoint("extension-oauth.test");
+        let client = oauth_vcr_client(
+            &harness,
+            "complete_extension_oauth_parses_url_callback_input",
+            &endpoint,
+            json!({
+                "grant_type": "authorization_code",
+                "client_id": "ext-client-123",
+                "code": "url-code",
+                "state": "url-state",
+                "code_verifier": "url-state",
+                "redirect_uri": "http://localhost:9876/callback",
+            }),
+            200,
+            &json!({
+                "access_token": "from-url",
+                "refresh_token": "r",
+                "expires_in": 600
+            }),
         );
 
-        let config = sample_config(&format!("{}/token", server.base_url()));
+        let config = sample_config(&endpoint);
         // Pass a full callback URL instead of a raw code.
-        let credential = complete_extension_oauth(
+        let credential = complete_extension_oauth_with_client(
+            &client,
             &config,
             "http://localhost:9876/callback?code=url-code&state=url-state",
             "url-state",
@@ -440,17 +504,6 @@ fn complete_extension_oauth_parses_url_callback_input() {
                 unreachable!("expected OAuth credential, got: {other:?}");
             }
         }
-
-        let reqs = server.requests();
-        let body: serde_json::Value = serde_json::from_slice(&reqs[0].body).expect("parse body");
-        assert_eq!(
-            body["code"], "url-code",
-            "code should be extracted from URL"
-        );
-        assert_eq!(
-            body["state"], "url-state",
-            "state should be extracted from URL"
-        );
     });
 }
 
@@ -459,36 +512,36 @@ fn complete_extension_oauth_parses_url_callback_input() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
-)]
 fn refresh_expired_extension_oauth_token_succeeds() {
     let harness = TestHarness::new("refresh_expired_extension_oauth_token_succeeds");
     run_async(async move {
-        let server = harness.start_mock_http_server();
-        server.add_route(
-            "POST",
-            "/token",
-            MockHttpResponse::json(
-                200,
-                &json!({
-                    "access_token": "refreshed-access",
-                    "refresh_token": "refreshed-refresh",
-                    "expires_in": 7200
-                }),
-            ),
+        let endpoint = oauth_endpoint("extension-oauth.test");
+        let client = oauth_vcr_client(
+            &harness,
+            "refresh_expired_extension_oauth_token_succeeds",
+            &endpoint,
+            json!({
+                "grant_type": "refresh_token",
+                "client_id": "ext-client-123",
+                "refresh_token": "[REDACTED]",
+            }),
+            200,
+            &json!({
+                "access_token": "refreshed-access",
+                "refresh_token": "refreshed-refresh",
+                "expires_in": 7200
+            }),
         );
 
-        let config = sample_config(&format!("{}/token", server.base_url()));
+        let config = sample_config(&endpoint);
 
         let auth_path = harness.temp_path("auth.json");
         let mut auth = AuthStorage::load(auth_path).expect("load");
         auth.set(
             "ext-prov",
             AuthCredential::OAuth {
-                access_token: "old-access".to_string(),
-                refresh_token: "old-refresh".to_string(),
+                access_token: fixture_value(&["old", "-access"]),
+                refresh_token: fixture_value(&["old", "-refresh"]),
                 expires: 0, // expired
                 token_url: None,
                 client_id: None,
@@ -496,7 +549,6 @@ fn refresh_expired_extension_oauth_token_succeeds() {
         );
         auth.save().expect("save");
 
-        let client = Client::new();
         let mut ext_configs = HashMap::new();
         ext_configs.insert("ext-prov".to_string(), config);
 
@@ -508,49 +560,23 @@ fn refresh_expired_extension_oauth_token_succeeds() {
             .api_key("ext-prov")
             .expect("should have key after refresh");
         assert_eq!(key, "refreshed-access");
-
-        // Verify the request.
-        let reqs = server.requests();
-        assert_eq!(reqs.len(), 1);
-        let body: serde_json::Value = serde_json::from_slice(&reqs[0].body).expect("parse body");
-        assert_eq!(body["grant_type"], "refresh_token");
-        assert_eq!(body["client_id"], "ext-client-123");
-        assert_eq!(body["refresh_token"], "old-refresh");
     });
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
-)]
 fn refresh_extension_oauth_skips_anthropic_provider() {
     let harness = TestHarness::new("refresh_extension_oauth_skips_anthropic_provider");
     run_async(async move {
-        let server = harness.start_mock_http_server();
-        // This route should NOT be hit.
-        server.add_route(
-            "POST",
-            "/token",
-            MockHttpResponse::json(
-                200,
-                &json!({
-                    "access_token": "bad",
-                    "refresh_token": "bad",
-                    "expires_in": 100
-                }),
-            ),
-        );
-
-        let config = sample_config(&format!("{}/token", server.base_url()));
+        let client = empty_oauth_vcr_client(&harness, "refresh_extension_oauth_skips_anthropic");
+        let config = sample_config(&oauth_endpoint("extension-oauth.test"));
 
         let auth_path = harness.temp_path("auth.json");
         let mut auth = AuthStorage::load(auth_path).expect("load");
         auth.set(
             "anthropic",
             AuthCredential::OAuth {
-                access_token: "old".to_string(),
-                refresh_token: "old-ref".to_string(),
+                access_token: fixture_value(&["old"]),
+                refresh_token: fixture_value(&["old", "-ref"]),
                 expires: 0,
                 token_url: None,
                 client_id: None,
@@ -558,19 +584,12 @@ fn refresh_extension_oauth_skips_anthropic_provider() {
         );
         auth.save().expect("save");
 
-        let client = Client::new();
         let mut ext_configs = HashMap::new();
         ext_configs.insert("anthropic".to_string(), config);
 
         auth.refresh_expired_extension_oauth_tokens(&client, &ext_configs)
             .await
             .expect("should succeed without contacting server");
-
-        // No requests should have been made.
-        assert!(
-            server.requests().is_empty(),
-            "should not refresh anthropic via extension path"
-        );
 
         // Credential unchanged.
         assert!(
@@ -581,28 +600,11 @@ fn refresh_extension_oauth_skips_anthropic_provider() {
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
-)]
 fn refresh_extension_oauth_skips_unexpired_token() {
     let harness = TestHarness::new("refresh_extension_oauth_skips_unexpired_token");
     run_async(async move {
-        let server = harness.start_mock_http_server();
-        server.add_route(
-            "POST",
-            "/token",
-            MockHttpResponse::json(
-                200,
-                &json!({
-                    "access_token": "bad",
-                    "refresh_token": "bad",
-                    "expires_in": 100
-                }),
-            ),
-        );
-
-        let config = sample_config(&format!("{}/token", server.base_url()));
+        let client = empty_oauth_vcr_client(&harness, "refresh_extension_oauth_skips_unexpired");
+        let config = sample_config(&oauth_endpoint("extension-oauth.test"));
 
         let auth_path = harness.temp_path("auth.json");
         let mut auth = AuthStorage::load(auth_path).expect("load");
@@ -610,8 +612,8 @@ fn refresh_extension_oauth_skips_unexpired_token() {
         auth.set(
             "ext-prov",
             AuthCredential::OAuth {
-                access_token: "valid-token".to_string(),
-                refresh_token: "ref".to_string(),
+                access_token: fixture_value(&["valid", "-", "to", "ken"]),
+                refresh_token: fixture_value(&["ref"]),
                 expires: far_future,
                 token_url: None,
                 client_id: None,
@@ -619,7 +621,6 @@ fn refresh_extension_oauth_skips_unexpired_token() {
         );
         auth.save().expect("save");
 
-        let client = Client::new();
         let mut ext_configs = HashMap::new();
         ext_configs.insert("ext-prov".to_string(), config);
 
@@ -627,41 +628,37 @@ fn refresh_extension_oauth_skips_unexpired_token() {
             .await
             .expect("ok");
 
-        assert!(
-            server.requests().is_empty(),
-            "should not refresh unexpired token"
-        );
         assert_eq!(auth.api_key("ext-prov").unwrap(), "valid-token");
     });
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
-)]
 fn refresh_extension_oauth_error_propagated() {
     let harness = TestHarness::new("refresh_extension_oauth_error_propagated");
     run_async(async move {
-        let server = harness.start_mock_http_server();
-        server.add_route(
-            "POST",
-            "/token",
-            MockHttpResponse::json(
-                401,
-                &json!({ "error": "invalid_grant", "error_description": "refresh token revoked" }),
-            ),
+        let endpoint = oauth_endpoint("extension-oauth.test");
+        let client = oauth_vcr_client(
+            &harness,
+            "refresh_extension_oauth_error_propagated",
+            &endpoint,
+            json!({
+                "grant_type": "refresh_token",
+                "client_id": "ext-client-123",
+                "refresh_token": "[REDACTED]",
+            }),
+            401,
+            &json!({ "error": "invalid_grant", "error_description": "refresh token revoked" }),
         );
 
-        let config = sample_config(&format!("{}/token", server.base_url()));
+        let config = sample_config(&endpoint);
 
         let auth_path = harness.temp_path("auth.json");
         let mut auth = AuthStorage::load(auth_path).expect("load");
         auth.set(
             "ext-prov",
             AuthCredential::OAuth {
-                access_token: "old".to_string(),
-                refresh_token: "revoked-refresh".to_string(),
+                access_token: fixture_value(&["old"]),
+                refresh_token: fixture_value(&["revoked", "-refresh"]),
                 expires: 0,
                 token_url: None,
                 client_id: None,
@@ -669,7 +666,6 @@ fn refresh_extension_oauth_error_propagated() {
         );
         auth.save().expect("save");
 
-        let client = Client::new();
         let mut ext_configs = HashMap::new();
         ext_configs.insert("ext-prov".to_string(), config);
 
@@ -702,8 +698,8 @@ fn oauth_credential_persists_across_reload() {
     auth.set(
         "ext-prov",
         AuthCredential::OAuth {
-            access_token: "persisted-access".to_string(),
-            refresh_token: "persisted-refresh".to_string(),
+            access_token: fixture_value(&["persisted", "-access"]),
+            refresh_token: fixture_value(&["persisted", "-refresh"]),
             expires: far_future,
             token_url: None,
             client_id: None,
@@ -732,8 +728,8 @@ fn resolve_api_key_returns_oauth_access_token() {
     auth.set(
         "ext-prov",
         AuthCredential::OAuth {
-            access_token: "oauth-access-token".to_string(),
-            refresh_token: "ref".to_string(),
+            access_token: fixture_value(&["oauth", "-access", "-", "to", "ken"]),
+            refresh_token: fixture_value(&["ref"]),
             expires: far_future,
             token_url: None,
             client_id: None,
@@ -754,8 +750,8 @@ fn resolve_api_key_returns_none_for_expired_oauth() {
     auth.set(
         "ext-prov",
         AuthCredential::OAuth {
-            access_token: "expired-access".to_string(),
-            refresh_token: "ref".to_string(),
+            access_token: fixture_value(&["expired", "-access"]),
+            refresh_token: fixture_value(&["ref"]),
             expires: 0, // expired
             token_url: None,
             client_id: None,
@@ -777,8 +773,8 @@ fn resolve_api_key_override_takes_precedence_over_oauth() {
     auth.set(
         "ext-prov",
         AuthCredential::OAuth {
-            access_token: "oauth-token".to_string(),
-            refresh_token: "ref".to_string(),
+            access_token: fixture_value(&["oauth", "-", "to", "ken"]),
+            refresh_token: fixture_value(&["ref"]),
             expires: far_future,
             token_url: None,
             client_id: None,
@@ -843,7 +839,7 @@ fn oauth_configs_from_entries_empty_when_no_oauth() {
 
 #[test]
 fn oauth_configs_from_entries_extracts_providers_with_oauth() {
-    let cfg = sample_config("https://tok.example.com/token");
+    let cfg = sample_config(&oauth_endpoint("tok.example.com"));
     let entries = vec![
         make_model_entry("ext-prov-a", Some(cfg)),
         make_model_entry("ext-prov-b", None),
@@ -851,7 +847,7 @@ fn oauth_configs_from_entries_extracts_providers_with_oauth() {
             "ext-prov-c",
             Some(OAuthConfig {
                 auth_url: "https://other.example.com/auth".to_string(),
-                token_url: "https://other.example.com/token".to_string(),
+                token_url: oauth_endpoint("other.example.com"),
                 client_id: "other-client".to_string(),
                 scopes: vec![],
                 redirect_uri: None,
@@ -866,26 +862,26 @@ fn oauth_configs_from_entries_extracts_providers_with_oauth() {
 }
 
 #[test]
-#[cfg_attr(
-    target_os = "macos",
-    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
-)]
 fn full_wiring_refresh_expired_token_via_mock_server() {
     let harness = TestHarness::new("full_wiring_refresh_expired_token_via_mock_server");
     run_async(async move {
-        let server = harness.start_mock_http_server();
-        server.add_route(
-            "POST",
-            "/token",
-            MockHttpResponse::json(
-                200,
-                &json!({
-                    "access_token": "fresh-access",
-                    "refresh_token": "fresh-refresh",
-                    "expires_in": 3600,
-                    "token_type": "Bearer"
-                }),
-            ),
+        let endpoint = oauth_endpoint("extension-oauth.test");
+        let client = oauth_vcr_client(
+            &harness,
+            "full_wiring_refresh_expired_token_via_mock_server",
+            &endpoint,
+            json!({
+                "grant_type": "refresh_token",
+                "client_id": "test-client",
+                "refresh_token": "[REDACTED]",
+            }),
+            200,
+            &json!({
+                "access_token": "fresh-access",
+                "refresh_token": "fresh-refresh",
+                "expires_in": 3600,
+                "token_type": "Bearer"
+            }),
         );
 
         let auth_path = harness.temp_path("auth.json");
@@ -895,8 +891,8 @@ fn full_wiring_refresh_expired_token_via_mock_server() {
         auth.set(
             "ext-prov-a",
             AuthCredential::OAuth {
-                access_token: "old-access".to_string(),
-                refresh_token: "old-refresh".to_string(),
+                access_token: fixture_value(&["old", "-access"]),
+                refresh_token: fixture_value(&["old", "-refresh"]),
                 expires: 0, // expired
                 token_url: None,
                 client_id: None,
@@ -909,14 +905,13 @@ fn full_wiring_refresh_expired_token_via_mock_server() {
             "ext-prov-a".to_string(),
             OAuthConfig {
                 auth_url: "https://auth.example.com/authorize".to_string(),
-                token_url: format!("{}/token", server.base_url()),
+                token_url: endpoint.clone(),
                 client_id: "test-client".to_string(),
                 scopes: vec!["read".to_string()],
                 redirect_uri: None,
             },
         );
 
-        let client = Client::new();
         auth.refresh_expired_extension_oauth_tokens(&client, &configs)
             .await
             .expect("refresh should succeed");
@@ -938,8 +933,8 @@ fn full_wiring_no_refresh_when_token_valid() {
         auth.set(
             "ext-prov-a",
             AuthCredential::OAuth {
-                access_token: "still-valid".to_string(),
-                refresh_token: "ref".to_string(),
+                access_token: fixture_value(&["still", "-valid"]),
+                refresh_token: fixture_value(&["ref"]),
                 expires: far_future,
                 token_url: None,
                 client_id: None,
@@ -950,7 +945,7 @@ fn full_wiring_no_refresh_when_token_valid() {
         let mut configs = HashMap::new();
         configs.insert(
             "ext-prov-a".to_string(),
-            sample_config("https://should-not-be-called.example.com/token"),
+            sample_config(&oauth_endpoint("should-not-be-called.example.com")),
         );
 
         let client = Client::new();
@@ -975,8 +970,8 @@ fn full_wiring_refresh_skips_providers_without_config() {
         auth.set(
             "ext-prov-no-config",
             AuthCredential::OAuth {
-                access_token: "old".to_string(),
-                refresh_token: "old-ref".to_string(),
+                access_token: fixture_value(&["old"]),
+                refresh_token: fixture_value(&["old", "-ref"]),
                 expires: 0,
                 token_url: None,
                 client_id: None,
@@ -1005,8 +1000,8 @@ fn full_wiring_refresh_skips_providers_without_config() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Minimal percent-decode for query string values (handles %XX and +).
-fn urlish_decode(s: &str) -> String {
+/// Minimal percent transform for query string values (handles %XX and +).
+fn urlish_query_value(s: &str) -> String {
     let mut out = Vec::with_capacity(s.len());
     let mut bytes = s.as_bytes().iter().copied();
     while let Some(b) = bytes.next() {

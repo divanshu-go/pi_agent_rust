@@ -4067,6 +4067,17 @@ pub async fn complete_extension_oauth(
     code_input: &str,
     verifier: &str,
 ) -> Result<AuthCredential> {
+    let client = crate::http::client::Client::new();
+    complete_extension_oauth_with_client(&client, config, code_input, verifier).await
+}
+
+/// Complete OAuth for an extension-registered provider with an injected HTTP client.
+pub async fn complete_extension_oauth_with_client(
+    client: &crate::http::client::Client,
+    config: &crate::models::OAuthConfig,
+    code_input: &str,
+    verifier: &str,
+) -> Result<AuthCredential> {
     let (code, state) = parse_oauth_code_input(code_input);
 
     let Some(code) = code else {
@@ -4077,8 +4088,6 @@ pub async fn complete_extension_oauth(
     if state.ne(verifier) {
         return Err(Error::auth("State mismatch".to_string()));
     }
-
-    let client = crate::http::client::Client::new();
 
     let mut body = serde_json::json!({
         "grant_type": "authorization_code",
