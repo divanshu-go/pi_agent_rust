@@ -164,13 +164,22 @@ impl GoldenTestHarness {
 
         // Set up VCR cassette if provided.
         if let Some(cassette) = &fixture.cassette {
-            self.setup_vcr(&fixture.scenario, cassette, &mut run_env);
+            let cassette = substitute_json_placeholders(cassette, &arg_replacements);
+            self.setup_vcr(&fixture.scenario, &cassette, &mut run_env);
         } else if fixture.cassette_dynamic {
-            // For dynamic cassettes, use the template (actual body matching
-            // is relaxed — the response is what matters).
-            if let Some(template) = &fixture.cassette_template {
-                self.setup_vcr(&fixture.scenario, template, &mut run_env);
-            }
+            let Some(template) = &fixture.cassette_template else {
+                return CliOutput {
+                    exit_code: i32::MIN,
+                    stdout: String::new(),
+                    stderr: format!(
+                        "[{}] cassette_dynamic=true requires cassette_template",
+                        fixture.scenario
+                    ),
+                    duration: Duration::ZERO,
+                };
+            };
+            let cassette = substitute_json_placeholders(template, &arg_replacements);
+            self.setup_vcr(&fixture.scenario, &cassette, &mut run_env);
         }
 
         // Build CLI args with placeholder substitution.
@@ -227,7 +236,7 @@ impl GoldenTestHarness {
             .info("action", format!("CLI: pi {}", args.join(" ")));
 
         let start = Instant::now();
-        let mut command = Command::new(&self.binary_path);
+        let mut command = Command::new(&self.binary_path); // ubs:ignore Cargo-provided test binary path, not user input.
         command.env_remove("ANTHROPIC_API_KEY");
         command.env_remove("OPENAI_API_KEY");
         command.env_remove("GEMINI_API_KEY");
@@ -277,11 +286,11 @@ impl GoldenTestHarness {
             match child.try_wait() {
                 Ok(Some(status)) => break status,
                 Ok(None) => {}
-                Err(err) => panic!("try_wait failed: {err}"),
+                Err(err) => panic!("try_wait failed: {err}"), // ubs:ignore test harness assertion, not production runtime.
             }
             if start.elapsed() > timeout {
                 let _ = child.kill();
-                panic!("golden test timed out after {}s", timeout.as_secs());
+                panic!("golden test timed out after {}s", timeout.as_secs()); // ubs:ignore test harness assertion, not production runtime.
             }
             std::thread::sleep(Duration::from_millis(50));
         };
@@ -322,6 +331,10 @@ struct CliOutput {
 // ═══════════════════════════════════════════════════════════════════════
 // Assertion helpers
 // ═══════════════════════════════════════════════════════════════════════
+
+fn test_fail(message: impl std::fmt::Display) -> ! {
+    panic!("{message}"); // ubs:ignore test harness assertion, not production runtime.
+}
 
 fn assert_golden(harness: &TestHarness, fixture: &GoldenFixture, output: &CliOutput) {
     let scenario = &fixture.scenario;
@@ -398,10 +411,10 @@ fn assert_golden(harness: &TestHarness, fixture: &GoldenFixture, output: &CliOut
         || fixture.expected.json_line_count.is_some()
     {
         let lines = parse_json_lines(&output.stdout).unwrap_or_else(|err| {
-            panic!(
+            test_fail(format!(
                 "[{scenario}] stdout JSON parse failed: {err}\nstdout:\n{}",
                 output.stdout
-            );
+            ));
         });
 
         if let Some(expected_count) = fixture.expected.json_line_count {
@@ -441,9 +454,9 @@ fn assert_golden(harness: &TestHarness, fixture: &GoldenFixture, output: &CliOut
         }
 
         if fixture.expected.json_agent_start_has_session_id {
-            let agent_start = lines.iter().find(|v| v["type"] == "agent_start");
+            let agent_start = lines.iter().find(|v| v["type"] == "agent_start"); // ubs:ignore JSON event type comparison, not a secret.
             let Some(event) = agent_start else {
-                panic!("[{scenario}] expected agent_start event but none was found");
+                panic!("[{scenario}] expected agent_start event but none was found"); // ubs:ignore test harness assertion, not production runtime.
             };
             assert!(
                 event["sessionId"].as_str().is_some_and(|s| !s.is_empty()),
@@ -452,9 +465,9 @@ fn assert_golden(harness: &TestHarness, fixture: &GoldenFixture, output: &CliOut
         }
 
         if fixture.expected.json_agent_end_has_messages {
-            let agent_end = lines.iter().find(|v| v["type"] == "agent_end");
+            let agent_end = lines.iter().find(|v| v["type"] == "agent_end"); // ubs:ignore JSON event type comparison, not a secret.
             let Some(event) = agent_end else {
-                panic!("[{scenario}] expected agent_end event but none was found");
+                panic!("[{scenario}] expected agent_end event but none was found"); // ubs:ignore test harness assertion, not production runtime.
             };
             assert!(
                 event["messages"].is_array(),
@@ -472,17 +485,17 @@ fn assert_json_event_order(scenario: &str, expected: &[String], actual: &[&str])
     // Verify that all expected event types appear in order (allowing gaps).
     let mut actual_idx = 0;
     for expected_type in expected {
-        let found = actual[actual_idx..].iter().position(|t| t == expected_type);
+        let found = actual[actual_idx..].iter().position(|t| t == expected_type); // ubs:ignore JSON event type comparison, not a secret.
         match found {
             Some(offset) => {
                 actual_idx += offset + 1;
             }
             None => {
-                panic!(
+                test_fail(format!(
                     "[{scenario}] expected event '{expected_type}' not found in order.\n\
                      Expected sequence: {expected:?}\n\
                      Actual types: {actual:?}"
-                );
+                ));
             }
         }
     }
@@ -503,6 +516,38 @@ fn parse_json_lines(stdout: &str) -> Result<Vec<Value>, String> {
         }
     }
     Ok(lines)
+}
+
+fn substitute_json_placeholders(value: &Value, replacements: &BTreeMap<String, String>) -> Value {
+    match value {
+        Value::String(text) => Value::String(substitute_string_placeholders(text, replacements)),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| substitute_json_placeholders(item, replacements))
+                .collect(),
+        ),
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        substitute_string_placeholders(key, replacements),
+                        substitute_json_placeholders(value, replacements),
+                    )
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn substitute_string_placeholders(text: &str, replacements: &BTreeMap<String, String>) -> String {
+    let mut result = text.to_string();
+    for (placeholder, value) in replacements {
+        result = result.replace(placeholder, value);
+    }
+    result
 }
 
 fn count_jsonl_files(dir: &Path) -> usize {
@@ -539,9 +584,9 @@ fn corpus_dir() -> PathBuf {
 
 fn load_fixture(path: &Path) -> GoldenFixture {
     let content = fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", path.display()));
+        .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", path.display())); // ubs:ignore test harness assertion, not production runtime.
     let fixture: GoldenFixture = serde_json::from_str(&content)
-        .unwrap_or_else(|e| panic!("failed to parse fixture {}: {e}", path.display()));
+        .unwrap_or_else(|e| panic!("failed to parse fixture {}: {e}", path.display())); // ubs:ignore test harness assertion, not production runtime.
     assert_eq!(
         fixture.schema,
         GOLDEN_SCHEMA,
@@ -675,10 +720,7 @@ fn golden_corpus_rpc_mode() {
     run_surface_fixtures("rpc_mode");
 }
 
-/// @file expansion requires runtime cassette construction (dynamic body).
-/// Run with `--ignored` to include.
 #[test]
-#[ignore = "bd-8t27h.10: requires deterministic runtime cassette construction"]
 fn golden_corpus_at_file_expansion() {
     run_surface_fixtures("at_file_expansion");
 }
@@ -697,6 +739,7 @@ fn golden_corpus_manifest_coverage() {
         "json_mode_stdin",
         "rpc_mode",
         "error_cases",
+        "at_file_expansion",
     ];
 
     let mut total_fixtures = 0;
@@ -754,6 +797,38 @@ fn parse_json_lines_accepts_crlf() {
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0]["type"], "session");
     assert_eq!(lines[1]["type"], "agent_end");
+}
+
+#[test]
+fn cassette_template_replaces_runtime_file_placeholders() {
+    let mut replacements = BTreeMap::new();
+    replacements.insert(
+        "__TEMP_FILE_1__".to_string(),
+        "/tmp/pi-agent/file.rs".to_string(),
+    );
+    let template = serde_json::json!({
+        "request": {
+            "body": {
+                "messages": [
+                    {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "<file name=\"__TEMP_FILE_1__\">"
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    });
+
+    let actual = substitute_json_placeholders(&template, &replacements);
+
+    assert_eq!(
+        actual["request"]["body"]["messages"][0]["content"][0]["text"],
+        "<file name=\"/tmp/pi-agent/file.rs\">"
+    );
 }
 
 #[test]

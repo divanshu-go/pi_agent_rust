@@ -39,7 +39,22 @@
             ["anthropic-version", "2023-06-01"],
             ["Content-Type", "application/json"]
           ],
-          "body": "__DYNAMIC_BODY__"
+          "body": {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "<file name=\"__TEMP_FILE_1__\">\nfn main() {\n    println!(\"Hello, world!\");\n}\n</file>\nSummarize this."
+                  }
+                ]
+              }
+            ],
+            "max_tokens": 8192,
+            "stream": true
+          }
         },
         "response": {
           "status": 200,
