@@ -11,15 +11,23 @@ import { matchesKey } from "@mariozechner/pi-tui";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import {
+import * as formatModule from "./format";
+import * as instancesModule from "./instances";
+import * as entriesModule from "./entries";
+
+// PiJS wraps adjacent CommonJS helpers as default module.exports objects.
+const formatHelpers = (formatModule as any).default ?? formatModule;
+const instancesHelpers = (instancesModule as any).default ?? instancesModule;
+const entriesHelpers = (entriesModule as any).default ?? entriesModule;
+const {
   buildListItemContentBlock,
   buildListItemExportBlock,
   buildNoteContentBlock,
   buildNoteMetadataBlock,
   joinBlocks,
-} from "./format";
-import { buildInstancePlan } from "./instances";
-import { buildListItemEntries, normalizeWhitespace } from "./entries";
+} = formatHelpers;
+const { buildInstancePlan } = instancesHelpers;
+const { buildListItemEntries, normalizeWhitespace } = entriesHelpers;
 
 type IncludeMode = "metadata" | "content";
 type PickerMode = "lists" | "notes";
