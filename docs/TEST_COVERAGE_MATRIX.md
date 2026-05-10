@@ -1,8 +1,16 @@
-## Test Coverage Matrix (No-Mock Audit)
+## Test Coverage Matrix (No-Mock Audit, Legacy Snapshot)
 
-This document inventories test coverage for **all `src/` modules** and **all `tests/` files**, flags mock usage, and lists prioritized gaps.
+This document started as a coverage inventory for `src/` modules and `tests/` files, flags mock usage, and lists prioritized gaps. It is currently a legacy snapshot: use it for historical context, not as exhaustive release evidence, until the module inventory is regenerated from current `src/` and guarded against drift.
 
-> Last updated: 2026-02-08
+> Last updated: 2026-05-10
+
+### Current Drift Check
+
+- Current `src/` inventory: 110 files.
+- Module table below: 35 source-file rows.
+- Known omission count: 75 current source files are not represented as module rows.
+- Omitted areas include the split `interactive/` modules, connector modules, provider expansion modules, hostcall scheduling/queue modules, PiWasm, doctor/version/permissions support, session v2/SQLite surfaces, and resource-governor/scheduler paths.
+- The traceability governance artifacts are newer than this markdown matrix, but `python3 scripts/check_traceability_matrix.py` currently reports current-head drift in suite classification, evidence-log mappings, and E2E scenario coverage. This document still needs a refreshed table plus a drift guard so stale coverage claims cannot recur.
 
 ### Legend
 - **Unit**: `#[cfg(test)]` tests inside the module file.
@@ -162,24 +170,25 @@ Tests with JSONL log + artifact index output:
 
 ## 5) Prioritized Coverage Gaps (Backlog Feed)
 
-1. **Interactive E2E with VCR playback (P1)**  
-   Deterministic tmux E2E that exercises full interactive loop + tool call.  
-   _Bead: `bd-dvgl` (workstream `bd-c4q`)._
+The previous backlog references in this section all point at closed beads. Current follow-up work should be filed from the drift evidence above instead of reusing the closed identifiers.
 
-2. **CLI E2E scenario coverage (P1)**  
-   Fill remaining CLI flows: tool enable/disable + error paths, full session lifecycle.  
-   _Beads: `bd-27t`, `bd-2fz9`, `bd-2z22`, `bd-1o4`, `bd-idw` (workstream `bd-c4q`)._
+1. **Regenerate the module coverage matrix (P1)**
+   Rebuild the table from current `src/` and `tests/`, including split modules and newly added provider/runtime surfaces.
 
-3. **Extension runtime E2E + conformance (P1/P2)**  
-   WASM host + QuickJS runtime parity with fixture-based conformance.  
-   _Beads: `bd-1gl`, `bd-nom`, `bd-1f5`, `bd-6vcm`._
+2. **Add a coverage drift guard (P1)**
+   Add a deterministic check that fails when source files are missing from the machine-readable coverage or traceability inventory.
 
-4. **No-mock replacements (P1)**
-   Replace MockHttpServer + RecordingSession/HostActions with real-path/VCR tests.
-   _Beads: ~~`bd-2x78`~~ (complete), ~~`bd-3kl0`~~ (closed), `bd-m9rk` (workstream `bd-102`)._
+3. **Reconcile ignored or manually gated tests (P1/P2)**
+   Classify and either unignore or explicitly gate the remaining loom, OAuth, extension dispatcher, golden-corpus, and report-generator tests.
 
-5. **JSONL logging expansion (P2)**  
-   Extend JSONL logs + artifact index to remaining test files as part of `bd-c4q` / `bd-26s`.
+4. **Repair traceability-governance drift (P1)**
+   Bring `docs/traceability_matrix.json`, `tests/suite_classification.toml`, and `docs/e2e_scenario_matrix.json` back into agreement with current test files and CI policy.
+
+5. **Refresh provider coverage evidence (P2)**
+   Align provider coverage docs with the current native provider set and current provider parity artifacts.
+
+6. **Expand JSONL logging inventory (P2)**
+   Recompute which tests emit structured artifacts and add logging where high-value suites remain untracked.
 
 ---
 
