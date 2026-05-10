@@ -678,7 +678,7 @@ fn golden_corpus_rpc_mode() {
 /// @file expansion requires runtime cassette construction (dynamic body).
 /// Run with `--ignored` to include.
 #[test]
-#[ignore = "requires runtime cassette construction (dynamic body)"]
+#[ignore = "bd-8t27h.10: requires deterministic runtime cassette construction"]
 fn golden_corpus_at_file_expansion() {
     run_surface_fixtures("at_file_expansion");
 }

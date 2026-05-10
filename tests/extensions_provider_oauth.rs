@@ -264,7 +264,7 @@ fn start_extension_oauth_omits_redirect_when_none() {
 #[test]
 #[cfg_attr(
     target_os = "macos",
-    ignore = "MockHttpServer hangs on macOS with asupersync"
+    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
 )]
 fn complete_extension_oauth_exchanges_code_for_tokens() {
     let harness = TestHarness::new("complete_extension_oauth_exchanges_code_for_tokens");
@@ -319,7 +319,7 @@ fn complete_extension_oauth_exchanges_code_for_tokens() {
 #[test]
 #[cfg_attr(
     target_os = "macos",
-    ignore = "MockHttpServer hangs on macOS with asupersync"
+    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
 )]
 fn complete_extension_oauth_includes_redirect_uri_in_body() {
     let harness = TestHarness::new("complete_extension_oauth_includes_redirect_uri_in_body");
@@ -355,7 +355,7 @@ fn complete_extension_oauth_includes_redirect_uri_in_body() {
 #[test]
 #[cfg_attr(
     target_os = "macos",
-    ignore = "MockHttpServer hangs on macOS with asupersync"
+    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
 )]
 fn complete_extension_oauth_error_on_server_400() {
     let harness = TestHarness::new("complete_extension_oauth_error_on_server_400");
@@ -403,7 +403,7 @@ fn complete_extension_oauth_error_on_missing_code() {
 #[test]
 #[cfg_attr(
     target_os = "macos",
-    ignore = "MockHttpServer hangs on macOS with asupersync"
+    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
 )]
 fn complete_extension_oauth_parses_url_callback_input() {
     let harness = TestHarness::new("complete_extension_oauth_parses_url_callback_input");
@@ -461,7 +461,7 @@ fn complete_extension_oauth_parses_url_callback_input() {
 #[test]
 #[cfg_attr(
     target_os = "macos",
-    ignore = "MockHttpServer hangs on macOS with asupersync"
+    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
 )]
 fn refresh_expired_extension_oauth_token_succeeds() {
     let harness = TestHarness::new("refresh_expired_extension_oauth_token_succeeds");
@@ -522,7 +522,7 @@ fn refresh_expired_extension_oauth_token_succeeds() {
 #[test]
 #[cfg_attr(
     target_os = "macos",
-    ignore = "MockHttpServer hangs on macOS with asupersync"
+    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
 )]
 fn refresh_extension_oauth_skips_anthropic_provider() {
     let harness = TestHarness::new("refresh_extension_oauth_skips_anthropic_provider");
@@ -583,7 +583,7 @@ fn refresh_extension_oauth_skips_anthropic_provider() {
 #[test]
 #[cfg_attr(
     target_os = "macos",
-    ignore = "MockHttpServer hangs on macOS with asupersync"
+    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
 )]
 fn refresh_extension_oauth_skips_unexpired_token() {
     let harness = TestHarness::new("refresh_extension_oauth_skips_unexpired_token");
@@ -638,7 +638,7 @@ fn refresh_extension_oauth_skips_unexpired_token() {
 #[test]
 #[cfg_attr(
     target_os = "macos",
-    ignore = "MockHttpServer hangs on macOS with asupersync"
+    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
 )]
 fn refresh_extension_oauth_error_propagated() {
     let harness = TestHarness::new("refresh_extension_oauth_error_propagated");
@@ -868,7 +868,7 @@ fn oauth_configs_from_entries_extracts_providers_with_oauth() {
 #[test]
 #[cfg_attr(
     target_os = "macos",
-    ignore = "MockHttpServer hangs on macOS with asupersync"
+    ignore = "bd-8t27h.5: MockHttpServer hangs on macOS with asupersync"
 )]
 fn full_wiring_refresh_expired_token_via_mock_server() {
     let harness = TestHarness::new("full_wiring_refresh_expired_token_via_mock_server");

@@ -1462,7 +1462,7 @@ fn diff_official_manifest() {
 }
 
 #[test]
-#[ignore = "bd-1o6l: generate load-time benchmark report"]
+#[ignore = "bd-8t27h.12: generate load-time benchmark report"]
 #[allow(clippy::too_many_lines)]
 fn load_time_benchmark_official() {
     let filter = std::env::var("PI_LOAD_TIME_FILTER").ok();
@@ -1610,7 +1610,7 @@ fn load_time_benchmark_official() {
 }
 
 #[test]
-#[ignore = "bd-sas4: generate event dispatch latency report"]
+#[ignore = "bd-8t27h.12: generate event dispatch latency report"]
 fn event_dispatch_latency_benchmark() {
     let extension_path = event_dispatch_bench_extension_path();
     let payloads_path = event_payloads_path();
@@ -1928,7 +1928,7 @@ fn diff_community_manifest() {
 /// Use `PI_NPM_FILTER` env var to filter by name substring.
 /// Use `PI_NPM_MAX` env var to limit the number of extensions to test.
 #[test]
-#[ignore = "bd-3dd7: npm registry extensions not yet expected to pass; run manually with --ignored"]
+#[ignore = "bd-8t27h.18: npm registry extensions need bounded deterministic opt-in lane"]
 fn diff_npm_manifest() {
     let filter = std::env::var("PI_NPM_FILTER").ok();
     let max = std::env::var("PI_NPM_MAX")

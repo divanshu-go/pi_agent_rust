@@ -818,9 +818,10 @@ fn write_trial_output(run: &TrialRun) {
 
 /// Run a batch of random extension trials.
 ///
-/// This test is `#[ignore]` by default — run with `--include-ignored`.
+/// This test is owned by bd-8t27h.16 while it remains `#[ignore]` by default;
+/// run with `--include-ignored`.
 #[test]
-#[ignore = "long-running random trial batch"]
+#[ignore = "bd-8t27h.16: long-running random trial batch needs bounded seeded smoke lane"]
 fn random_trials_batch() {
     let run = run_random_trials();
     write_trial_output(&run);

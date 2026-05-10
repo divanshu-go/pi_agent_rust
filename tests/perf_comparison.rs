@@ -804,10 +804,11 @@ fn test_comparison_rows_from_empty_data() {
 
 /// Generator-style test that writes tracked artifacts under `tests/perf/reports/`.
 ///
-/// This is intentionally `#[ignore]` so `cargo test` is deterministic and does not
-/// rewrite repository files unless explicitly requested.
+/// This is intentionally owned by bd-8t27h.12 while it remains `#[ignore]`, so
+/// `cargo test` is deterministic and does not rewrite repository files unless
+/// explicitly requested.
 #[test]
-#[ignore = "writes tracked perf artifacts under tests/perf/reports; run manually"]
+#[ignore = "bd-8t27h.12: writes tracked perf artifacts under tests/perf/reports"]
 fn generate_perf_comparison() {
     let root = root_dir();
 

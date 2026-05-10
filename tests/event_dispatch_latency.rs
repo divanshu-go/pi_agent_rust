@@ -666,7 +666,7 @@ fn real_extension_dispatch_latency() {
 
 /// Generate consolidated JSON report with all latency data.
 #[test]
-#[ignore = "report generator: run manually after other tests"]
+#[ignore = "bd-8t27h.12: report generator writes consolidated latency artifacts"]
 fn generate_latency_report() {
     let report_dir = report_dir();
     std::fs::create_dir_all(&report_dir).expect("create event dispatch consolidated report dir");

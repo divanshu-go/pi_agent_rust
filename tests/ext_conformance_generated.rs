@@ -7,7 +7,8 @@
 //! - Isolation (one failure does not block others)
 //! - Clear reporting (each extension shows as pass/fail in test output)
 //!
-//! Tiers 1–2 run by default; tiers 3–5 are `#[ignore]` (multi-file, npm deps, UI, platform).
+//! Tiers 1–2 run by default; tiers 3–5 are owner-bead-stamped `#[ignore]`
+//! cases (multi-file, npm deps, UI, platform).
 //!
 //! Run all (including ignored):
 //!   cargo test --test `ext_conformance_generated` -- --include-ignored
@@ -4466,7 +4467,7 @@ macro_rules! conformance_test {
     };
     ($name:ident, $ext_id:literal, ignore $(,)?) => {
         #[test]
-        #[ignore = "Unvendored extension: not yet onboarded into conformance corpus"]
+        #[ignore = "bd-8t27h.17: unvendored extension not yet onboarded into conformance corpus"]
         fn $name() {
             run_conformance_test($ext_id);
         }
