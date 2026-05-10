@@ -17,10 +17,8 @@ fn project_root() -> PathBuf {
 
 fn load_json(relative: &str) -> Value {
     let path = project_root().join(relative);
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()));
-    serde_json::from_str(&content)
-        .unwrap_or_else(|e| panic!("Failed to parse {} as JSON: {e}", path.display()))
+    let content = std::fs::read_to_string(&path).expect("JSON fixture must be readable");
+    serde_json::from_str(&content).expect("JSON fixture must parse")
 }
 
 fn load_rubric() -> Value {
@@ -33,14 +31,12 @@ fn load_inventory() -> Value {
 
 fn load_testing_policy() -> String {
     let path = project_root().join("docs/testing-policy.md");
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("Failed to read testing-policy.md: {e}"))
+    std::fs::read_to_string(&path).expect("testing-policy.md must be readable")
 }
 
 fn load_suite_classification() -> String {
     let path = project_root().join("tests/suite_classification.toml");
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("Failed to read suite_classification.toml: {e}"))
+    std::fs::read_to_string(&path).expect("suite_classification.toml must be readable")
 }
 
 // ─── Exception Time-Boxing Validation ───────────────────────────────
@@ -194,6 +190,7 @@ fn high_risk_doubles_are_in_allowlist_or_vcr_suite() {
     let inventory = load_inventory();
     let policy = load_testing_policy();
     let allowlist_ids = parse_allowlist_identifiers(&policy);
+    let mut violations = Vec::new();
 
     let clusters = inventory["summary"]["top_risk_clusters"]
         .as_array()
@@ -211,21 +208,29 @@ fn high_risk_doubles_are_in_allowlist_or_vcr_suite() {
                 // Large unit-inline mock usage: either it's a known pattern
                 // or it should be in the allowlist.
                 let is_extension_module = module.contains("extension");
-                let is_in_allowlist = allowlist_ids
-                    .iter()
-                    .any(|id| policy.contains(module) || policy.contains(id));
+                let is_in_allowlist = policy.contains(module)
+                    || allowlist_ids
+                        .iter()
+                        .any(|id| module.contains(id) || id.contains(module));
 
                 // Extension modules have documented stub usage patterns.
                 // Non-extension modules with large mock counts need attention.
                 if !is_extension_module && !is_in_allowlist {
-                    eprintln!(
-                        "WARNING: Module '{module}' has {unit_count} unit-inline doubles \
-                         but is not in allowlist or extension module"
-                    );
+                    violations.push(format!(
+                        "Module '{module}' has {unit_count} unit-inline doubles but is not in \
+                         allowlist or extension module"
+                    ));
                 }
             }
         }
     }
+
+    assert!(
+        violations.is_empty(),
+        "High-risk unit-inline test doubles must be allowlisted, extension-scoped, or \
+         remediated:\n{}",
+        violations.join("\n")
+    );
 }
 
 // ─── Suite Classification Completeness ──────────────────────────────
@@ -546,8 +551,7 @@ fn failure_log_schema_env_field_has_redaction() {
 #[test]
 fn no_mock_crate_dependencies() {
     let cargo_toml = project_root().join("Cargo.toml");
-    let content = std::fs::read_to_string(&cargo_toml)
-        .unwrap_or_else(|e| panic!("Failed to read Cargo.toml: {e}"));
+    let content = std::fs::read_to_string(&cargo_toml).expect("Cargo.toml must be readable");
 
     let banned_crates = ["mockall", "mockito", "wiremock"];
     for crate_name in banned_crates {
