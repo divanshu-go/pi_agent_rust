@@ -3604,7 +3604,7 @@ fn prune_session_index_path(index: &SessionIndex, path: &Path, reason: &'static 
 }
 
 fn can_reuse_known_entry(known_entry: &SessionPickEntry, disk_ms: i64, disk_size: u64) -> bool {
-    known_entry.last_modified_ms.eq(&disk_ms) && known_entry.size_bytes.eq(&disk_size)
+    known_entry.last_modified_ms == disk_ms && known_entry.size_bytes == disk_size
 }
 
 struct ScanSessionsResult {
