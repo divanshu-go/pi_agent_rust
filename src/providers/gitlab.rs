@@ -277,7 +277,7 @@ impl Provider for GitLabProvider {
 
         // Add any custom headers from options.
         for (key, value) in &options.headers {
-            request = request.header(key, value);
+            request = request.try_header(key, value)?;
         }
 
         let response = Box::pin(request.body(body_bytes).send())
@@ -356,6 +356,7 @@ impl Provider for GitLabProvider {
 mod tests {
     use super::*;
     use crate::model::UserMessage;
+    use crate::provider::ToolDef;
 
     #[test]
     fn test_gitlab_provider_defaults() {
@@ -447,6 +448,37 @@ mod tests {
 
         let req = GitLabProvider::build_request(&context);
         assert_eq!(req.content, "Hello"); // fallback
+    }
+
+    #[test]
+    fn test_build_request_omits_standard_tool_call_schema() {
+        let context = Context::owned(
+            Some("Use tools when available.".to_string()),
+            vec![Message::User(UserMessage {
+                content: UserContent::Text("Call echo with hello.".to_string()),
+                timestamp: 0,
+            })],
+            vec![ToolDef {
+                name: "echo".to_string(),
+                description: "Echo text back to the caller.".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"}
+                    },
+                    "required": ["text"]
+                }),
+            }],
+        );
+
+        let req = GitLabProvider::build_request(&context);
+        let encoded = serde_json::to_value(&req).expect("serialize gitlab request");
+
+        assert_eq!(req.content, "Call echo with hello.");
+        assert_eq!(context.tools.len(), 1);
+        assert!(encoded.get("tools").is_none());
+        assert!(encoded.get("tool_choice").is_none());
+        assert!(encoded.get("functions").is_none());
     }
 
     #[test]

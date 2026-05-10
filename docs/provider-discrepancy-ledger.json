@@ -64,9 +64,9 @@
       "logging_schema_drift": 4
     },
     "by_remediation_status": {
-      "fixed": 5,
+      "fixed": 13,
       "partially_fixed": 2,
-      "open": 12
+      "open": 4
     }
   },
 
@@ -191,8 +191,8 @@
       "severity": "low",
       "user_impact": "No direct user impact. GitLab API doesn't support standard tool-call format, so this is an API limitation, not a missing test.",
       "evidence": "bd-3uqg.14.3.2 comments: Deviation 2",
-      "remediation_status": "open",
-      "remediation_note": "Document GitLab tool-call limitation. Consider adding negative test asserting graceful degradation.",
+      "remediation_status": "fixed",
+      "remediation_note": "GitLab's proprietary Chat API remains non-standard for tool calls; src/providers/gitlab.rs now has a negative request-encoding test proving available ToolDef schemas are omitted instead of serialized into unsupported tools/tool_choice/functions fields.",
       "affected_providers": ["gitlab"]
     },
     {

@@ -158,6 +158,19 @@ impl<'a> RequestBuilder<'a> {
     pub fn header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         let key = key.into();
         let value = value.into();
+        self.upsert_header(key, value);
+        self
+    }
+
+    pub fn try_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Result<Self> {
+        let key = key.into();
+        let value = value.into();
+        validate_request_header(&key, &value)?;
+        self.upsert_header(key, value);
+        Ok(self)
+    }
+
+    fn upsert_header(&mut self, key: String, value: String) {
         if let Some((existing_key, existing_value)) = self
             .headers
             .iter_mut()
@@ -169,7 +182,6 @@ impl<'a> RequestBuilder<'a> {
             self.headers.push((key, value));
         }
         // Silently drop headers beyond the limit to prevent DoS
-        self
     }
 
     #[must_use]
@@ -563,6 +575,20 @@ fn sanitize_header_name(name: &str) -> String {
         })
         .map(char::from)
         .collect()
+}
+
+fn validate_request_header(name: &str, value: &str) -> Result<()> {
+    if name.is_empty() || sanitize_header_name(name) != name {
+        return Err(Error::api(format!(
+            "Invalid HTTP request header name: {name:?}"
+        )));
+    }
+    if sanitize_header_value(value) != value || value.contains('\0') {
+        return Err(Error::api(
+            "Invalid HTTP request header value: contains a forbidden control character",
+        ));
+    }
+    Ok(())
 }
 
 fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -1648,6 +1674,42 @@ mod tests {
         assert_eq!(builder.headers.len(), 1);
         assert!(builder.headers[0].0.eq_ignore_ascii_case("authorization"));
         assert_eq!(builder.headers[0].1, "Bearer second");
+    }
+
+    #[test]
+    fn request_builder_try_header_rejects_injection_bytes() {
+        let client = Client::new();
+
+        assert!(
+            client
+                .post("https://api.example.com")
+                .try_header("X-GitLab-Feature", "duo-chat")
+                .is_ok()
+        );
+        assert!(
+            client
+                .post("https://api.example.com")
+                .try_header("Bad\r\nName", "value")
+                .is_err()
+        );
+        assert!(
+            client
+                .post("https://api.example.com")
+                .try_header("Bad:Name", "value")
+                .is_err()
+        );
+        assert!(
+            client
+                .post("https://api.example.com")
+                .try_header("X-Good", "ok\r\nX-Injected: yes")
+                .is_err()
+        );
+        assert!(
+            client
+                .post("https://api.example.com")
+                .try_header("X-Good", "bad\0value")
+                .is_err()
+        );
     }
 
     #[test]

@@ -25,7 +25,7 @@
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::Instant;
 
 pub const OPERATOR_TAIL_LATENCY_SCHEMA_V1: &str = "pi.operator_tail_latency.v1";
@@ -100,7 +100,10 @@ impl TimingCounter {
         self.count.fetch_add(1, Ordering::Relaxed);
         self.total_us.fetch_add(elapsed_us, Ordering::Relaxed);
         {
-            let mut recent = self.recent_us.lock().unwrap_or_else(|err| err.into_inner());
+            let mut recent = self
+                .recent_us
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             if recent.len() >= TIMING_SAMPLE_WINDOW {
                 recent.pop_front();
             }
@@ -126,20 +129,23 @@ impl TimingCounter {
         let count = self.count.load(Ordering::Relaxed);
         let total_us = self.total_us.load(Ordering::Relaxed);
         let max_us = self.max_us.load(Ordering::Relaxed);
-        let tail = {
-            let recent = self.recent_us.lock().unwrap_or_else(|err| err.into_inner());
-            let mut sorted: Vec<u64> = recent.iter().copied().collect();
-            sorted.sort_unstable();
-            if sorted.is_empty() {
-                TailLatencySnapshot::empty(TIMING_SAMPLE_WINDOW)
-            } else {
-                TailLatencySnapshot {
-                    sample_window: TIMING_SAMPLE_WINDOW,
-                    sample_count: sorted.len(),
-                    p95_us: percentile_permille(&sorted, 950),
-                    p99_us: percentile_permille(&sorted, 990),
-                    p999_us: percentile_permille(&sorted, 999),
-                }
+        let mut sorted: Vec<u64> = {
+            let recent = self
+                .recent_us
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            recent.iter().copied().collect()
+        };
+        sorted.sort_unstable();
+        let tail = if sorted.is_empty() {
+            TailLatencySnapshot::empty(TIMING_SAMPLE_WINDOW)
+        } else {
+            TailLatencySnapshot {
+                sample_window: TIMING_SAMPLE_WINDOW,
+                sample_count: sorted.len(),
+                p95_us: percentile_permille(&sorted, 950),
+                p99_us: percentile_permille(&sorted, 990),
+                p999_us: percentile_permille(&sorted, 999),
             }
         };
         TimingSnapshot {
@@ -158,7 +164,7 @@ impl TimingCounter {
         self.max_us.store(0, Ordering::Relaxed);
         self.recent_us
             .lock()
-            .unwrap_or_else(|err| err.into_inner())
+            .unwrap_or_else(PoisonError::into_inner)
             .clear();
     }
 }
