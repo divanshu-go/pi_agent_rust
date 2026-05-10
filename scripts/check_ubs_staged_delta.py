@@ -237,7 +237,7 @@ def main() -> int:
             f"info={totals.get('info', 0)}"
         )
 
-    if proc.returncode != 0:
+    if proc.returncode != 0 and not findings and not totals:
         print(f"UBS command failed with exit {proc.returncode}.", file=sys.stderr)
         print(proc.stdout[-4000:], file=sys.stderr)
         return proc.returncode
@@ -260,6 +260,12 @@ def main() -> int:
             if finding.message:
                 detail += f" - {finding.message}"
             print(detail)
+
+    if proc.returncode != 0:
+        print(
+            "UBS command returned nonzero for whole-file findings; "
+            "continuing because no warning/critical finding lands on a staged changed line."
+        )
 
     print("UBS staged delta passed: no warning/critical findings on staged changed lines.")
     if args.print_ubs_output:

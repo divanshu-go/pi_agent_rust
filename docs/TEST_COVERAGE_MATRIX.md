@@ -228,7 +228,7 @@ The active JSONL inventory gap is `bd-8t27h.9`.
 # Generated per-extension registration tests, tiers 1-2 by default.
 cargo test --test ext_conformance_generated --features ext-conformance
 
-# Generated tests including ignored tiers.
+# Owner-tracked opt-in lane for generated tier 3-5 extension tests.
 cargo test --test ext_conformance_generated --features ext-conformance -- --include-ignored
 
 # Differential TypeScript/Rust oracle.

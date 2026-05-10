@@ -114,10 +114,15 @@ Runs the full 223-extension corpus through a load-and-register test:
 cargo test --test ext_conformance_generated conformance_full_report \
   --features ext-conformance -- --nocapture
 
-# Including ignored (community + npm + third-party)
+# Owner-tracked opt-in lane for generated tier 3-5 extension tests.
 cargo test --test ext_conformance_generated --features ext-conformance \
   -- --include-ignored --nocapture
 ```
+
+The generated `#[ignore]` cases are owned by `bd-8t27h.17`; they are not
+generic unvendored placeholders. Treat failures in this lane as corpus onboarding
+work and either vendor the missing artifact, keep the extension in the tracked
+stretch tier with a concrete reason, or file a narrower owner bead.
 
 ### Random Trial Smoke Lane (`ext_random_trials`)
 

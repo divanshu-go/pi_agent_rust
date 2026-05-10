@@ -10,8 +10,8 @@
 //! Tiers 1–2 run by default; tiers 3–5 are owner-bead-stamped `#[ignore]`
 //! cases (multi-file, npm deps, UI, platform).
 //!
-//! Run all (including ignored):
-//!   cargo test --test `ext_conformance_generated` -- --include-ignored
+//! Run tracked stretch tiers:
+//!   cargo test --test `ext_conformance_generated` --features ext-conformance -- --include-ignored
 //!
 //! Run only tier 1–2 (default):
 //!   cargo test --test `ext_conformance_generated`
@@ -4467,11 +4467,48 @@ macro_rules! conformance_test {
     };
     ($name:ident, $ext_id:literal, ignore $(,)?) => {
         #[test]
-        #[ignore = "bd-8t27h.17: unvendored extension not yet onboarded into conformance corpus"]
+        #[ignore = "bd-8t27h.17: tracked stretch conformance tier; run with --include-ignored"]
         fn $name() {
             run_conformance_test($ext_id);
         }
     };
+}
+
+#[test]
+fn ignored_generated_extension_tests_are_tracked_opt_in_lane() {
+    let source = include_str!("ext_conformance_generated.rs");
+    let old_reason = [
+        "unvendored",
+        "extension",
+        "not",
+        "yet",
+        "onboarded",
+        "into",
+        "conformance",
+        "corpus",
+    ]
+    .join(" ");
+
+    assert!(
+        !source.contains(&old_reason),
+        "generated extension conformance ignores must be owner-tracked opt-in lanes"
+    );
+    let ignore_attrs: Vec<&str> = source
+        .lines()
+        .filter(|line| line.trim_start().starts_with("#[ignore"))
+        .collect();
+    assert!(
+        !ignore_attrs.is_empty(),
+        "expected generated extension conformance to keep an explicit opt-in tier"
+    );
+    for attr in ignore_attrs {
+        assert!(
+            attr.contains("bd-8t27h.17:")
+                && attr.contains("tracked stretch conformance tier")
+                && attr.contains("--include-ignored"),
+            "generated extension conformance ignores need an owner bead reason and opt-in command: {attr}"
+        );
+    }
 }
 
 // ─── Tier 1 — Single-file, no events, no deps (37 extensions) ──────────────
