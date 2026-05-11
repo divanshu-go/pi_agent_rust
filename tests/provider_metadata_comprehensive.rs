@@ -117,10 +117,15 @@ fn every_alias_is_lowercase_trimmed() {
 
 #[test]
 fn every_remote_provider_has_at_least_one_auth_env_key() {
-    // Local providers (e.g. ollama) legitimately have no auth env keys
-    let local_providers = ["ollama"];
+    // Local and dedicated OAuth providers legitimately have no API-key env keys.
+    let auth_env_optional_providers = [
+        "google-antigravity",
+        "google-gemini-cli",
+        "ollama",
+        "openai-codex",
+    ];
     for meta in PROVIDER_METADATA {
-        if local_providers.contains(&meta.canonical_id) {
+        if auth_env_optional_providers.contains(&meta.canonical_id) {
             continue;
         }
         assert!(
@@ -627,7 +632,7 @@ fn generate_canonical_id_alias_table_json() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn canonical_id_snapshot_detects_additions_and_removals() {
-    // ── Snapshot: 88 canonical IDs (sorted) ─────────────────────────────
+    // ── Snapshot: 91 canonical IDs (sorted) ─────────────────────────────
     // To update: run the failing test, copy the "actual" list printed
     // below, and replace this array.
     const EXPECTED: &[&str] = &[
@@ -659,6 +664,8 @@ fn canonical_id_snapshot_detects_additions_and_removals() {
         "github-models",
         "gitlab",
         "google",
+        "google-antigravity",
+        "google-gemini-cli",
         "google-vertex",
         "groq",
         "helicone",
@@ -690,6 +697,7 @@ fn canonical_id_snapshot_detects_additions_and_removals() {
         "ollama",
         "ollama-cloud",
         "openai",
+        "openai-codex",
         "opencode",
         "openrouter",
         "ovhcloud",
@@ -745,15 +753,21 @@ fn canonical_id_snapshot_detects_additions_and_removals() {
 fn alias_mapping_snapshot_is_current() {
     // ── Snapshot: alias → canonical_id (sorted by alias) ────────────────
     const EXPECTED_ALIASES: &[(&str, &str)] = &[
+        ("antigravity", "google-antigravity"),
         ("azure", "azure-openai"),
         ("azure-cognitive-services", "azure-openai"),
+        ("azure-openai-responses", "azure-openai"),
+        ("azure_openai", "azure-openai"),
         ("bedrock", "amazon-bedrock"),
+        ("chatgpt-codex", "openai-codex"),
+        ("codex", "openai-codex"),
         ("copilot", "github-copilot"),
         ("dashscope", "alibaba"),
         ("deep-infra", "deepinfra"),
         ("deep-seek", "deepseek"),
         ("fireworks-ai", "fireworks"),
         ("gemini", "google"),
+        ("gemini-cli", "google-gemini-cli"),
         ("github-copilot-enterprise", "github-copilot"),
         ("gitlab-duo", "gitlab"),
         ("glm", "zhipuai"),
@@ -762,6 +776,8 @@ fn alias_mapping_snapshot_is_current() {
         ("hf", "huggingface"),
         ("hugging-face", "huggingface"),
         ("kimi", "moonshotai"),
+        ("kimi-code", "kimi-for-coding"),
+        ("kimi-coding", "kimi-for-coding"),
         ("lm-studio", "lmstudio"),
         ("mistralai", "mistral"),
         ("moonshot", "moonshotai"),
@@ -776,6 +792,7 @@ fn alias_mapping_snapshot_is_current() {
         ("silicon-flow", "siliconflow"),
         ("together", "togetherai"),
         ("together-ai", "togetherai"),
+        ("vercel-ai-gateway", "vercel"),
         ("vertexai", "google-vertex"),
         ("x-ai", "xai"),
         ("zhipu", "zhipuai"),

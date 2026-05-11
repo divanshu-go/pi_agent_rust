@@ -671,8 +671,7 @@ fn create_provider_falls_back_to_api_anthropic_messages() {
             ctx.push(("model".to_string(), provider.model_id().to_string()));
         });
 
-    // Anthropic provider has a fixed provider name at the implementation layer.
-    assert_eq!(provider.name(), "anthropic");
+    assert_eq!(provider.name(), "custom-anthropic");
     assert_eq!(provider.api(), "anthropic-messages");
     assert_eq!(provider.model_id(), "claude-test");
 }
@@ -1070,7 +1069,7 @@ fn create_provider_azure_openai_routes_natively() {
         ctx.push(("api".to_string(), provider.api().to_string()));
         ctx.push(("model".to_string(), provider.model_id().to_string()));
     });
-    assert_eq!(provider.name(), "azure");
+    assert_eq!(provider.name(), "azure-openai");
     assert_eq!(provider.api(), "azure-openai");
     assert!(!provider.model_id().is_empty());
 }
@@ -1092,7 +1091,7 @@ fn create_provider_azure_cognitive_services_alias_routes_natively() {
             ctx.push(("api".to_string(), provider.api().to_string()));
             ctx.push(("model".to_string(), provider.model_id().to_string()));
         });
-    assert_eq!(provider.name(), "azure");
+    assert_eq!(provider.name(), "azure-cognitive-services");
     assert_eq!(provider.api(), "azure-openai");
     assert!(!provider.model_id().is_empty());
 }
@@ -1384,11 +1383,7 @@ fn wave_b1_presets_resolve_metadata_defaults_and_factory_route() {
                 ctx.push(("name".to_string(), provider.name().to_string()));
                 ctx.push(("api".to_string(), provider.api().to_string()));
             });
-        if expected_api == "anthropic-messages" {
-            assert_eq!(provider.name(), "anthropic");
-        } else {
-            assert_eq!(provider.name(), provider_id);
-        }
+        assert_eq!(provider.name(), provider_id);
         assert_eq!(provider.api(), expected_api);
         assert_eq!(provider.model_id(), "wave-b1-default-model");
     }
@@ -1460,7 +1455,8 @@ fn wave_b1_anthropic_compat_streams_use_messages_path_and_x_api_key() {
             continue;
         }
         let server = harness.start_mock_http_server();
-        let expected_path = format!("/wave-b1/{index}/{}", provider_id.replace('-', "_"));
+        let path_prefix = format!("/wave-b1/{index}/{}", provider_id.replace('-', "_"));
+        let expected_path = format!("{path_prefix}/v1/messages");
         server.add_route(
             "POST",
             &expected_path,
@@ -1470,15 +1466,15 @@ fn wave_b1_anthropic_compat_streams_use_messages_path_and_x_api_key() {
         let mut entry = make_model_entry(
             provider_id,
             "wave-b1-anthropic-model",
-            &format!("{}{}", server.base_url(), expected_path),
+            &format!("{}{}", server.base_url(), path_prefix),
         );
         entry.model.api.clear();
         let provider = create_provider(&entry, None)
             .unwrap_or_else(|e| panic!("create_provider should route {provider_id}: {e}"));
-        assert_eq!(provider.name(), "anthropic");
+        assert_eq!(provider.name(), provider_id);
         assert_eq!(provider.api(), "anthropic-messages");
 
-        let api_key = format!("wave-b1-anthropic-token-{index}");
+        let api_key = format!("sk-wave-b1-anthropic-token-{index}");
         let context = Context {
             system_prompt: Some("Be concise.".to_string().into()),
             messages: vec![Message::User(UserMessage {
@@ -1898,11 +1894,7 @@ fn special_routing_presets_resolve_metadata_defaults_and_factory_route() {
         let provider = create_provider(&entry, None)
             .unwrap_or_else(|e| panic!("create_provider should route {provider_id}: {e}"));
 
-        if expected_api == "anthropic-messages" {
-            assert_eq!(provider.name(), "anthropic");
-        } else {
-            assert_eq!(provider.name(), provider_id);
-        }
+        assert_eq!(provider.name(), provider_id);
         assert_eq!(provider.api(), expected_api);
         assert_eq!(provider.model_id(), "special-routing-default-model");
     }
@@ -1977,7 +1969,8 @@ fn special_routing_default_streams_cover_success_paths() {
     }
 
     let server = harness.start_mock_http_server();
-    let expected_path = "/special/zenmux/messages";
+    let path_prefix = "/special/zenmux";
+    let expected_path = "/special/zenmux/v1/messages";
     server.add_route(
         "POST",
         expected_path,
@@ -1987,12 +1980,12 @@ fn special_routing_default_streams_cover_success_paths() {
     let mut entry = make_model_entry(
         "zenmux",
         "special-anthropic-stream-model",
-        &format!("{}{expected_path}", server.base_url()),
+        &format!("{}{path_prefix}", server.base_url()),
     );
     entry.model.api.clear();
     let provider = create_provider(&entry, None).expect("create_provider should route zenmux");
     assert_eq!(provider.api(), "anthropic-messages");
-    assert_eq!(provider.name(), "anthropic");
+    assert_eq!(provider.name(), "zenmux");
 
     let api_key = "special-zenmux-token".to_string();
     let context = Context {

@@ -481,14 +481,14 @@ fn smoke_anthropic_messages_matrix() {
 
         let server = harness.start_mock_http_server();
         let safe_id = meta.canonical_id.replace('-', "_");
-        let expected_path = format!("/smoke/anth/{index}/{safe_id}");
+        let expected_path = format!("/smoke/anth/{index}/{safe_id}/v1/messages");
         server.add_route(
             "POST",
             &expected_path,
             text_event_stream_response(anthropic_messages_sse()),
         );
 
-        // For anthropic-messages, base_url IS the messages endpoint
+        // Anthropic-compatible bases are normalized to the messages endpoint.
         let mut entry = make_smoke_entry(
             meta.canonical_id,
             "smoke-anth-model",
@@ -506,7 +506,7 @@ fn smoke_anthropic_messages_matrix() {
             meta.canonical_id
         );
 
-        let api_key = format!("smoke-anth-key-{index}");
+        let api_key = format!("sk-ant-smoke-anth-key-{index}");
         let options = StreamOptions {
             api_key: Some(api_key.clone()),
             max_tokens: Some(64),
@@ -599,7 +599,7 @@ fn smoke_anthropic_messages_matrix() {
 fn smoke_native_anthropic_baseline() {
     let harness = TestHarness::new("smoke_native_anthropic_baseline");
     let server = harness.start_mock_http_server();
-    let expected_path = "/smoke/native/anthropic";
+    let expected_path = "/smoke/native/anthropic/v1/messages";
     server.add_route(
         "POST",
         expected_path,
@@ -616,7 +616,7 @@ fn smoke_native_anthropic_baseline() {
     assert_eq!(provider.name(), "anthropic");
     assert_eq!(provider.api(), "anthropic-messages");
 
-    let api_key = "smoke-anthropic-native-key".to_string();
+    let api_key = "sk-ant-smoke-anthropic-native-key".to_string();
     let options = StreamOptions {
         api_key: Some(api_key.clone()),
         max_tokens: Some(64),
@@ -752,15 +752,14 @@ fn smoke_native_openai_completions_baseline() {
         });
 }
 
-/// Smoke-tests native Gemini through mock HTTP (key-in-URL auth).
+/// Smoke-tests native Gemini through mock HTTP (header-based API key auth).
 #[test]
 fn smoke_native_gemini_baseline() {
     let harness = TestHarness::new("smoke_native_gemini_baseline");
     let server = harness.start_mock_http_server();
     let api_key = "smoke-gemini-key";
     let model_id = "smoke-gemini-model";
-    let expected_path =
-        format!("/v1beta/models/{model_id}:streamGenerateContent?alt=sse&key={api_key}");
+    let expected_path = format!("/v1beta/models/{model_id}:streamGenerateContent?alt=sse");
     server.add_route(
         "POST",
         &expected_path,
@@ -784,10 +783,10 @@ fn smoke_native_gemini_baseline() {
     assert_eq!(requests.len(), 1);
     let request = &requests[0];
     assert_eq!(request.path, expected_path);
-    // Gemini uses key-in-URL, not header auth
-    assert!(
-        request.path.contains(&format!("key={api_key}")),
-        "Gemini request path should contain API key"
+    assert_eq!(
+        request_header(&request.headers, "x-goog-api-key").as_deref(),
+        Some(api_key),
+        "Gemini request should send API key in x-goog-api-key"
     );
     assert_eq!(
         request_header(&request.headers, "content-type").as_deref(),
@@ -1065,10 +1064,8 @@ fn run_smoke_stream(
             (format!("{}{prefix}", server.base_url()), path)
         }
         "google-generative-ai" => {
-            let key = "smoke-report-key";
-            let path = format!(
-                "/v1beta/models/smoke-report-model:streamGenerateContent?alt=sse&key={key}"
-            );
+            let path =
+                "/v1beta/models/smoke-report-model:streamGenerateContent?alt=sse".to_string();
             server.add_route("POST", &path, text_event_stream_response(gemini_sse()));
             (format!("{}/v1beta", server.base_url()), path)
         }
@@ -1168,10 +1165,10 @@ fn smoke_all_api_families_are_known() {
         .info_ctx("invariant.ok", "all API families known", |_ctx| {});
 }
 
-/// Verifies that every `openai-completions` preset has `auth_header=true`.
+/// Verifies that every credentialed `openai-completions` preset has `auth_header=true`.
 #[test]
-fn smoke_openai_completions_presets_use_bearer_auth() {
-    let harness = TestHarness::new("smoke_openai_completions_presets_use_bearer_auth");
+fn smoke_credentialed_openai_completions_presets_use_bearer_auth() {
+    let harness = TestHarness::new("smoke_credentialed_openai_completions_presets_use_bearer_auth");
     let mut checked = 0u32;
 
     for meta in PROVIDER_METADATA {
@@ -1180,6 +1177,14 @@ fn smoke_openai_completions_presets_use_bearer_auth() {
         }
         if let Some(defaults) = meta.routing_defaults {
             if defaults.api == "openai-completions" {
+                if meta.auth_env_keys.is_empty() {
+                    assert!(
+                        !defaults.auth_header,
+                        "local/no-auth preset {} should not require bearer auth",
+                        meta.canonical_id
+                    );
+                    continue;
+                }
                 assert!(
                     defaults.auth_header,
                     "openai-completions preset {} should have auth_header=true",
