@@ -16,5 +16,5 @@ fn sse_flush_processes_field_without_value_after_data() {
     parser.feed("data: foo\nevent");
     let event = parser.flush().expect("expected event at EOF");
     assert_eq!(event.data, "foo");
-    assert_eq!(event.event, "");
+    assert_eq!(event.event, "message");
 }
