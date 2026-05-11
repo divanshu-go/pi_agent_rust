@@ -1,11 +1,20 @@
 {
   "schema": "pi.ci.preflight_lane.v1",
   "lane": "preflight",
-  "generated_at": "2026-05-02T00:53:23.051Z",
-  "verdict": "pass",
+  "generated_at": "2026-05-10T23:08:53.124Z",
+  "verdict": "fail",
   "policy": "Preflight lane: evaluate blocking gates only, fail-fast on first failure. Waived gates are skipped with audit trail.",
-  "gates_evaluated": 14,
-  "first_failure": null,
+  "gates_evaluated": 2,
+  "first_failure": {
+    "id": "ext_must_pass",
+    "name": "Extension must-pass gate",
+    "bead": "bd-1f42.4.4",
+    "status": "fail",
+    "blocking": true,
+    "artifact_path": "tests/ext_conformance/reports/gate/must_pass_gate_verdict.json",
+    "detail": "tests/ext_conformance/reports/gate/must_pass_gate_verdict.json generated_at '2026-05-01T03:20:54.460Z' is stale (older than 7 days)",
+    "reproduce_command": "cargo test --test ext_conformance_generated --features ext-conformance -- conformance_must_pass_gate --nocapture --exact"
+  },
   "blocking_gates": [
     {
       "id": "non_mock_unit",
@@ -20,129 +29,20 @@
       "id": "ext_must_pass",
       "name": "Extension must-pass gate",
       "bead": "bd-1f42.4.4",
-      "status": "pass",
+      "status": "fail",
       "blocking": true,
       "artifact_path": "tests/ext_conformance/reports/gate/must_pass_gate_verdict.json",
+      "detail": "tests/ext_conformance/reports/gate/must_pass_gate_verdict.json generated_at '2026-05-01T03:20:54.460Z' is stale (older than 7 days)",
       "reproduce_command": "cargo test --test ext_conformance_generated --features ext-conformance -- conformance_must_pass_gate --nocapture --exact"
-    },
-    {
-      "id": "cross_platform",
-      "name": "Cross-platform matrix validation",
-      "bead": "bd-1f42.6.7",
-      "status": "pass",
-      "blocking": true,
-      "artifact_path": "tests/cross_platform_reports/linux/platform_report.json",
-      "reproduce_command": "cargo test --test ci_cross_platform_matrix -- cross_platform_matrix --nocapture --exact"
-    },
-    {
-      "id": "conformance_regression",
-      "name": "Conformance regression gate",
-      "bead": "bd-1f42.4",
-      "status": "pass",
-      "blocking": true,
-      "artifact_path": "tests/ext_conformance/reports/regression_verdict.json",
-      "reproduce_command": "cargo test --test conformance_regression_gate -- --nocapture"
-    },
-    {
-      "id": "conformance_pass_rate",
-      "name": "Conformance pass rate >= 80%",
-      "bead": "bd-1f42.4",
-      "status": "pass",
-      "blocking": true,
-      "artifact_path": "tests/ext_conformance/reports/conformance_summary.json",
-      "reproduce_command": "cargo test --test conformance_report -- --nocapture"
-    },
-    {
-      "id": "suite_classification",
-      "name": "Suite classification guard",
-      "bead": "bd-1f42.6.1",
-      "status": "pass",
-      "blocking": true,
-      "artifact_path": "tests/suite_classification.toml"
-    },
-    {
-      "id": "sec_conformance",
-      "name": "SEC-6.4 security compatibility conformance",
-      "bead": "bd-1a2cu",
-      "status": "pass",
-      "blocking": true,
-      "artifact_path": "tests/full_suite_gate/sec_conformance_verdict.json",
-      "reproduce_command": "cargo test --test sec_compatibility_conformance -- --nocapture"
-    },
-    {
-      "id": "perf3x_bead_coverage",
-      "name": "PERF-3X bead-to-artifact coverage audit",
-      "bead": "bd-3ar8v.6.11",
-      "status": "pass",
-      "blocking": true,
-      "artifact_path": "tests/full_suite_gate/perf3x_bead_coverage_audit.json",
-      "detail": "Validated 7 PERF-3X bead coverage row(s) with complete unit/e2e/log evidence paths",
-      "reproduce_command": "cargo test --test ci_full_suite_gate -- perf3x_bead_coverage_contract_is_well_formed --nocapture --exact"
-    },
-    {
-      "id": "practical_finish_checkpoint",
-      "name": "Practical-finish checkpoint (docs-only residual filter)",
-      "bead": "bd-3ar8v.6.9",
-      "status": "pass",
-      "blocking": true,
-      "artifact_path": "tests/full_suite_gate/practical_finish_checkpoint.json",
-      "detail": "Practical-finish checkpoint reached: no open PERF-3X issues remain.",
-      "reproduce_command": "cargo test --test ci_full_suite_gate -- practical_finish_report_fails_when_technical_open_issues_remain --nocapture --exact"
-    },
-    {
-      "id": "extension_remediation_backlog",
-      "name": "Extension remediation backlog artifact integrity",
-      "bead": "bd-3ar8v.6.8",
-      "status": "pass",
-      "blocking": true,
-      "artifact_path": "tests/full_suite_gate/extension_remediation_backlog.json",
-      "reproduce_command": "cargo test --test qa_certification_dossier -- certification_dossier --nocapture --exact"
-    },
-    {
-      "id": "opportunity_matrix_integrity",
-      "name": "Opportunity matrix artifact integrity",
-      "bead": "bd-3ar8v.6.1",
-      "status": "pass",
-      "blocking": true,
-      "artifact_path": "tests/perf/reports/opportunity_matrix.json",
-      "reproduce_command": "cargo test --test release_evidence_gate -- phase1_weighted_attribution_contract_links_phase5_consumers --nocapture --exact"
-    },
-    {
-      "id": "parameter_sweeps_integrity",
-      "name": "Parameter sweeps artifact integrity",
-      "bead": "bd-3ar8v.6.2",
-      "status": "pass",
-      "blocking": true,
-      "artifact_path": "tests/perf/reports/parameter_sweeps.json",
-      "reproduce_command": "cargo test --test release_evidence_gate -- parameter_sweeps_contract_links_phase1_matrix_and_readiness --nocapture --exact"
-    },
-    {
-      "id": "conformance_stress_lineage",
-      "name": "Conformance+stress lineage coherence",
-      "bead": "bd-3ar8v.6.3",
-      "status": "pass",
-      "blocking": true,
-      "artifact_path": "tests/ext_conformance/reports/conformance_summary.json",
-      "detail": "Conformance+stress lineage coherence validated: both artifacts carry run_id and correlation_id",
-      "reproduce_command": "cargo test --test ci_full_suite_gate -- conformance_stress_lineage_passes_with_valid_artifacts --nocapture --exact"
-    },
-    {
-      "id": "waiver_lifecycle",
-      "name": "Waiver lifecycle compliance",
-      "bead": "bd-1f42.8.8.1",
-      "status": "pass",
-      "blocking": true,
-      "artifact_path": "tests/full_suite_gate/waiver_audit.json",
-      "reproduce_command": "cargo test --test ci_full_suite_gate -- waiver_lifecycle_audit --nocapture --exact"
     }
   ],
   "waivers_applied": [],
   "summary": {
-    "blocking_pass": 14,
-    "blocking_fail": 0,
+    "blocking_pass": 1,
+    "blocking_fail": 1,
     "blocking_skip": 0,
     "blocking_waived": 0,
     "blocking_total": 14,
-    "fail_fast_triggered": false
+    "fail_fast_triggered": true
   }
 }

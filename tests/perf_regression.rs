@@ -707,6 +707,16 @@ fn measure_process_rss(binary: &Path, args: &[&str]) -> f64 {
     max_rss_kb as f64 / 1024.0
 }
 
+fn exercise_sustained_memory_load() -> u64 {
+    let mut accumulator: u64 = 0;
+    for i in 0..100 {
+        let data: Vec<u64> = (0..10_000).map(|j| j * (i + 1)).collect();
+        accumulator = accumulator.wrapping_add(data.iter().sum::<u64>());
+        std::hint::black_box(&data);
+    }
+    std::hint::black_box(accumulator)
+}
+
 #[test]
 fn memory_sustained_load_growth() {
     let _guard = perf_guard();
@@ -715,6 +725,10 @@ fn memory_sustained_load_growth() {
     harness
         .log()
         .info("measure", "Measuring RSS growth under allocation pressure");
+
+    // Warm the allocator before the baseline so this checks retained growth
+    // under repeat load, not first-touch allocator expansion.
+    std::hint::black_box(exercise_sustained_memory_load());
 
     // Measure test-process RSS before and after allocating + processing data
     let pid = sysinfo::Pid::from_u32(std::process::id());
@@ -728,15 +742,8 @@ fn memory_sustained_load_growth() {
     );
     let rss_before = system.process(pid).map_or(0, sysinfo::Process::memory);
 
-    // Simulate sustained load: allocate and process vectors repeatedly
-    let mut accumulator: u64 = 0;
-    for i in 0..100 {
-        let data: Vec<u64> = (0..10_000).map(|j| j * (i + 1)).collect();
-        accumulator = accumulator.wrapping_add(data.iter().sum::<u64>());
-        // Brief yield to let the allocator settle
-        std::hint::black_box(&data);
-    }
-    std::hint::black_box(accumulator);
+    // Simulate sustained load: allocate and process vectors repeatedly.
+    std::hint::black_box(exercise_sustained_memory_load());
 
     // Post-load RSS
     system.refresh_processes_specifics(

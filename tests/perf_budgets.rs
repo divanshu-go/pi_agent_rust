@@ -196,6 +196,18 @@ fn target_dir(root: &Path) -> PathBuf {
     resolve_target_dir(root, std::env::var_os("CARGO_TARGET_DIR").as_deref())
 }
 
+fn target_dir_candidates(root: &Path) -> Vec<PathBuf> {
+    let resolved_target = target_dir(root);
+    let default_target = root.join("target");
+    let project_root = project_root();
+    let paths = if root == project_root.as_path() {
+        vec![resolved_target, default_target]
+    } else {
+        vec![default_target, resolved_target]
+    };
+    dedup_paths(paths)
+}
+
 fn resolve_env_path(root: &Path, path: PathBuf) -> Option<PathBuf> {
     if path.as_os_str().is_empty() {
         return None;
@@ -247,12 +259,13 @@ fn evidence_then_target_paths(
     target_relative_paths: &[&str],
 ) -> Vec<PathBuf> {
     let mut paths = evidence_dir_paths(root, evidence_relative_paths);
-    let cargo_target_dir = target_dir(root);
-    paths.extend(
-        target_relative_paths
-            .iter()
-            .map(|relative| cargo_target_dir.join(relative)),
-    );
+    for cargo_target_dir in target_dir_candidates(root) {
+        paths.extend(
+            target_relative_paths
+                .iter()
+                .map(|relative| cargo_target_dir.join(relative)),
+        );
+    }
     dedup_paths(paths)
 }
 
@@ -473,11 +486,13 @@ fn binary_size_candidate_paths(root: &Path) -> Vec<PathBuf> {
             &detected_profile,
         ));
     }
-    paths.extend(build_binary_size_candidate_paths(
-        &target_dir(root),
-        release_binary_override,
-        &detected_profile,
-    ));
+    for dir in target_dir_candidates(root) {
+        paths.extend(build_binary_size_candidate_paths(
+            &dir,
+            release_binary_override.clone(),
+            &detected_profile,
+        ));
+    }
     dedup_paths(paths)
 }
 
@@ -506,7 +521,9 @@ fn collect_estimate_json_files_from_bases(bases: &[PathBuf]) -> Vec<PathBuf> {
 
 fn criterion_base_candidates(root: &Path, relative: &str) -> Vec<PathBuf> {
     let mut bases = evidence_dir_paths(root, &[relative]);
-    bases.push(target_dir(root).join(relative));
+    for dir in target_dir_candidates(root) {
+        bases.push(dir.join(relative));
+    }
     dedup_paths(bases)
 }
 
@@ -1144,9 +1161,9 @@ fn pijs_workload_candidate_paths(root: &Path) -> Vec<PathBuf> {
     for dir in perf_evidence_dirs(root) {
         paths.extend(pijs_workload_candidate_paths_in_evidence_dir(&dir));
     }
-    paths.extend(pijs_workload_candidate_paths_in_target_dir(&target_dir(
-        root,
-    )));
+    for dir in target_dir_candidates(root) {
+        paths.extend(pijs_workload_candidate_paths_in_target_dir(&dir));
+    }
     dedup_paths(paths)
 }
 

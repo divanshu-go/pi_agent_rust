@@ -483,6 +483,7 @@ print(
             payload.get("host_cpu_cores", "unknown"),
             payload.get("mem_total_mb", "unknown"),
             payload.get("host_mem_total_mb", "unknown"),
+            payload.get("build_profile", "unknown"),
             cgroup.get("cpu_quota_cores"),
             cgroup.get("cpuset_cpu_count"),
             cgroup.get("memory_limit_mb"),
@@ -500,6 +501,7 @@ PY
     host_cpu_cores \
     mem_total_mb \
     host_mem_total_mb \
+    build_profile \
     cpu_quota_cores \
     cpuset_cpu_count \
     memory_limit_mb \
@@ -508,6 +510,7 @@ PY
     fingerprint_caveats <<< "$fingerprint_summary"
   log_ok "CPU: $cpu_model (target=$cpu_cores, host=$host_cpu_cores, quota=$cpu_quota_cores, cpuset=$cpuset_cpu_count)"
   log_ok "Memory: target=${mem_total_mb}MB host=${host_mem_total_mb}MB cgroup_limit=${memory_limit_mb}MB"
+  log_ok "Build profile: $build_profile"
   log_ok "NUMA nodes: ${numa_node_count:-unknown}; budget profile source=$budget_profile_source"
   if [[ -n "$fingerprint_caveats" ]]; then
     log_warn "Host fingerprint caveats: $fingerprint_caveats"

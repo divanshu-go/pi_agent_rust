@@ -16,6 +16,7 @@
 | `pi.ext.conformance_summary.v2` | Aggregate conformance summary with per-tier breakdowns |
 | `pi.perf.extension_benchmark_stratification.v1` | Layered extension benchmark artifact linking cold-load, per-call, and full E2E evidence with claim-integrity guards |
 | `pi.perf.phase1_matrix_validation.v1` | Phase-1 realistic/matched-state matrix validation with stage attribution and release-gate readiness |
+| `pi.resource_governor.admission.v1` | Host-scale resource-governor admission decision telemetry for swarm pressure control |
 
 ## Environment Fingerprint
 

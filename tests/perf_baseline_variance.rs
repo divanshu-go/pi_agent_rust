@@ -637,14 +637,20 @@ fn cross_env_breakdown_rejects_invalid_input_shapes() {
 fn inline_json_parse_variance_is_acceptable() {
     // Run multiple rounds of JSON parsing to measure variance
     let msg = r#"{"type":"host_call","id":"hc-1","method":"log","params":{"level":"info","message":"hello"}}"#;
-    let rounds = 10;
-    let iterations_per_round = 5000;
+    let rounds = 12;
+    let iterations_per_round = 50_000;
     let mut round_means: Vec<f64> = Vec::with_capacity(rounds);
+
+    for _ in 0..(iterations_per_round / 10) {
+        let value: Value = serde_json::from_str(msg).unwrap();
+        std::hint::black_box(value);
+    }
 
     for _ in 0..rounds {
         let start = std::time::Instant::now();
         for _ in 0..iterations_per_round {
-            let _: Value = serde_json::from_str(msg).unwrap();
+            let value: Value = serde_json::from_str(msg).unwrap();
+            std::hint::black_box(value);
         }
         let elapsed_us = start.elapsed().as_nanos() as f64 / 1000.0;
         let per_parse_us = elapsed_us / f64::from(iterations_per_round);

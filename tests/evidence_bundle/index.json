@@ -1,8 +1,8 @@
 {
   "schema": "pi.ci.evidence_bundle.v1",
-  "generated_at": "2026-05-02T00:53:22.917Z",
-  "git_ref": "c21e340d4",
-  "ci_run_id": "local-20260502T005322Z",
+  "generated_at": "2026-05-10T23:08:53.010Z",
+  "git_ref": "d57323bf2",
+  "ci_run_id": "local-20260510T230852Z",
   "sections": [
     {
       "id": "conformance_summary",
@@ -13,7 +13,7 @@
       "schema": "pi.ext.conformance_summary.v2",
       "summary": {
         "fail": 0,
-        "generated_at": "2026-05-02T00:10:15Z",
+        "generated_at": "2026-05-08T11:36:13Z",
         "pass": 60,
         "pass_rate_pct": 100.0,
         "total": 224
@@ -29,14 +29,14 @@
       "artifact_path": "tests/ext_conformance/reports/conformance_baseline.json",
       "schema": "pi.ext.conformance_baseline.v2",
       "summary": {
-        "failed": 36,
+        "failed": 14,
         "generated_at": "2026-02-07T23:31:53Z",
-        "pass_rate_pct": 83.9,
-        "passed": 187,
+        "pass_rate_pct": 93.7,
+        "passed": 209,
         "tested": 223
       },
       "file_count": 1,
-      "total_bytes": 28710
+      "total_bytes": 16247
     },
     {
       "id": "conformance_events",
@@ -45,7 +45,7 @@
       "status": "present",
       "artifact_path": "tests/ext_conformance/reports/conformance_events.jsonl",
       "file_count": 1,
-      "total_bytes": 223530
+      "total_bytes": 223532
     },
     {
       "id": "conformance_report_md",
@@ -179,7 +179,7 @@
       "artifact_path": "tests/ext_conformance/reports/auto_repair_summary.json",
       "schema": "pi.ext.auto_repair_summary.v1",
       "file_count": 1,
-      "total_bytes": 52577
+      "total_bytes": 57476
     },
     {
       "id": "e2e_results",
@@ -225,7 +225,7 @@
       "artifact_path": "tests/perf/reports/budget_summary.json",
       "schema": "pi.perf.budget_summary.v1",
       "file_count": 1,
-      "total_bytes": 7697
+      "total_bytes": 4082
     },
     {
       "id": "perf_comparison",
@@ -269,11 +269,11 @@
       "artifact_path": "tests/perf/reports/stress_triage.json",
       "schema": "pi.ext.stress_triage.v1",
       "summary": {
-        "generated_at": "2026-05-01T03:28:52Z",
+        "generated_at": "2026-05-10T01:22:30Z",
         "pass": true
       },
       "file_count": 1,
-      "total_bytes": 4575
+      "total_bytes": 4829
     },
     {
       "id": "load_time_benchmark",
@@ -293,7 +293,7 @@
       "artifact_path": "tests/ext_conformance/artifacts/RISK_REVIEW.json",
       "schema": "pi.ext.risk_review.v1",
       "file_count": 1,
-      "total_bytes": 86698
+      "total_bytes": 86687
     },
     {
       "id": "provenance_verification",
@@ -312,7 +312,17 @@
       "status": "present",
       "artifact_path": "docs/traceability_matrix.json",
       "file_count": 1,
-      "total_bytes": 48544
+      "total_bytes": 88890
+    },
+    {
+      "id": "high_value_suite_artifact_inventory",
+      "label": "High-value suite artifact inventory",
+      "category": "traceability",
+      "status": "present",
+      "artifact_path": "docs/evidence/high-value-suite-artifact-inventory.json",
+      "schema": "pi.traceability.high_value_suite_artifact_inventory.v1",
+      "file_count": 1,
+      "total_bytes": 11209
     },
     {
       "id": "extension_inventory",
@@ -348,25 +358,25 @@
       "artifact_path": "tests/ext_conformance/reports/gate/must_pass_gate_verdict.json | tests/ext_conformance/reports/conformance_summary.json | tests/perf/reports/stress_triage.json",
       "schema": "pi.perf3x.lineage_contract.v1",
       "summary": {
-        "artifact_span_minutes": 1249,
-        "conformance_generated_at": "2026-05-02T00:10:15+00:00",
+        "artifact_span_minutes": 12841,
+        "conformance_generated_at": "2026-05-08T11:36:13+00:00",
         "correlation_id": "local-20260501T0316",
         "max_allowed_span_days": 14,
         "must_pass_generated_at": "2026-05-01T03:20:54.460+00:00",
         "run_id": "local-20260501T0316",
-        "stress_generated_at": "2026-05-01T03:28:52+00:00"
+        "stress_generated_at": "2026-05-10T01:22:30+00:00"
       },
       "file_count": 0,
       "total_bytes": 0
     }
   ],
   "summary": {
-    "total_sections": 28,
-    "present_sections": 28,
+    "total_sections": 29,
+    "present_sections": 29,
     "missing_sections": 0,
     "invalid_sections": 0,
-    "total_artifacts": 2003,
-    "total_bytes": 185374339,
+    "total_artifacts": 2004,
+    "total_bytes": 185414960,
     "verdict": "complete"
   }
 }

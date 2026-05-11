@@ -1,18 +1,18 @@
 # Full-Suite CI Gate Report
 
-> Generated: 2026-05-02T00:53:23Z
-> Verdict: **PASS**
+> Generated: 2026-05-10T23:08:53Z
+> Verdict: **FAIL**
 
 ## Summary
 
 | Metric | Value |
 |--------|-------|
 | Total gates | 20 |
-| Passed | 20 |
-| Failed | 0 |
+| Passed | 19 |
+| Failed | 1 |
 | Warned | 0 |
 | Skipped | 0 |
-| Blocking pass | 14/14 |
+| Blocking pass | 13/14 |
 
 ## Gate Results
 
@@ -20,7 +20,7 @@
 |------|------|----------|--------|----------|
 | Non-mock unit compliance | bd-1f42.2.6 | YES | PASS | `docs/non-mock-rubric.json` |
 | E2E log contract and transcripts | bd-1f42.3.6 | no | PASS | `tests/e2e_results` |
-| Extension must-pass gate | bd-1f42.4.4 | YES | PASS | `tests/ext_conformance/reports/gate/must_pass_gate_verdict.json` |
+| Extension must-pass gate | bd-1f42.4.4 | YES | FAIL | `tests/ext_conformance/reports/gate/must_pass_gate_verdict.json` |
 | Extension provider compatibility matrix | bd-1f42.4.6 | no | PASS | `tests/ext_conformance/reports/provider_compat/provider_compat_report.json` |
 | Unified evidence bundle | bd-1f42.6.8 | no | PASS | `tests/evidence_bundle/index.json` |
 | Cross-platform matrix validation | bd-1f42.6.7 | YES | PASS | `tests/cross_platform_reports/linux/platform_report.json` |
@@ -38,4 +38,16 @@
 | Parameter sweeps artifact integrity | bd-3ar8v.6.2 | YES | PASS | `tests/perf/reports/parameter_sweeps.json` |
 | Conformance+stress lineage coherence | bd-3ar8v.6.3 | YES | PASS | `tests/ext_conformance/reports/conformance_summary.json` |
 | Waiver lifecycle compliance | bd-1f42.8.8.1 | YES | PASS | `tests/full_suite_gate/waiver_audit.json` |
+
+## Issues Requiring Attention
+
+### Extension must-pass gate — FAIL **(BLOCKING)**
+
+- **Bead:** bd-1f42.4.4
+- **Detail:** tests/ext_conformance/reports/gate/must_pass_gate_verdict.json generated_at '2026-05-01T03:20:54.460Z' is stale (older than 7 days)
+- **Artifact:** `tests/ext_conformance/reports/gate/must_pass_gate_verdict.json`
+- **Reproduce:**
+  ```bash
+  cargo test --test ext_conformance_generated --features ext-conformance -- conformance_must_pass_gate --nocapture --exact
+  ```
 

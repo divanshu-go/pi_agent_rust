@@ -306,6 +306,43 @@
       }
     ],
     "schema": "pi.bench.protocol.v1",
+    "swarm_scale_requirements": {
+      "documented_run_commands": {
+        "local": "PERF_CARGO_RUNNER=local ./scripts/perf/orchestrate.sh --profile full",
+        "rch_required": "./scripts/perf/orchestrate.sh --require-rch --profile full"
+      },
+      "fail_closed_on_missing_measurements": true,
+      "required_component_breakdown_keys": [
+        "tool",
+        "provider",
+        "extension",
+        "session"
+      ],
+      "required_latency_quantiles": [
+        "p50",
+        "p95",
+        "p99",
+        "p999"
+      ],
+      "required_queue_depth_quantiles": [
+        "p50",
+        "p95",
+        "p99",
+        "p999",
+        "max"
+      ],
+      "required_resource_usage_keys": [
+        "rss_mb",
+        "cpu_pct"
+      ],
+      "required_stage_breakdown_keys": [
+        "open",
+        "append",
+        "save",
+        "index"
+      ],
+      "target_cpu_cores": 64
+    },
     "user_perceived_sli_catalog": [
       {
         "label": "Interactive turn latency (P95)",
@@ -421,6 +458,10 @@
     {
       "description": "Phase-1 realistic/matched-state matrix validation with stage attribution and release-gate readiness",
       "name": "pi.perf.phase1_matrix_validation.v1"
+    },
+    {
+      "description": "Host-scale resource-governor admission decision telemetry for swarm pressure control",
+      "name": "pi.resource_governor.admission.v1"
     }
   ]
 }

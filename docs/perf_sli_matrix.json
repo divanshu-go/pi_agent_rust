@@ -134,6 +134,7 @@
     "sli.policy.preflight_decision_ms": "sli_extension_action_p95_ms",
     "sli.provider.first_token_ms": "sli_time_to_first_token_p95_ms",
     "sli.provider.stream_jitter_p95_ms": "sli_stream_tail_stability_ratio_p99_over_p50",
+    "sli.replay.integrity_pct": "sli_failure_recovery_success_rate",
     "sli.recovery.time_to_stable_ms": "sli_resume_ready_p95_ms",
     "sli.resume.replay_integrity_pct": "sli_failure_recovery_success_rate",
     "sli.rpc.roundtrip_ms": "sli_e2e_turn_latency_p95_ms",
@@ -479,6 +480,62 @@
           "matched-state",
           "realistic"
         ]
+      },
+      {
+        "workflow_id": "wf-doctor-and-golden-corpus-governance",
+        "required_partitions": [
+          "matched-state",
+          "realistic"
+        ]
+      },
+      {
+        "workflow_id": "wf-dropin-differential-pack",
+        "required_partitions": [
+          "matched-state",
+          "realistic"
+        ]
+      },
+      {
+        "workflow_id": "wf-extension-lifecycle-contention-and-persistence",
+        "required_partitions": [
+          "matched-state",
+          "realistic"
+        ]
+      },
+      {
+        "workflow_id": "wf-provider-failure-injection-pack",
+        "required_partitions": [
+          "matched-state",
+          "realistic"
+        ]
+      },
+      {
+        "workflow_id": "wf-ollama-local-live-provider-smoke",
+        "required_partitions": [
+          "matched-state",
+          "realistic"
+        ]
+      },
+      {
+        "workflow_id": "wf-runtime-risk-and-security-scenarios",
+        "required_partitions": [
+          "matched-state",
+          "realistic"
+        ]
+      },
+      {
+        "workflow_id": "wf-tui-feature-and-performance-pack",
+        "required_partitions": [
+          "matched-state",
+          "realistic"
+        ]
+      },
+      {
+        "workflow_id": "wf-soak-and-performance-regression-pack",
+        "required_partitions": [
+          "matched-state",
+          "realistic"
+        ]
       }
     ],
     "weighting_policy": {
@@ -600,6 +657,69 @@
         "sli_stream_tail_stability_ratio_p99_over_p50"
       ],
       "user_outcome": "Interrupt-resume-replay workflows preserve responsiveness."
+    },
+    {
+      "scenario_id": "wf-doctor-and-golden-corpus-governance",
+      "sli_ids": [
+        "sli_time_to_first_token_p95_ms",
+        "sli_failure_recovery_success_rate"
+      ],
+      "user_outcome": "Doctor and golden-corpus governance checks replay deterministically."
+    },
+    {
+      "scenario_id": "wf-dropin-differential-pack",
+      "sli_ids": [
+        "sli_e2e_turn_latency_p95_ms",
+        "sli_extension_action_p95_ms"
+      ],
+      "user_outcome": "Drop-in differential workflows remain responsive across RPC and extension UI paths."
+    },
+    {
+      "scenario_id": "wf-extension-lifecycle-contention-and-persistence",
+      "sli_ids": [
+        "sli_extension_action_p95_ms",
+        "sli_resume_ready_p95_ms"
+      ],
+      "user_outcome": "Extension lifecycle, contention, and persistence paths stay responsive and recoverable."
+    },
+    {
+      "scenario_id": "wf-provider-failure-injection-pack",
+      "sli_ids": [
+        "sli_time_to_first_token_p95_ms",
+        "sli_resume_ready_p95_ms"
+      ],
+      "user_outcome": "Provider failure-injection workflows surface bounded, recoverable failures."
+    },
+    {
+      "scenario_id": "wf-ollama-local-live-provider-smoke",
+      "sli_ids": [
+        "sli_failure_recovery_success_rate",
+        "sli_time_to_first_token_p95_ms"
+      ],
+      "user_outcome": "Local Ollama smoke coverage stays responsive without remote credentials."
+    },
+    {
+      "scenario_id": "wf-runtime-risk-and-security-scenarios",
+      "sli_ids": [
+        "sli_extension_action_p95_ms",
+        "sli_resume_ready_p95_ms"
+      ],
+      "user_outcome": "Runtime risk and security scenarios preserve policy responsiveness and recovery."
+    },
+    {
+      "scenario_id": "wf-tui-feature-and-performance-pack",
+      "sli_ids": [
+        "sli_time_to_first_token_p95_ms"
+      ],
+      "user_outcome": "TUI feature and performance workflows keep input-to-render latency practical."
+    },
+    {
+      "scenario_id": "wf-soak-and-performance-regression-pack",
+      "sli_ids": [
+        "sli_e2e_turn_latency_p95_ms",
+        "sli_resume_ready_p95_ms"
+      ],
+      "user_outcome": "Soak and performance regression packs preserve turn latency and recovery headroom."
     }
   ],
   "workflow_sli_mapping": [
@@ -691,6 +811,61 @@
         "sli_resume_ready_p95_ms",
         "sli_stream_tail_stability_ratio_p99_over_p50"
       ]
+    },
+    {
+      "workflow_id": "wf-doctor-and-golden-corpus-governance",
+      "sli_ids": [
+        "sli_time_to_first_token_p95_ms",
+        "sli_failure_recovery_success_rate"
+      ]
+    },
+    {
+      "workflow_id": "wf-dropin-differential-pack",
+      "sli_ids": [
+        "sli_e2e_turn_latency_p95_ms",
+        "sli_extension_action_p95_ms"
+      ]
+    },
+    {
+      "workflow_id": "wf-extension-lifecycle-contention-and-persistence",
+      "sli_ids": [
+        "sli_extension_action_p95_ms",
+        "sli_resume_ready_p95_ms"
+      ]
+    },
+    {
+      "workflow_id": "wf-provider-failure-injection-pack",
+      "sli_ids": [
+        "sli_time_to_first_token_p95_ms",
+        "sli_resume_ready_p95_ms"
+      ]
+    },
+    {
+      "workflow_id": "wf-ollama-local-live-provider-smoke",
+      "sli_ids": [
+        "sli_failure_recovery_success_rate",
+        "sli_time_to_first_token_p95_ms"
+      ]
+    },
+    {
+      "workflow_id": "wf-runtime-risk-and-security-scenarios",
+      "sli_ids": [
+        "sli_extension_action_p95_ms",
+        "sli_resume_ready_p95_ms"
+      ]
+    },
+    {
+      "workflow_id": "wf-tui-feature-and-performance-pack",
+      "sli_ids": [
+        "sli_time_to_first_token_p95_ms"
+      ]
+    },
+    {
+      "workflow_id": "wf-soak-and-performance-regression-pack",
+      "sli_ids": [
+        "sli_e2e_turn_latency_p95_ms",
+        "sli_resume_ready_p95_ms"
+      ]
     }
   ],
   "phase_validation_consumers": [
@@ -755,7 +930,15 @@
       "wf-preflight-policy-and-auto-repair",
       "wf-live-provider-parity-and-auth",
       "wf-failure-injection-and-recovery-pack",
-      "wf-interruption-resume-replay-pack"
+      "wf-interruption-resume-replay-pack",
+      "wf-doctor-and-golden-corpus-governance",
+      "wf-dropin-differential-pack",
+      "wf-extension-lifecycle-contention-and-persistence",
+      "wf-provider-failure-injection-pack",
+      "wf-ollama-local-live-provider-smoke",
+      "wf-runtime-risk-and-security-scenarios",
+      "wf-tui-feature-and-performance-pack",
+      "wf-soak-and-performance-regression-pack"
     ],
     "required_metric_fields": [
       "run_id",
@@ -882,6 +1065,70 @@
           "rust_vs_node_ratio",
           "rust_vs_bun_ratio"
         ]
+      },
+      {
+        "workflow_id": "wf-doctor-and-golden-corpus-governance",
+        "required_absolute_metrics": true,
+        "required_relative_ratios": [
+          "rust_vs_node_ratio",
+          "rust_vs_bun_ratio"
+        ]
+      },
+      {
+        "workflow_id": "wf-dropin-differential-pack",
+        "required_absolute_metrics": true,
+        "required_relative_ratios": [
+          "rust_vs_node_ratio",
+          "rust_vs_bun_ratio"
+        ]
+      },
+      {
+        "workflow_id": "wf-extension-lifecycle-contention-and-persistence",
+        "required_absolute_metrics": true,
+        "required_relative_ratios": [
+          "rust_vs_node_ratio",
+          "rust_vs_bun_ratio"
+        ]
+      },
+      {
+        "workflow_id": "wf-provider-failure-injection-pack",
+        "required_absolute_metrics": true,
+        "required_relative_ratios": [
+          "rust_vs_node_ratio",
+          "rust_vs_bun_ratio"
+        ]
+      },
+      {
+        "workflow_id": "wf-ollama-local-live-provider-smoke",
+        "required_absolute_metrics": true,
+        "required_relative_ratios": [
+          "rust_vs_node_ratio",
+          "rust_vs_bun_ratio"
+        ]
+      },
+      {
+        "workflow_id": "wf-runtime-risk-and-security-scenarios",
+        "required_absolute_metrics": true,
+        "required_relative_ratios": [
+          "rust_vs_node_ratio",
+          "rust_vs_bun_ratio"
+        ]
+      },
+      {
+        "workflow_id": "wf-tui-feature-and-performance-pack",
+        "required_absolute_metrics": true,
+        "required_relative_ratios": [
+          "rust_vs_node_ratio",
+          "rust_vs_bun_ratio"
+        ]
+      },
+      {
+        "workflow_id": "wf-soak-and-performance-regression-pack",
+        "required_absolute_metrics": true,
+        "required_relative_ratios": [
+          "rust_vs_node_ratio",
+          "rust_vs_bun_ratio"
+        ]
       }
     ],
     "scenario_partition_requirements": [
@@ -964,6 +1211,62 @@
       },
       {
         "workflow_id": "wf-interruption-resume-replay-pack",
+        "required_partitions": [
+          "matched-state",
+          "realistic"
+        ]
+      },
+      {
+        "workflow_id": "wf-doctor-and-golden-corpus-governance",
+        "required_partitions": [
+          "matched-state",
+          "realistic"
+        ]
+      },
+      {
+        "workflow_id": "wf-dropin-differential-pack",
+        "required_partitions": [
+          "matched-state",
+          "realistic"
+        ]
+      },
+      {
+        "workflow_id": "wf-extension-lifecycle-contention-and-persistence",
+        "required_partitions": [
+          "matched-state",
+          "realistic"
+        ]
+      },
+      {
+        "workflow_id": "wf-provider-failure-injection-pack",
+        "required_partitions": [
+          "matched-state",
+          "realistic"
+        ]
+      },
+      {
+        "workflow_id": "wf-ollama-local-live-provider-smoke",
+        "required_partitions": [
+          "matched-state",
+          "realistic"
+        ]
+      },
+      {
+        "workflow_id": "wf-runtime-risk-and-security-scenarios",
+        "required_partitions": [
+          "matched-state",
+          "realistic"
+        ]
+      },
+      {
+        "workflow_id": "wf-tui-feature-and-performance-pack",
+        "required_partitions": [
+          "matched-state",
+          "realistic"
+        ]
+      },
+      {
+        "workflow_id": "wf-soak-and-performance-regression-pack",
         "required_partitions": [
           "matched-state",
           "realistic"
