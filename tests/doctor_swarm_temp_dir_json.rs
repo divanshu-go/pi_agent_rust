@@ -1,13 +1,17 @@
 use serde_json::Value;
+use std::env;
 use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::io::ErrorKind;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const SWARM_TEMP_DIR_SCHEMA: &str = "pi.doctor.swarm_temp_dir.v1";
 const SWARM_RESOURCE_PREFLIGHT_SCHEMA: &str = "pi.doctor.swarm_resource_preflight.v1";
+const SWARM_MAIL_DEGRADED_SCHEMA: &str = "pi.doctor.agent_mail_degraded_mode.v1";
 const SWARM_TEMP_EXPECTED_ROOT: &str = "/data/tmp/pi_agent_rust_cargo";
 const SWARM_TEMP_WARN_AVAILABLE_KB: u64 = 10 * 1024 * 1024;
 
@@ -206,6 +210,96 @@ fn create_expected_root_test_dir(name: &str) -> TestResult<(PathBuf, bool)> {
     }
 }
 
+#[cfg(unix)]
+fn create_fake_agent_mail_cli(name: &str) -> TestResult<PathBuf> {
+    let root = create_swarm_temp_test_dir(Path::new("/tmp"), name)?;
+    let bin_dir = root.join("bin");
+    fs::create_dir_all(&bin_dir)?;
+    let am_path = bin_dir.join("am");
+    fs::write(
+        &am_path,
+        r#"#!/bin/sh
+if [ "$1" = "robot" ] && [ "$2" = "health" ]; then
+  cat <<'JSON'
+{
+  "_alerts": [
+    {"severity": "error", "summary": "Core SQLite schema tables are missing"}
+  ],
+  "_actions": [
+    "Run `am doctor check` and reconstruct from the Git archive before trusting mailbox reads"
+  ],
+  "overall": "unhealthy",
+  "health_level": "red",
+  "probes": [
+    {
+      "name": "db_schema",
+      "status": "fail",
+      "detail": "Core SQLite schema tables missing: projects, agents, messages, message_recipients"
+    }
+  ]
+}
+JSON
+  exit 0
+fi
+if [ "$1" = "robot" ] && [ "$2" = "agents" ]; then
+  cat <<'JSON'
+{
+  "agents": [
+    {
+      "name": "GoldenGlacier",
+      "last_active_ts": "2026-05-11T03:00:00Z",
+      "task_description": "current bead"
+    },
+    {
+      "name": "DarkGoose",
+      "last_active_ts": "2026-05-09T03:00:00Z",
+      "task_description": "stale cargo-test bead"
+    }
+  ]
+}
+JSON
+  exit 0
+fi
+if [ "$1" = "robot" ] && [ "$2" = "status" ]; then
+  echo "send/ack path unavailable: missing table messages" >&2
+  exit 2
+fi
+if [ "$1" = "robot" ] && [ "$2" = "inbox" ]; then
+  echo '{"messages":[],"urgent":0,"ack_required":0,"unread":0}'
+  exit 0
+fi
+if [ "$1" = "robot" ] && [ "$2" = "contacts" ]; then
+  echo '{"contacts":[]}'
+  exit 0
+fi
+if [ "$1" = "robot" ] && [ "$2" = "reservations" ]; then
+  echo '{"reservations":[]}'
+  exit 0
+fi
+if [ "$1" = "amctl" ]; then
+  echo "mail archive unavailable: missing table projects" >&2
+  exit 2
+fi
+echo '{}'
+"#,
+    )?;
+    let mut perms = fs::metadata(&am_path)?.permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&am_path, perms)?;
+    Ok(bin_dir)
+}
+
+#[cfg(unix)]
+fn path_with_fake_bin(fake_bin: &Path) -> TestResult<String> {
+    let mut paths = vec![fake_bin.to_path_buf()];
+    if let Some(existing) = env::var_os("PATH") {
+        paths.extend(env::split_paths(&existing));
+    }
+    env::join_paths(paths)?
+        .into_string()
+        .map_err(|_| TestError("PATH contains non-UTF-8 data".to_string()).into())
+}
+
 #[derive(Clone, Copy)]
 enum ResourceFixtureFile {
     CpuMax,
@@ -259,6 +353,100 @@ fn doctor_swarm_temp_dir_json_reports_missing_env() -> TestResult {
 
     require_missing_env(&report, "CARGO_TARGET_DIR")?;
     require_missing_env(&report, "TMPDIR")
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_swarm_agent_mail_degraded_mode_json_reports_beads_fallback() -> TestResult {
+    let fake_bin = create_fake_agent_mail_cli("fake-agent-mail")?;
+    let path = path_with_fake_bin(&fake_bin)?;
+    let report = run_doctor_json(&[
+        ("PATH", Some(path.as_str())),
+        ("AGENT_NAME", Some("GoldenGlacier")),
+        ("AGENT_MAIL_AGENT", Some("GoldenGlacier")),
+        ("CARGO_TARGET_DIR", None),
+        ("TMPDIR", None),
+    ])?;
+    let finding = finding_by_schema(&report, SWARM_MAIL_DEGRADED_SCHEMA)?;
+    require_eq(field_str(finding, "severity")?, "warn", "severity")?;
+    require_eq(
+        field_str(finding, "title")?,
+        "Agent Mail degraded; Beads fallback required",
+        "title",
+    )?;
+    require(
+        field_str(finding, "detail")?.contains("fallback=beads_soft_lock"),
+        format!("detail should mention Beads fallback: {finding}"),
+    )?;
+
+    let data = field(finding, "data")?;
+    require_eq(field_str(data, "mode")?, "beads_soft_lock_fallback", "mode")?;
+    require_eq(
+        field_str(field(data, "fallback")?, "soft_lock")?,
+        "beads",
+        "soft_lock",
+    )?;
+    require_eq(
+        &field_bool(field(data, "fallback")?, "non_blocking")?,
+        &true,
+        "fallback non_blocking",
+    )?;
+    let missing_tables = field(field(data, "mail_health")?, "missing_schema_tables")?
+        .as_array()
+        .ok_or_else(|| TestError(format!("missing_schema_tables is not an array: {data}")))?;
+    let has_all_missing_tables = ["projects", "agents", "messages", "message_recipients"]
+        .into_iter()
+        .all(|table| {
+            missing_tables
+                .iter()
+                .any(|value| value.as_str() == Some(table))
+        });
+    require(
+        has_all_missing_tables,
+        format!("missing_schema_tables should include core tables: {data}"),
+    )?;
+
+    let active_agents = field(data, "active_agents")?;
+    require_eq(
+        &field_u64(active_agents, "total_seen")?,
+        &2,
+        "active agent total_seen",
+    )?;
+    let rows = field(active_agents, "rows")?
+        .as_array()
+        .ok_or_else(|| TestError(format!("active_agents.rows is not an array: {data}")))?;
+    require(
+        rows.iter().any(|row| {
+            row.get("name").and_then(Value::as_str) == Some("GoldenGlacier")
+                && row
+                    .get("task_description")
+                    .and_then(Value::as_str)
+                    .is_some_and(|description| description.contains("current bead"))
+        }),
+        format!("active agent rows should include GoldenGlacier activity: {data}"),
+    )?;
+
+    let write_paths = field(data, "write_paths")?;
+    require_eq(
+        &field_bool(write_paths, "expected_failed")?,
+        &true,
+        "write paths expected_failed",
+    )?;
+    let blocked = field(write_paths, "blocked_operations")?
+        .as_array()
+        .ok_or_else(|| TestError(format!("blocked_operations is not an array: {data}")))?;
+    let has_blocked_writes = ["send_message", "acknowledge_message"]
+        .into_iter()
+        .all(|operation| {
+            blocked
+                .iter()
+                .any(|value| value.as_str() == Some(operation))
+        });
+    require(
+        has_blocked_writes,
+        format!("blocked_operations should include send and ack writes: {data}"),
+    )?;
+    Ok(())
 }
 
 #[test]

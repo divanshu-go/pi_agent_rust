@@ -37,6 +37,7 @@ const SWARM_DOCTOR_TEMP_DIR_SCHEMA: &str = "pi.doctor.swarm_temp_dir.v1";
 const SWARM_DOCTOR_RESOURCE_PREFLIGHT_SCHEMA: &str = "pi.doctor.swarm_resource_preflight.v1";
 const SWARM_DOCTOR_BUILD_SLOT_SCHEMA: &str = "pi.doctor.agent_mail_build_slots.v1";
 const SWARM_DOCTOR_CONTACTS_SCHEMA: &str = "pi.doctor.agent_mail_contacts.v1";
+const SWARM_DOCTOR_AGENT_MAIL_DEGRADED_SCHEMA: &str = "pi.doctor.agent_mail_degraded_mode.v1";
 const SWARM_DOCTOR_STALLED_REAPER_SCHEMA: &str = "pi.doctor.stalled_bead_reaper.v1";
 const SWARM_DOCTOR_NEXT_ACTION_SCHEMA: &str = "pi.doctor.communication_purgatory_next_action.v1";
 const SWARM_DOCTOR_OPERATIONS_DASHBOARD_SCHEMA: &str = "pi.doctor.swarm_operations_dashboard.v1";
@@ -1239,6 +1240,26 @@ fn check_swarm_stalled_bead_reaper(cwd: &Path, findings: &mut Vec<Finding>) {
         SWARM_STALE_IN_PROGRESS_HOURS,
     );
     findings.push(finding);
+}
+
+fn read_agent_mail_health(cwd: &Path) -> (Option<serde_json::Value>, Option<String>) {
+    if which_tool("am").is_none() {
+        return (None, Some("Agent Mail CLI not found".to_string()));
+    }
+
+    let project = cwd.display().to_string();
+    let args = [
+        "robot",
+        "health",
+        "--format",
+        "json",
+        "--project",
+        project.as_str(),
+    ];
+    match run_probe_json(SwarmProbeCommand::Am, &args, Some(cwd), "am robot health") {
+        Ok(value) => (Some(value), None),
+        Err(err) => (None, Some(err)),
+    }
 }
 
 fn read_agent_mail_agents_roster(cwd: &Path) -> (Option<serde_json::Value>, Option<String>) {
@@ -4238,6 +4259,17 @@ fn check_swarm_agent_mail(cwd: &Path, findings: &mut Vec<Finding>) {
 
     let agent_name = first_non_empty_env(&["AGENT_MAIL_AGENT", "AGENT_NAME"]);
     let project = cwd.display().to_string();
+    let (mail_health, mail_health_error) = read_agent_mail_health(cwd);
+    let (agent_roster, agent_roster_error) = read_agent_mail_agents_roster(cwd);
+    findings.push(classify_agent_mail_degraded_mode(
+        project.as_str(),
+        agent_name.as_deref(),
+        mail_health.as_ref(),
+        mail_health_error.as_deref(),
+        agent_roster.as_ref(),
+        agent_roster_error.as_deref(),
+        Utc::now(),
+    ));
 
     if let Some(agent) = agent_name.as_deref() {
         findings.push(Finding::pass(
@@ -4277,6 +4309,253 @@ fn check_swarm_agent_mail(cwd: &Path, findings: &mut Vec<Finding>) {
     );
 
     check_swarm_agent_mail_build_slots(cwd, agent_name.as_deref(), findings);
+}
+
+fn classify_agent_mail_degraded_mode(
+    project: &str,
+    agent_name: Option<&str>,
+    health: Option<&serde_json::Value>,
+    health_error: Option<&str>,
+    agent_roster: Option<&serde_json::Value>,
+    agent_roster_error: Option<&str>,
+    now: DateTime<Utc>,
+) -> Finding {
+    let probe = agent_mail_degraded_mode_probe(
+        project,
+        agent_name,
+        health,
+        health_error,
+        agent_roster,
+        agent_roster_error,
+        now,
+    );
+
+    if probe.degraded {
+        return Finding::warn(
+            CheckCategory::Swarm,
+            "Agent Mail degraded; Beads fallback required",
+        )
+        .with_detail(agent_mail_degraded_warning_detail(&probe.data))
+        .with_remediation(
+            "Use Beads status/comments as the soft lock and keep working; repair Agent Mail with `am doctor check` or archive reconstruction before trusting send/ack/reservation writes",
+        )
+        .with_data(probe.data);
+    }
+
+    Finding::pass(
+        CheckCategory::Swarm,
+        "Agent Mail degraded-mode fallback not needed",
+    )
+    .with_detail(agent_mail_ready_detail(&probe.data))
+    .with_data(probe.data)
+}
+
+struct AgentMailDegradedModeProbe {
+    data: serde_json::Value,
+    degraded: bool,
+}
+
+fn agent_mail_degraded_mode_probe(
+    project: &str,
+    agent_name: Option<&str>,
+    health: Option<&serde_json::Value>,
+    health_error: Option<&str>,
+    agent_roster: Option<&serde_json::Value>,
+    agent_roster_error: Option<&str>,
+    now: DateTime<Utc>,
+) -> AgentMailDegradedModeProbe {
+    let missing_schema_tables = health
+        .map(agent_mail_missing_schema_tables)
+        .unwrap_or_default();
+    let health_overall = health
+        .and_then(|value| value.get("overall"))
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string);
+    let health_level = health
+        .and_then(|value| value.get("health_level"))
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string);
+    let alert_summaries = health.map(agent_mail_alert_summaries).unwrap_or_default();
+    let actions = health.map(agent_mail_actions).unwrap_or_default();
+    let agents = agent_roster.map_or_else(SwarmDashboardAgentSummary::default, |value| {
+        swarm_dashboard_agent_summary(value, now)
+    });
+    let health_is_unhealthy = health_overall
+        .as_deref()
+        .is_some_and(|overall| !overall.eq_ignore_ascii_case("healthy"));
+    let degraded = health_error.is_some()
+        || health_is_unhealthy
+        || !missing_schema_tables.is_empty()
+        || agent_roster_error.is_some();
+    let blocked_operations = agent_mail_degraded_blocked_operations(&missing_schema_tables);
+    let fallback_commands = [
+        "br ready --json",
+        "br update <id> --status in_progress --assignee <agent>",
+        "br close <id> --reason \"Completed\"",
+        "br sync --flush-only",
+    ];
+    let data = serde_json::json!({
+        "schema": SWARM_DOCTOR_AGENT_MAIL_DEGRADED_SCHEMA,
+        "project": project,
+        "agent_name": agent_name,
+        "mode": if degraded { "beads_soft_lock_fallback" } else { "agent_mail_ready" },
+        "mutation_performed": false,
+        "mail_health": {
+            "reachable": health.is_some(),
+            "overall": health_overall,
+            "health_level": health_level,
+            "missing_schema_tables": missing_schema_tables,
+            "alerts": alert_summaries,
+            "actions": actions,
+            "error": health_error,
+        },
+        "read_paths": {
+            "health": health.is_some(),
+            "agents": agent_roster.is_some(),
+            "agents_error": agent_roster_error,
+        },
+        "active_agents": {
+            "total_seen": agents.total_seen,
+            "active_count": agents.active_count,
+            "stale_count": agents.stale_count,
+            "truncated_count": agents.truncated_count,
+            "rows": swarm_dashboard_agents_json(&agents.rows),
+        },
+        "write_paths": {
+            "expected_failed": !blocked_operations.is_empty(),
+            "blocked_operations": blocked_operations,
+        },
+        "fallback": {
+            "soft_lock": "beads",
+            "non_blocking": true,
+            "commands": fallback_commands,
+        },
+    });
+
+    AgentMailDegradedModeProbe { data, degraded }
+}
+
+fn agent_mail_degraded_blocked_operations(missing_schema_tables: &[String]) -> Vec<&'static str> {
+    if missing_schema_tables.is_empty() {
+        Vec::new()
+    } else {
+        vec![
+            "register_agent",
+            "send_message",
+            "acknowledge_message",
+            "file_reservation_paths",
+        ]
+    }
+}
+
+fn agent_mail_degraded_warning_detail(data: &serde_json::Value) -> String {
+    format!(
+        "health_reachable={}, overall={}, {}; active_agents={}, stale_agents={}; fallback=beads_soft_lock",
+        data.pointer("/mail_health/reachable")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        data.pointer("/mail_health/overall")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown"),
+        agent_mail_missing_schema_detail(data),
+        data.pointer("/active_agents/active_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        data.pointer("/active_agents/stale_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    )
+}
+
+fn agent_mail_ready_detail(data: &serde_json::Value) -> String {
+    format!(
+        "overall={}, active_agents={}, stale_agents={}",
+        data.pointer("/mail_health/overall")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown"),
+        data.pointer("/active_agents/active_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        data.pointer("/active_agents/stale_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    )
+}
+
+fn agent_mail_missing_schema_detail(data: &serde_json::Value) -> String {
+    data.pointer("/mail_health/missing_schema_tables")
+        .and_then(serde_json::Value::as_array)
+        .filter(|tables| !tables.is_empty())
+        .map_or_else(
+            || "missing_schema_tables=none".to_string(),
+            |tables| {
+                format!(
+                    "missing_schema_tables={}",
+                    tables
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            },
+        )
+}
+
+fn agent_mail_missing_schema_tables(value: &serde_json::Value) -> Vec<String> {
+    let mut tables = BTreeSet::new();
+    collect_agent_mail_schema_table_mentions(value, &mut tables);
+    tables.into_iter().collect()
+}
+
+fn collect_agent_mail_schema_table_mentions(
+    value: &serde_json::Value,
+    tables: &mut BTreeSet<String>,
+) {
+    match value {
+        serde_json::Value::String(text) => {
+            let lower = text.to_ascii_lowercase();
+            if lower.contains("schema") && lower.contains("missing") {
+                for table in ["projects", "agents", "messages", "message_recipients"] {
+                    if lower.contains(table) {
+                        tables.insert(table.to_string());
+                    }
+                }
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for child in map.values() {
+                collect_agent_mail_schema_table_mentions(child, tables);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for child in values {
+                collect_agent_mail_schema_table_mentions(child, tables);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn agent_mail_alert_summaries(value: &serde_json::Value) -> Vec<String> {
+    value
+        .get("_alerts")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|alert| alert.get("summary").and_then(serde_json::Value::as_str))
+        .map(|summary| truncate_chars(summary, 160))
+        .collect()
+}
+
+fn agent_mail_actions(value: &serde_json::Value) -> Vec<String> {
+    value
+        .get("_actions")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(|action| truncate_chars(action, 180))
+        .collect()
 }
 
 fn check_swarm_agent_mail_agent_probes(
