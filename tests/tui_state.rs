@@ -1028,7 +1028,7 @@ fn assistant_msg(text: &str) -> ConversationMessage {
 fn parse_scroll_percent(view: &str) -> Option<u32> {
     let marker = view
         .lines()
-        .find(|line| line.contains("PgUp/PgDn to scroll"))?;
+        .find(|line| line.contains("PgUp/PgDn") && line.contains("to scroll"))?;
     let open = marker.find('[')?;
     let close = marker[open + 1..].find('%')?;
     marker[open + 1..open + 1 + close].parse::<u32>().ok()
@@ -3289,7 +3289,9 @@ fn tui_state_slash_settings_quiet_startup_persists_and_overrides_global() {
     assert_after_contains(&harness, &step, "quietStartup:");
 
     // Navigate to quietStartup entry:
-    // Summary(0), Theme(1), SteeringMode(2), FollowUpMode(3), QuietStartup(4)
+    // Summary(0), Theme(1), SteeringMode(2), FollowUpMode(3),
+    // DefaultPermissive(4), QuietStartup(5)
+    press_down(&harness, &mut app);
     press_down(&harness, &mut app);
     press_down(&harness, &mut app);
     press_down(&harness, &mut app);
@@ -4004,7 +4006,17 @@ fn tui_state_slash_reload_sets_status_message() {
 #[test]
 fn tui_state_slash_thinking_sets_level() {
     let harness = TestHarness::new("tui_state_slash_thinking_sets_level");
-    let mut app = build_app(&harness, Vec::new());
+    let mut model_entry = dummy_model_entry();
+    model_entry.model.reasoning = true;
+    let mut app = build_app_with_models(
+        &harness,
+        Session::in_memory(),
+        Config::default(),
+        model_entry.clone(),
+        vec![model_entry.clone()],
+        vec![model_entry],
+        KeyBindings::new(),
+    );
     log_initial_state(&harness, &app);
 
     type_text(&harness, &mut app, "/thinking high");
@@ -4394,7 +4406,8 @@ fn tui_state_status_message_clears_on_any_keypress() {
     press_enter(&harness, &mut app);
 
     let step = type_text(&harness, &mut app, "x");
-    assert_after_not_contains(&harness, &step, "No matching models.");
+    assert_eq!(app.status_message(), None);
+    assert_after_contains(&harness, &step, "No matching models.");
 }
 
 #[test]
@@ -6804,7 +6817,9 @@ fn tui_state_collapse_changelog_settings_toggle_persists() {
     assert_after_contains(&harness, &step, "collapseChangelog:");
 
     // Navigate to CollapseChangelog entry:
-    // Summary(0), Theme(1), SteeringMode(2), FollowUpMode(3), QuietStartup(4), CollapseChangelog(5)
+    // Summary(0), Theme(1), SteeringMode(2), FollowUpMode(3), DefaultPermissive(4),
+    // QuietStartup(5), CollapseChangelog(6)
+    press_down(&harness, &mut app);
     press_down(&harness, &mut app);
     press_down(&harness, &mut app);
     press_down(&harness, &mut app);
@@ -6829,9 +6844,9 @@ fn tui_state_hide_thinking_block_settings_toggle_persists() {
     assert_after_contains(&harness, &step, "hideThinkingBlock:");
 
     // Navigate to HideThinkingBlock entry:
-    // Summary(0), Theme(1), SteeringMode(2), FollowUpMode(3), QuietStartup(4),
-    // CollapseChangelog(5), HideThinkingBlock(6)
-    for _ in 0..6 {
+    // Summary(0), Theme(1), SteeringMode(2), FollowUpMode(3), DefaultPermissive(4),
+    // QuietStartup(5), CollapseChangelog(6), HideThinkingBlock(7)
+    for _ in 0..7 {
         press_down(&harness, &mut app);
     }
     let step = press_enter(&harness, &mut app);
@@ -7092,10 +7107,10 @@ fn tui_state_collapse_changelog_toggle_off_then_on() {
         build_app_with_session_and_config(&harness, Vec::new(), Session::in_memory(), config);
     log_initial_state(&harness, &app);
 
-    // Open settings and navigate to CollapseChangelog (entry 5).
+    // Open settings and navigate to CollapseChangelog (entry 6).
     type_text(&harness, &mut app, "/settings");
     press_enter(&harness, &mut app);
-    for _ in 0..5 {
+    for _ in 0..6 {
         press_down(&harness, &mut app);
     }
     // Toggle off.
@@ -7108,7 +7123,7 @@ fn tui_state_collapse_changelog_toggle_off_then_on() {
     // Reopen and toggle back on.
     type_text(&harness, &mut app, "/settings");
     press_enter(&harness, &mut app);
-    for _ in 0..5 {
+    for _ in 0..6 {
         press_down(&harness, &mut app);
     }
     let step = press_enter(&harness, &mut app);
