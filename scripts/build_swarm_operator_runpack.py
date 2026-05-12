@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -49,11 +50,18 @@ BUDGET_DRIFT_SCHEMA = "pi.swarm.budget_drift.v1"
 AUTOPILOT_HANDOFF_SCHEMA = "pi.swarm.autopilot_handoff.v1"
 AUTOPILOT_E2E_SCHEMA = "pi.swarm.autopilot_e2e.v1"
 AUTOPILOT_E2E_EVENT_SCHEMA = "pi.swarm.autopilot_e2e.event.v1"
+AUTOPILOT_DECISION_GATE_SCHEMA = "pi.swarm.autopilot_decision_gate.v1"
+AUTOPILOT_DECISION_GATE_CONTRACT_SCHEMA = (
+    "pi.swarm.autopilot_decision_gate_contract.v1"
+)
 RUNPACK_CONTRACT_PATH = Path("docs/contracts/swarm-operator-runpack-contract.json")
 AUTOPILOT_INPUT_PACK_CONTRACT_PATH = Path(
     "docs/contracts/swarm-autopilot-input-pack-contract.json"
 )
 AUTOPILOT_PLAN_CONTRACT_PATH = Path("docs/contracts/swarm-autopilot-plan-contract.json")
+AUTOPILOT_DECISION_GATE_CONTRACT_PATH = Path(
+    "docs/contracts/swarm-autopilot-decision-gate-contract.json"
+)
 GOLDEN_REPORT_DIRECTORY = Path("tests/golden_corpus/swarm_operator_runpack")
 COMPLETE_RUNPACK_GOLDEN = "complete_runpack_projection.json"
 AUTOPILOT_PLAN_GOLDEN = "autopilot_plan_projection.json"
@@ -178,6 +186,39 @@ AUTOPILOT_E2E_REQUIRED_SCENARIOS = (
     "stale_in_progress_bead",
     "unrelated_dirty_worktree",
     "malformed_source_fail_closed",
+)
+AUTOPILOT_DECISION_GATE_CHILD_BEADS = (
+    "bd-h3uv0.1",
+    "bd-h3uv0.2",
+    "bd-h3uv0.3",
+    "bd-h3uv0.4",
+    "bd-h3uv0.5",
+    "bd-h3uv0.6",
+    "bd-h3uv0.7",
+)
+AUTOPILOT_DECISION_GATE_REQUIRED_CHECKS = (
+    "child_beads_closed",
+    "input_pack_contract",
+    "planner_contract",
+    "work_partitions",
+    "failure_actions",
+    "budget_drift",
+    "e2e_logging",
+    "runpack_handoff",
+    "safety_guards",
+    "pushed_commits",
+    "quality_gates",
+)
+AUTOPILOT_DECISION_GATE_REQUIRED_QUALITY_GATES = (
+    "py_compile",
+    "runpack_self_test",
+    "autopilot_e2e",
+    "json_contracts",
+    "cargo_fmt",
+    "cargo_check_all_targets_rch",
+    "cargo_clippy_all_targets_rch",
+    "staged_ubs",
+    "beads_ledger_reconcile",
 )
 WORK_PARTITION_INSPECT_SENTINEL = "<inspect-bead-before-reserving>"
 WORK_SURFACE_RULES: tuple[dict[str, Any], ...] = (
@@ -6057,6 +6098,506 @@ def write_autopilot_e2e_output(
     output_path.write_text(json_dumps(summary, pretty=True), encoding="utf-8")
 
 
+def repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def file_contains(path: Path, needle: str) -> bool:
+    try:
+        return needle in path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False
+
+
+def load_beads_issue_map(path: Path) -> dict[str, dict[str, Any]]:
+    issues: dict[str, dict[str, Any]] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError as exc:
+        raise RunpackError(f"missing Beads issue export: {path}") from exc
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            issue = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RunpackError(
+                f"malformed Beads issue export at {path}:{line_number}: {exc}"
+            ) from exc
+        if not isinstance(issue, dict):
+            continue
+        issue_id = issue.get("id")
+        if isinstance(issue_id, str):
+            issues[issue_id] = issue
+    return issues
+
+
+def git_value(command: list[str], cwd: Path) -> str | None:
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            timeout=8,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip()
+
+
+def parse_quality_gate_result(raw: str) -> dict[str, Any]:
+    head, separator, command = raw.partition(":")
+    if not separator:
+        raise RunpackError(
+            "quality gate result must use NAME=STATUS:COMMAND format"
+        )
+    gate_id, gate_separator, status = head.partition("=")
+    if not gate_separator:
+        raise RunpackError(
+            "quality gate result must use NAME=STATUS:COMMAND format"
+        )
+    gate_id = gate_id.strip()
+    status = status.strip()
+    command = command.strip()
+    if not gate_id or not status or not command:
+        raise RunpackError(
+            "quality gate result must include non-empty name, status, and command"
+        )
+    return {"id": gate_id, "status": status, "command": command}
+
+
+def parse_quality_gate_results(raw_results: list[str] | None) -> list[dict[str, Any]]:
+    return [parse_quality_gate_result(raw) for raw in raw_results or []]
+
+
+def gate_check(
+    check_id: str,
+    requirement: str,
+    passed: bool,
+    evidence: list[dict[str, Any]],
+    *,
+    issue: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": check_id,
+        "requirement": requirement,
+        "status": "pass" if passed else "fail",
+        "issue": issue,
+        "evidence": evidence,
+    }
+
+
+def build_autopilot_decision_gate_summary(
+    *,
+    generated_at: str,
+    quality_gate_results: list[dict[str, Any]],
+    issue_export_path: Path | None = None,
+    git_refs: dict[str, str | None] | None = None,
+) -> dict[str, Any]:
+    root = repo_root()
+    script_path = root / "scripts/build_swarm_operator_runpack.py"
+    readme_path = root / "README.md"
+    runbook_path = root / "docs/swarm-operations-runbook.md"
+    runpack_contract_path = root / RUNPACK_CONTRACT_PATH
+    input_contract_path = root / AUTOPILOT_INPUT_PACK_CONTRACT_PATH
+    plan_contract_path = root / AUTOPILOT_PLAN_CONTRACT_PATH
+    gate_contract_path = root / AUTOPILOT_DECISION_GATE_CONTRACT_PATH
+    issues = load_beads_issue_map(issue_export_path or (root / ".beads/issues.jsonl"))
+    checklist: list[dict[str, Any]] = []
+
+    child_states = {
+        issue_id: (issues.get(issue_id) or {}).get("status")
+        for issue_id in AUTOPILOT_DECISION_GATE_CHILD_BEADS
+    }
+    child_close_reasons = {
+        issue_id: (issues.get(issue_id) or {}).get("close_reason")
+        for issue_id in AUTOPILOT_DECISION_GATE_CHILD_BEADS
+    }
+    missing_children = [
+        issue_id
+        for issue_id, status in child_states.items()
+        if status != "closed"
+    ]
+    checklist.append(
+        gate_check(
+            "child_beads_closed",
+            "All implementation child Beads are closed before final epic signoff.",
+            not missing_children,
+            [
+                {
+                    "path": ".beads/issues.jsonl",
+                    "child_statuses": child_states,
+                    "close_reasons": child_close_reasons,
+                }
+            ],
+            issue=f"children not closed: {', '.join(missing_children)}"
+            if missing_children
+            else None,
+        )
+    )
+
+    checklist.append(
+        gate_check(
+            "input_pack_contract",
+            "Input pack schema, contract, CLI output, and docs are present.",
+            all(
+                (
+                    file_contains(script_path, AUTOPILOT_INPUT_PACK_SCHEMA),
+                    file_contains(script_path, "build_autopilot_input_pack"),
+                    file_contains(script_path, "assert_autopilot_input_pack_contract"),
+                    file_contains(input_contract_path, AUTOPILOT_INPUT_PACK_SCHEMA),
+                    file_contains(runbook_path, AUTOPILOT_INPUT_PACK_SCHEMA),
+                )
+            ),
+            [
+                {"path": "scripts/build_swarm_operator_runpack.py"},
+                {"path": str(AUTOPILOT_INPUT_PACK_CONTRACT_PATH)},
+                {"path": "docs/swarm-operations-runbook.md"},
+            ],
+        )
+    )
+    checklist.append(
+        gate_check(
+            "planner_contract",
+            "Dry-run planner schema, contract, CLI output, golden projection, and docs are present.",
+            all(
+                (
+                    file_contains(script_path, AUTOPILOT_PLAN_SCHEMA),
+                    file_contains(script_path, "build_autopilot_plan"),
+                    file_contains(script_path, "assert_autopilot_plan_contract"),
+                    file_contains(script_path, AUTOPILOT_PLAN_GOLDEN),
+                    file_contains(plan_contract_path, AUTOPILOT_PLAN_SCHEMA),
+                    file_contains(runbook_path, AUTOPILOT_PLAN_SCHEMA),
+                )
+            ),
+            [
+                {"path": "scripts/build_swarm_operator_runpack.py"},
+                {"path": str(AUTOPILOT_PLAN_CONTRACT_PATH)},
+                {"path": str(GOLDEN_REPORT_DIRECTORY / AUTOPILOT_PLAN_GOLDEN)},
+                {"path": "docs/swarm-operations-runbook.md"},
+            ],
+        )
+    )
+    checklist.append(
+        gate_check(
+            "work_partitions",
+            "Planner emits diagnostic work partition recommendations with contract and regression coverage.",
+            all(
+                (
+                    file_contains(script_path, "build_work_partition_recommendations"),
+                    file_contains(plan_contract_path, "required_partition_fields"),
+                    file_contains(script_path, "independent_plan"),
+                    file_contains(script_path, "overlapping_plan"),
+                    file_contains(runbook_path, "work_partitions"),
+                )
+            ),
+            [
+                {"path": "scripts/build_swarm_operator_runpack.py"},
+                {"path": str(AUTOPILOT_PLAN_CONTRACT_PATH)},
+                {"path": "docs/swarm-operations-runbook.md"},
+            ],
+        )
+    )
+    checklist.append(
+        gate_check(
+            "failure_actions",
+            "Planner emits bounded failure-action recommendations for RCH, Cargo, Agent Mail, Beads, and unknown operational failures.",
+            all(
+                (
+                    file_contains(script_path, "build_failure_action_recommendations"),
+                    file_contains(plan_contract_path, "required_failure_action_fields"),
+                    file_contains(plan_contract_path, "agent_mail"),
+                    file_contains(plan_contract_path, "unknown"),
+                    file_contains(runbook_path, "failure_actions"),
+                )
+            ),
+            [
+                {"path": "scripts/build_swarm_operator_runpack.py"},
+                {"path": str(AUTOPILOT_PLAN_CONTRACT_PATH)},
+                {"path": "docs/swarm-operations-runbook.md"},
+            ],
+        )
+    )
+    checklist.append(
+        gate_check(
+            "budget_drift",
+            "Live budget drift watcher is in the input pack and plan with hysteresis and action coverage.",
+            all(
+                (
+                    file_contains(script_path, BUDGET_DRIFT_SCHEMA),
+                    file_contains(script_path, "build_budget_drift_report"),
+                    file_contains(script_path, "replay_budget_drift_hysteresis"),
+                    file_contains(input_contract_path, "normalized_inputs.budget_drift"),
+                    file_contains(plan_contract_path, "required_budget_drift_fields"),
+                    file_contains(runbook_path, BUDGET_DRIFT_SCHEMA),
+                )
+            ),
+            [
+                {"path": "scripts/build_swarm_operator_runpack.py"},
+                {"path": str(AUTOPILOT_INPUT_PACK_CONTRACT_PATH)},
+                {"path": str(AUTOPILOT_PLAN_CONTRACT_PATH)},
+                {"path": "docs/swarm-operations-runbook.md"},
+            ],
+        )
+    )
+    checklist.append(
+        gate_check(
+            "e2e_logging",
+            "No-mock E2E evidence covers required scenarios and emits summary plus JSONL events.",
+            all(
+                (
+                    file_contains(script_path, AUTOPILOT_E2E_SCHEMA),
+                    file_contains(script_path, AUTOPILOT_E2E_EVENT_SCHEMA),
+                    all(
+                        file_contains(script_path, scenario)
+                        for scenario in AUTOPILOT_E2E_REQUIRED_SCENARIOS
+                    ),
+                    file_contains(script_path, "build_autopilot_e2e_summary"),
+                    file_contains(script_path, "assert_no_dangerous_runnable_commands"),
+                    file_contains(runbook_path, AUTOPILOT_E2E_SCHEMA),
+                )
+            ),
+            [
+                {"path": "scripts/build_swarm_operator_runpack.py"},
+                {
+                    "required_scenarios": list(AUTOPILOT_E2E_REQUIRED_SCENARIOS),
+                },
+                {"path": "docs/swarm-operations-runbook.md"},
+            ],
+        )
+    )
+    checklist.append(
+        gate_check(
+            "runpack_handoff",
+            "Runpack projects advisory autopilot input-pack and plan summaries without replacing source artifacts.",
+            all(
+                (
+                    file_contains(script_path, AUTOPILOT_HANDOFF_SCHEMA),
+                    file_contains(script_path, "build_autopilot_handoff_summary"),
+                    file_contains(script_path, "assert_autopilot_handoff_summary"),
+                    file_contains(runpack_contract_path, AUTOPILOT_HANDOFF_SCHEMA),
+                    file_contains(readme_path, AUTOPILOT_HANDOFF_SCHEMA),
+                    file_contains(runbook_path, AUTOPILOT_HANDOFF_SCHEMA),
+                )
+            ),
+            [
+                {"path": "scripts/build_swarm_operator_runpack.py"},
+                {"path": str(RUNPACK_CONTRACT_PATH)},
+                {"path": "README.md"},
+                {"path": "docs/swarm-operations-runbook.md"},
+            ],
+        )
+    )
+    forbidden_fragments = set(AUTOPILOT_PLAN_DANGEROUS_COMMAND_FRAGMENTS)
+    checklist.append(
+        gate_check(
+            "safety_guards",
+            "Autopilot remains dry-run and blocks destructive runnable commands.",
+            all(
+                (
+                    "git reset --hard" in forbidden_fragments,
+                    "git clean -fd" in forbidden_fragments,
+                    "rm -rf" in forbidden_fragments,
+                    file_contains(script_path, "dangerous_runnable_commands_blocked"),
+                    file_contains(script_path, "commands_require_operator_execution"),
+                    file_contains(script_path, "assert_autopilot_plan_commands_are_safe"),
+                    file_contains(runbook_path, "not a new source of truth"),
+                    file_contains(readme_path, "never mutates ownership"),
+                )
+            ),
+            [
+                {"forbidden_fragments": sorted(forbidden_fragments)},
+                {"path": "scripts/build_swarm_operator_runpack.py"},
+                {"path": "README.md"},
+                {"path": "docs/swarm-operations-runbook.md"},
+            ],
+        )
+    )
+
+    if git_refs is None:
+        head = git_value(["git", "rev-parse", "HEAD"], root)
+        origin_main = git_value(["git", "rev-parse", "origin/main"], root)
+        origin_master = git_value(["git", "rev-parse", "origin/master"], root)
+    else:
+        head = git_refs.get("head")
+        origin_main = git_refs.get("origin_main")
+        origin_master = git_refs.get("origin_master")
+    pushed = bool(head and head == origin_main == origin_master)
+    checklist.append(
+        gate_check(
+            "pushed_commits",
+            "Current HEAD is pushed to both origin/main and legacy origin/master.",
+            pushed,
+            [
+                {
+                    "head": head,
+                    "origin_main": origin_main,
+                    "origin_master": origin_master,
+                }
+            ],
+            issue=None if pushed else "HEAD is not synchronized with both remotes",
+        )
+    )
+
+    quality_by_id = {item["id"]: item for item in quality_gate_results}
+    missing_quality = [
+        gate_id
+        for gate_id in AUTOPILOT_DECISION_GATE_REQUIRED_QUALITY_GATES
+        if quality_by_id.get(gate_id, {}).get("status") != "pass"
+    ]
+    cargo_check_command = str(
+        quality_by_id.get("cargo_check_all_targets_rch", {}).get("command") or ""
+    )
+    cargo_clippy_command = str(
+        quality_by_id.get("cargo_clippy_all_targets_rch", {}).get("command") or ""
+    )
+    rch_proven = (
+        "rch exec --" in cargo_check_command
+        and "cargo check --all-targets" in cargo_check_command
+        and "rch exec --" in cargo_clippy_command
+        and "cargo clippy --all-targets -- -D warnings" in cargo_clippy_command
+    )
+    checklist.append(
+        gate_check(
+            "quality_gates",
+            "Required focused and broad quality gates passed, with heavy Cargo gates run through RCH.",
+            not missing_quality and rch_proven,
+            [
+                {
+                    "required_quality_gates": list(
+                        AUTOPILOT_DECISION_GATE_REQUIRED_QUALITY_GATES
+                    ),
+                    "provided_quality_gates": quality_gate_results,
+                    "heavy_cargo_uses_rch": rch_proven,
+                }
+            ],
+            issue=(
+                "missing or failing quality gates: " + ", ".join(missing_quality)
+                if missing_quality
+                else "heavy Cargo gates did not prove rch exec usage"
+                if not rch_proven
+                else None
+            ),
+        )
+    )
+
+    missing_checks = [
+        item["id"]
+        for item in checklist
+        if item.get("status") != "pass"
+    ]
+    final_gate_issue = issues.get("bd-h3uv0.8") or {}
+    parent_issue = issues.get("bd-h3uv0") or {}
+    status = "pass" if not missing_checks else "fail"
+    summary = {
+        "schema": AUTOPILOT_DECISION_GATE_SCHEMA,
+        "generated_at": generated_at,
+        "status": status,
+        "purpose": "prompt_to_artifact_autopilot_epic_close_gate_not_source_of_truth",
+        "parent_epic": {
+            "id": "bd-h3uv0",
+            "status": parent_issue.get("status"),
+            "title": parent_issue.get("title"),
+        },
+        "final_gate_bead": {
+            "id": "bd-h3uv0.8",
+            "status": final_gate_issue.get("status"),
+            "assignee": final_gate_issue.get("assignee"),
+        },
+        "required_checks": list(AUTOPILOT_DECISION_GATE_REQUIRED_CHECKS),
+        "checklist": checklist,
+        "missing_checks": missing_checks,
+        "follow_up_required": bool(missing_checks),
+        "follow_up_beads": [
+            {
+                "title": f"[AUTOPILOT-GATE] Fix missing {check_id}",
+                "type": "task",
+                "priority": 2,
+                "source_check": check_id,
+            }
+            for check_id in missing_checks
+        ],
+        "decision": (
+            "close_final_gate_and_parent_epic"
+            if status == "pass"
+            else "file_follow_up_beads_before_closing_epic"
+        ),
+        "epic_can_close_after_this_commit": status == "pass",
+    }
+    assert_autopilot_decision_gate_contract(summary)
+    return summary
+
+
+def assert_autopilot_decision_gate_contract(summary: dict[str, Any]) -> None:
+    root = repo_root()
+    contract_path = root / AUTOPILOT_DECISION_GATE_CONTRACT_PATH
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise AssertionError(f"missing autopilot decision gate contract: {contract_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"autopilot decision gate contract is malformed JSON: {contract_path}: {exc}"
+        ) from exc
+    assert contract.get("schema") == AUTOPILOT_DECISION_GATE_CONTRACT_SCHEMA
+    assert contract.get("decision_gate_schema") == AUTOPILOT_DECISION_GATE_SCHEMA
+    assert summary.get("schema") == contract["decision_gate_schema"]
+    assert summary.get("purpose") == contract.get("purpose")
+    assert summary.get("status") in set(contract.get("allowed_statuses", []))
+    for key in contract.get("required_top_level_keys", []):
+        assert key in summary, f"missing top-level decision-gate key: {key}"
+    checks = summary.get("checklist")
+    assert isinstance(checks, list) and checks
+    check_by_id = {
+        item.get("id"): item
+        for item in checks
+        if isinstance(item, dict)
+    }
+    missing_required = set(contract.get("required_check_ids", [])) - set(check_by_id)
+    assert not missing_required, (
+        f"decision gate missing required checks: {sorted(missing_required)}"
+    )
+    for check in checks:
+        assert isinstance(check, dict)
+        assert check.get("status") in set(contract.get("allowed_check_statuses", []))
+        assert check.get("requirement")
+        evidence = check.get("evidence")
+        assert isinstance(evidence, list) and evidence
+    quality = check_by_id.get("quality_gates", {})
+    evidence = quality.get("evidence", [])
+    assert isinstance(evidence, list) and evidence
+    payload = evidence[0]
+    assert isinstance(payload, dict)
+    required_quality = set(contract.get("required_quality_gate_ids", []))
+    provided = {
+        item.get("id")
+        for item in payload.get("provided_quality_gates", [])
+        if isinstance(item, dict) and item.get("status") == "pass"
+    }
+    if summary.get("status") == "pass":
+        assert set(summary.get("missing_checks", [])) == set()
+        assert provided.issuperset(required_quality)
+        assert payload.get("heavy_cargo_uses_rch") is True
+        assert summary.get("epic_can_close_after_this_commit") is True
+
+
+def write_autopilot_decision_gate_output(
+    args: argparse.Namespace,
+    summary: dict[str, Any],
+) -> None:
+    output_path = getattr(args, "out_autopilot_final_gate_json", None)
+    if output_path is None:
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        raise RunpackError(f"refusing to overwrite autopilot final gate: {output_path}")
+    output_path.write_text(json_dumps(summary, pretty=True), encoding="utf-8")
+
+
 def run_self_test() -> int:
     workspace = Path(tempfile.mkdtemp(prefix="pi_swarm_runpack_"))
     generated_at = "2026-05-09T09:00:00+00:00"
@@ -7327,6 +7868,112 @@ def run_self_test() -> int:
         assert autopilot_e2e["scenarios"]["malformed_source_fail_closed"][
             "selected_action"
         ] == "fail_closed"
+        final_gate_issues = [
+            {
+                "id": "bd-h3uv0",
+                "title": "Swarm autopilot and evidence-driven launch control",
+                "status": "open",
+            },
+            {
+                "id": "bd-h3uv0.8",
+                "title": "Finalize autopilot decision gate",
+                "status": "in_progress",
+                "assignee": "GoldenGlacier",
+            },
+        ]
+        final_gate_issues.extend(
+            {
+                "id": issue_id,
+                "status": "closed",
+                "close_reason": f"{issue_id} self-test evidence closed",
+            }
+            for issue_id in AUTOPILOT_DECISION_GATE_CHILD_BEADS
+        )
+        final_gate_issues_path = workspace / "final-gate-issues.jsonl"
+        final_gate_issues_path.write_text(
+            "\n".join(json_dumps(issue) for issue in final_gate_issues) + "\n",
+            encoding="utf-8",
+        )
+        final_gate_quality = [
+            {
+                "id": "py_compile",
+                "status": "pass",
+                "command": "python3 -m py_compile scripts/build_swarm_operator_runpack.py",
+            },
+            {
+                "id": "runpack_self_test",
+                "status": "pass",
+                "command": "python3 scripts/build_swarm_operator_runpack.py --self-test",
+            },
+            {
+                "id": "autopilot_e2e",
+                "status": "pass",
+                "command": (
+                    "python3 scripts/build_swarm_operator_runpack.py "
+                    "--run-autopilot-e2e"
+                ),
+            },
+            {
+                "id": "json_contracts",
+                "status": "pass",
+                "command": (
+                    "python3 -m json.tool "
+                    "docs/contracts/swarm-autopilot-decision-gate-contract.json"
+                ),
+            },
+            {
+                "id": "cargo_fmt",
+                "status": "pass",
+                "command": "cargo fmt --check",
+            },
+            {
+                "id": "cargo_check_all_targets_rch",
+                "status": "pass",
+                "command": (
+                    "CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/"
+                    "goldenglacier_bd_h3uv0_8/target "
+                    "TMPDIR=/data/tmp/pi_agent_rust_cargo/"
+                    "goldenglacier_bd_h3uv0_8/tmp "
+                    "rch exec -- cargo check --all-targets"
+                ),
+            },
+            {
+                "id": "cargo_clippy_all_targets_rch",
+                "status": "pass",
+                "command": (
+                    "CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/"
+                    "goldenglacier_bd_h3uv0_8/target "
+                    "TMPDIR=/data/tmp/pi_agent_rust_cargo/"
+                    "goldenglacier_bd_h3uv0_8/tmp "
+                    "rch exec -- cargo clippy --all-targets -- -D warnings"
+                ),
+            },
+            {
+                "id": "staged_ubs",
+                "status": "pass",
+                "command": "timeout 60s ubs --staged --only=rust .",
+            },
+            {
+                "id": "beads_ledger_reconcile",
+                "status": "pass",
+                "command": "./scripts/reconcile_beads_ledger.sh",
+            },
+        ]
+        final_gate = build_autopilot_decision_gate_summary(
+            generated_at=generated_at,
+            quality_gate_results=final_gate_quality,
+            issue_export_path=final_gate_issues_path,
+            git_refs={
+                "head": "finalgatefixture",
+                "origin_main": "finalgatefixture",
+                "origin_master": "finalgatefixture",
+            },
+        )
+        assert final_gate["schema"] == AUTOPILOT_DECISION_GATE_SCHEMA
+        assert final_gate["status"] == "pass"
+        assert final_gate["decision"] == "close_final_gate_and_parent_epic"
+        assert final_gate["follow_up_required"] is False
+        assert not final_gate["follow_up_beads"]
         no_tail_args = argparse.Namespace(**{**vars(args), "tail_latency_json": None})
         no_tail_runpack = build_runpack(no_tail_args)
         assert "tail_latency" not in no_tail_runpack
@@ -7434,7 +8081,8 @@ def run_self_test() -> int:
         else:
             raise AssertionError("schema-mismatched optional diagnostic should fail closed")
     except (AssertionError, RunpackError) as exc:
-        print(f"SELF-TEST FAIL: {exc}")
+        print(f"SELF-TEST FAIL: {type(exc).__name__}: {exc}")
+        traceback.print_exception(exc, file=sys.stdout)
         return 2
     print("SELF-TEST PASS")
     print(json_dumps({"workspace": str(workspace), "runpack": runpack}, pretty=True))
@@ -7595,6 +8243,28 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="print the no-mock autopilot E2E summary JSON",
     )
+    parser.add_argument(
+        "--run-autopilot-final-gate",
+        action="store_true",
+        help="build the final prompt-to-artifact autopilot decision gate",
+    )
+    parser.add_argument(
+        "--out-autopilot-final-gate-json",
+        type=Path,
+        help="write pi.swarm.autopilot_decision_gate.v1 JSON; refuses to overwrite",
+    )
+    parser.add_argument(
+        "--print-autopilot-final-gate",
+        action="store_true",
+        help="print the final autopilot decision gate JSON",
+    )
+    parser.add_argument(
+        "--quality-gate-result",
+        dest="quality_gate_results",
+        action="append",
+        default=[],
+        help="final-gate evidence in NAME=STATUS:COMMAND format",
+    )
     parser.add_argument("--generated-at", help="override generated timestamp for deterministic tests")
     parser.add_argument("--stale-after-hours", type=int, default=DEFAULT_STALE_AFTER_HOURS)
     parser.add_argument("--max-items", type=int, default=DEFAULT_MAX_ITEMS)
@@ -7626,7 +8296,27 @@ def main() -> int:
     if args.capture_timeout_seconds <= 0:
         print("ERROR: --capture-timeout-seconds must be positive", file=sys.stderr)
         return 2
+    final_gate_options_used = (
+        args.out_autopilot_final_gate_json
+        or args.print_autopilot_final_gate
+        or args.quality_gate_results
+    )
+    if final_gate_options_used and not args.run_autopilot_final_gate:
+        print("ERROR: final-gate options require --run-autopilot-final-gate", file=sys.stderr)
+        return 2
     try:
+        if args.run_autopilot_final_gate:
+            summary = build_autopilot_decision_gate_summary(
+                generated_at=args.generated_at or utc_now_iso(),
+                quality_gate_results=parse_quality_gate_results(args.quality_gate_results),
+            )
+            write_autopilot_decision_gate_output(args, summary)
+            if (
+                args.print_autopilot_final_gate
+                or args.out_autopilot_final_gate_json is None
+            ):
+                print(json_dumps(summary, pretty=True))
+            return 0
         if args.run_autopilot_e2e:
             summary = build_autopilot_e2e_summary(
                 output_dir=args.capture_dir,

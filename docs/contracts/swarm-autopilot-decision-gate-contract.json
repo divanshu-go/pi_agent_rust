@@ -1,0 +1,78 @@
+{
+  "schema": "pi.swarm.autopilot_decision_gate_contract.v1",
+  "decision_gate_schema": "pi.swarm.autopilot_decision_gate.v1",
+  "purpose": "prompt_to_artifact_autopilot_epic_close_gate_not_source_of_truth",
+  "allowed_statuses": [
+    "pass",
+    "fail"
+  ],
+  "allowed_check_statuses": [
+    "pass",
+    "fail"
+  ],
+  "allowed_decisions": [
+    "close_final_gate_and_parent_epic",
+    "file_follow_up_beads_before_closing_epic"
+  ],
+  "required_top_level_keys": [
+    "schema",
+    "generated_at",
+    "status",
+    "purpose",
+    "parent_epic",
+    "final_gate_bead",
+    "required_checks",
+    "checklist",
+    "missing_checks",
+    "follow_up_required",
+    "follow_up_beads",
+    "decision",
+    "epic_can_close_after_this_commit"
+  ],
+  "required_check_ids": [
+    "child_beads_closed",
+    "input_pack_contract",
+    "planner_contract",
+    "work_partitions",
+    "failure_actions",
+    "budget_drift",
+    "e2e_logging",
+    "runpack_handoff",
+    "safety_guards",
+    "pushed_commits",
+    "quality_gates"
+  ],
+  "required_quality_gate_ids": [
+    "py_compile",
+    "runpack_self_test",
+    "autopilot_e2e",
+    "json_contracts",
+    "cargo_fmt",
+    "cargo_check_all_targets_rch",
+    "cargo_clippy_all_targets_rch",
+    "staged_ubs",
+    "beads_ledger_reconcile"
+  ],
+  "requirements": [
+    {
+      "id": "child_beads_closed",
+      "description": "All implementation child beads are closed before final epic signoff."
+    },
+    {
+      "id": "prompt_to_artifact_coverage",
+      "description": "The checklist covers the input pack, planner, work partitions, failure actions, budget drift watcher, no-mock E2E logging, runpack handoff, safety guards, pushed commits, and quality gates."
+    },
+    {
+      "id": "safe_close_behavior",
+      "description": "A passing gate may close the final gate and parent epic. A failing gate must emit follow-up Beads instead of optimistic closeout."
+    },
+    {
+      "id": "rch_heavy_gates",
+      "description": "Heavy Cargo quality evidence must prove cargo check and cargo clippy were run through rch exec."
+    },
+    {
+      "id": "not_source_of_truth",
+      "description": "The decision gate is a closeout checklist over existing evidence. It does not replace Beads, Agent Mail, RCH, git, Doctor, or source artifacts."
+    }
+  ]
+}

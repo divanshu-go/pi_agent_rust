@@ -1915,12 +1915,18 @@ still require the claim-integrity gates below to pass.
 
 The same runpack command can emit a dry-run swarm autopilot input pack and plan
 beside the handoff bundle. When those companion artifacts are requested, the
-runpack JSON/Markdown includes an `autopilot_handoff` summary with
+runpack JSON/Markdown includes an `autopilot_handoff` summary
+(`pi.swarm.autopilot_handoff.v1`) with
 `pi.swarm.autopilot_input_pack.v1` and `pi.swarm.autopilot_plan.v1` schema
 references, selected advisory action, artifact paths, and source provenance.
 The autopilot never mutates ownership or replaces Doctor, Beads, Agent Mail,
 RCH, git, or the source artifacts; it only turns those inputs into reproducible
 operator next-action guidance.
+
+The autopilot closeout gate emits `pi.swarm.autopilot_decision_gate.v1` to audit
+the shipped input pack, planner, work partitions, failure actions, budget drift
+watcher, E2E/logging evidence, runpack handoff, safety guards, pushed commits,
+and quality gates before the swarm-autopilot epic is closed.
 
 For the full launch, throttling, recovery, and handoff workflow for large
 multi-agent runs, see [docs/swarm-operations-runbook.md](docs/swarm-operations-runbook.md).

@@ -1,0 +1,307 @@
+{
+  "checklist": [
+    {
+      "evidence": [
+        {
+          "child_statuses": {
+            "bd-h3uv0.1": "closed",
+            "bd-h3uv0.2": "closed",
+            "bd-h3uv0.3": "closed",
+            "bd-h3uv0.4": "closed",
+            "bd-h3uv0.5": "closed",
+            "bd-h3uv0.6": "closed",
+            "bd-h3uv0.7": "closed"
+          },
+          "close_reasons": {
+            "bd-h3uv0.1": "Completed: defined pi.swarm.autopilot_input_pack.v1 with source-status contract, Agent Mail/RCH/git/Beads normalization, self-test coverage, runbook wiring, and RCH-backed validation",
+            "bd-h3uv0.2": "Completed: implemented pi.swarm.autopilot_plan.v1 dry-run planner with contract, CLI output, golden fixture, and degraded/healthy/empty/stale/RCH safety self-test coverage",
+            "bd-h3uv0.3": "Completed: added diagnostic work_partitions planner output with reservation globs, avoid surfaces, confidence/caveats, contracts, runbook docs, fixture coverage, and temp Beads smoke coverage",
+            "bd-h3uv0.4": "Completed: added failure_actions catalog with stable operational IDs, safe commands, escalation text, redacted unknown excerpts, contracts, runbook docs, golden projection, and self-test coverage",
+            "bd-h3uv0.5": "Completed: added pi.swarm.budget_drift.v1 watcher with live budget signals, adjusted fanout recommendations, autopilot plan action, contracts, runbook docs, golden projection, and self-test coverage for CPU, memory, tmpdir, RCH queue, recovered state, and hysteresis",
+            "bd-h3uv0.6": "Completed: added no-mock autopilot E2E JSON/JSONL harness with real temp Beads/git probes, degraded RCH/Mail fixtures, fail-closed malformed-source scenario, safe-command assertions, runbook validation docs, and self-test coverage",
+            "bd-h3uv0.7": "Completed: projected dry-run autopilot input-pack and plan artifacts into operator runpack JSON/Markdown via pi.swarm.autopilot_handoff.v1, updated contract, README, runbook examples, and self-test coverage while preserving source-of-truth wording"
+          },
+          "path": ".beads/issues.jsonl"
+        }
+      ],
+      "id": "child_beads_closed",
+      "issue": null,
+      "requirement": "All implementation child Beads are closed before final epic signoff.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "scripts/build_swarm_operator_runpack.py"
+        },
+        {
+          "path": "docs/contracts/swarm-autopilot-input-pack-contract.json"
+        },
+        {
+          "path": "docs/swarm-operations-runbook.md"
+        }
+      ],
+      "id": "input_pack_contract",
+      "issue": null,
+      "requirement": "Input pack schema, contract, CLI output, and docs are present.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "scripts/build_swarm_operator_runpack.py"
+        },
+        {
+          "path": "docs/contracts/swarm-autopilot-plan-contract.json"
+        },
+        {
+          "path": "tests/golden_corpus/swarm_operator_runpack/autopilot_plan_projection.json"
+        },
+        {
+          "path": "docs/swarm-operations-runbook.md"
+        }
+      ],
+      "id": "planner_contract",
+      "issue": null,
+      "requirement": "Dry-run planner schema, contract, CLI output, golden projection, and docs are present.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "scripts/build_swarm_operator_runpack.py"
+        },
+        {
+          "path": "docs/contracts/swarm-autopilot-plan-contract.json"
+        },
+        {
+          "path": "docs/swarm-operations-runbook.md"
+        }
+      ],
+      "id": "work_partitions",
+      "issue": null,
+      "requirement": "Planner emits diagnostic work partition recommendations with contract and regression coverage.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "scripts/build_swarm_operator_runpack.py"
+        },
+        {
+          "path": "docs/contracts/swarm-autopilot-plan-contract.json"
+        },
+        {
+          "path": "docs/swarm-operations-runbook.md"
+        }
+      ],
+      "id": "failure_actions",
+      "issue": null,
+      "requirement": "Planner emits bounded failure-action recommendations for RCH, Cargo, Agent Mail, Beads, and unknown operational failures.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "scripts/build_swarm_operator_runpack.py"
+        },
+        {
+          "path": "docs/contracts/swarm-autopilot-input-pack-contract.json"
+        },
+        {
+          "path": "docs/contracts/swarm-autopilot-plan-contract.json"
+        },
+        {
+          "path": "docs/swarm-operations-runbook.md"
+        }
+      ],
+      "id": "budget_drift",
+      "issue": null,
+      "requirement": "Live budget drift watcher is in the input pack and plan with hysteresis and action coverage.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "scripts/build_swarm_operator_runpack.py"
+        },
+        {
+          "required_scenarios": [
+            "healthy_ready_claim",
+            "empty_ready_queue",
+            "degraded_agent_mail_soft_lock",
+            "saturated_rch_queue",
+            "stale_in_progress_bead",
+            "unrelated_dirty_worktree",
+            "malformed_source_fail_closed"
+          ]
+        },
+        {
+          "path": "docs/swarm-operations-runbook.md"
+        }
+      ],
+      "id": "e2e_logging",
+      "issue": null,
+      "requirement": "No-mock E2E evidence covers required scenarios and emits summary plus JSONL events.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "path": "scripts/build_swarm_operator_runpack.py"
+        },
+        {
+          "path": "docs/contracts/swarm-operator-runpack-contract.json"
+        },
+        {
+          "path": "README.md"
+        },
+        {
+          "path": "docs/swarm-operations-runbook.md"
+        }
+      ],
+      "id": "runpack_handoff",
+      "issue": null,
+      "requirement": "Runpack projects advisory autopilot input-pack and plan summaries without replacing source artifacts.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "forbidden_fragments": [
+            "git clean -fd",
+            "git reset --hard",
+            "rm -rf"
+          ]
+        },
+        {
+          "path": "scripts/build_swarm_operator_runpack.py"
+        },
+        {
+          "path": "README.md"
+        },
+        {
+          "path": "docs/swarm-operations-runbook.md"
+        }
+      ],
+      "id": "safety_guards",
+      "issue": null,
+      "requirement": "Autopilot remains dry-run and blocks destructive runnable commands.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "head": "773719f36da734458f3ea8ac80a4a5374e25bdf2",
+          "origin_main": "773719f36da734458f3ea8ac80a4a5374e25bdf2",
+          "origin_master": "773719f36da734458f3ea8ac80a4a5374e25bdf2"
+        }
+      ],
+      "id": "pushed_commits",
+      "issue": null,
+      "requirement": "Current HEAD is pushed to both origin/main and legacy origin/master.",
+      "status": "pass"
+    },
+    {
+      "evidence": [
+        {
+          "heavy_cargo_uses_rch": true,
+          "provided_quality_gates": [
+            {
+              "command": "python3 -m py_compile scripts/build_swarm_operator_runpack.py scripts/build_completion_audit.py",
+              "id": "py_compile",
+              "status": "pass"
+            },
+            {
+              "command": "python3 scripts/build_swarm_operator_runpack.py --self-test",
+              "id": "runpack_self_test",
+              "status": "pass"
+            },
+            {
+              "command": "python3 scripts/build_swarm_operator_runpack.py --run-autopilot-e2e --capture-dir /data/tmp/pi_swarm_final_gate/GoldenGlacier.bd-h3uv0.8.aRkqOe/autopilot-e2e-work --out-autopilot-e2e-json /data/tmp/pi_swarm_final_gate/GoldenGlacier.bd-h3uv0.8.aRkqOe/autopilot-e2e-summary.json --out-autopilot-e2e-events-jsonl /data/tmp/pi_swarm_final_gate/GoldenGlacier.bd-h3uv0.8.aRkqOe/autopilot-e2e-events.jsonl",
+              "id": "autopilot_e2e",
+              "status": "pass"
+            },
+            {
+              "command": "python3 -m json.tool docs/contracts/swarm-operator-runpack-contract.json docs/contracts/swarm-autopilot-input-pack-contract.json docs/contracts/swarm-autopilot-plan-contract.json docs/contracts/swarm-autopilot-decision-gate-contract.json",
+              "id": "json_contracts",
+              "status": "pass"
+            },
+            {
+              "command": "cargo fmt --check",
+              "id": "cargo_fmt",
+              "status": "pass"
+            },
+            {
+              "command": "CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/GoldenGlacier/target TMPDIR=/data/tmp/pi_agent_rust_cargo/GoldenGlacier/tmp rch exec -- cargo check --all-targets",
+              "id": "cargo_check_all_targets_rch",
+              "status": "pass"
+            },
+            {
+              "command": "CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/GoldenGlacier/target TMPDIR=/data/tmp/pi_agent_rust_cargo/GoldenGlacier/tmp rch exec -- cargo clippy --all-targets -- -D warnings",
+              "id": "cargo_clippy_all_targets_rch",
+              "status": "pass"
+            },
+            {
+              "command": "timeout 60s ubs --staged --only=rust .",
+              "id": "staged_ubs",
+              "status": "pass"
+            },
+            {
+              "command": "./scripts/reconcile_beads_ledger.sh",
+              "id": "beads_ledger_reconcile",
+              "status": "pass"
+            }
+          ],
+          "required_quality_gates": [
+            "py_compile",
+            "runpack_self_test",
+            "autopilot_e2e",
+            "json_contracts",
+            "cargo_fmt",
+            "cargo_check_all_targets_rch",
+            "cargo_clippy_all_targets_rch",
+            "staged_ubs",
+            "beads_ledger_reconcile"
+          ]
+        }
+      ],
+      "id": "quality_gates",
+      "issue": null,
+      "requirement": "Required focused and broad quality gates passed, with heavy Cargo gates run through RCH.",
+      "status": "pass"
+    }
+  ],
+  "decision": "close_final_gate_and_parent_epic",
+  "epic_can_close_after_this_commit": true,
+  "final_gate_bead": {
+    "assignee": "GoldenGlacier",
+    "id": "bd-h3uv0.8",
+    "status": "closed"
+  },
+  "follow_up_beads": [],
+  "follow_up_required": false,
+  "generated_at": "2026-05-12T21:57:09.687574+00:00",
+  "missing_checks": [],
+  "parent_epic": {
+    "id": "bd-h3uv0",
+    "status": "closed",
+    "title": "[IDEA-WIZARD] Swarm autopilot and evidence-driven launch control"
+  },
+  "purpose": "prompt_to_artifact_autopilot_epic_close_gate_not_source_of_truth",
+  "required_checks": [
+    "child_beads_closed",
+    "input_pack_contract",
+    "planner_contract",
+    "work_partitions",
+    "failure_actions",
+    "budget_drift",
+    "e2e_logging",
+    "runpack_handoff",
+    "safety_guards",
+    "pushed_commits",
+    "quality_gates"
+  ],
+  "schema": "pi.swarm.autopilot_decision_gate.v1",
+  "status": "pass"
+}

@@ -210,6 +210,27 @@ The plan also includes `work_partitions` for ready Beads. Those entries recommen
 The input pack and plan also carry `budget_drift` evidence with schema `pi.swarm.budget_drift.v1`. It compares the last accepted swarm resource preflight profile with live cgroup, memory, scratch-path, RCH queue, and active-owner observations. Status `stable` keeps the current ceiling, `degraded` recommends reduced fanout with hysteresis, and `deny_new_work` recommends admitting no new agents or heavyweight RCH verification until the live signals recover.
 The plan also includes `failure_actions` for common operational blockers. Those entries use stable catalog IDs for RCH artifact retrieval, local Cargo target/TMPDIR pressure, remote compiler failures, Agent Mail schema/read-only degradation, Beads JSONL drift, stale Beads ownership, and unknown operational failures. Unknown entries fail closed with a redacted raw excerpt and safe inspection commands instead of guessing a root cause.
 The no-mock autopilot E2E harness emits `pi.swarm.autopilot_e2e.v1` plus `pi.swarm.autopilot_e2e.event.v1` JSONL events. It uses temp Beads and temp git workspaces where safe, fixture-captured degraded Agent Mail and RCH inputs where live mutation would be unsafe, and verifies healthy claim, empty queue, Beads soft-lock fallback, saturated RCH, stale bead review, unrelated dirty worktree, and malformed-source fail-closed scenarios. This is operator admission evidence only; it is not a release speed, drop-in, or benchmark claim.
+The final closeout gate emits `pi.swarm.autopilot_decision_gate.v1`, governed by `docs/contracts/swarm-autopilot-decision-gate-contract.json`. It compares the shipped input pack, planner, work partitions, failure-action catalog, budget drift watcher, E2E/logging evidence, runpack handoff, safety guards, pushed commits, and quality gates to the prompt-to-artifact checklist. A failed gate emits `follow_up_beads` and `decision=file_follow_up_beads_before_closing_epic`; a passing gate is still only closeout evidence over Beads, git, RCH, Doctor, Agent Mail, and source artifacts, not a new source of truth.
+
+When closing the autopilot epic, collect the actual command outcomes and pass them to the final gate:
+
+```bash
+final_gate_dir="/data/tmp/pi_swarm_autopilot_final_gate/${AGENT_NAME:-agent}-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$final_gate_dir"
+
+python3 scripts/build_swarm_operator_runpack.py \
+  --run-autopilot-final-gate \
+  --out-autopilot-final-gate-json "$final_gate_dir/summary.json" \
+  --quality-gate-result "py_compile=pass:python3 -m py_compile scripts/build_swarm_operator_runpack.py" \
+  --quality-gate-result "runpack_self_test=pass:python3 scripts/build_swarm_operator_runpack.py --self-test" \
+  --quality-gate-result "autopilot_e2e=pass:python3 scripts/build_swarm_operator_runpack.py --run-autopilot-e2e" \
+  --quality-gate-result "json_contracts=pass:python3 -m json.tool docs/contracts/swarm-autopilot-decision-gate-contract.json" \
+  --quality-gate-result "cargo_fmt=pass:cargo fmt --check" \
+  --quality-gate-result "cargo_check_all_targets_rch=pass:CARGO_TARGET_DIR=$CARGO_TARGET_DIR TMPDIR=$TMPDIR rch exec -- cargo check --all-targets" \
+  --quality-gate-result "cargo_clippy_all_targets_rch=pass:CARGO_TARGET_DIR=$CARGO_TARGET_DIR TMPDIR=$TMPDIR rch exec -- cargo clippy --all-targets -- -D warnings" \
+  --quality-gate-result "staged_ubs=pass:timeout 60s ubs --staged --only=rust ." \
+  --quality-gate-result "beads_ledger_reconcile=pass:./scripts/reconcile_beads_ledger.sh"
+```
 
 ## Completion Checklist
 
@@ -250,6 +271,7 @@ python3 scripts/build_swarm_operator_runpack.py \
 python3 -m json.tool docs/contracts/swarm-operator-runpack-contract.json >/dev/null
 python3 -m json.tool docs/contracts/swarm-autopilot-input-pack-contract.json >/dev/null
 python3 -m json.tool docs/contracts/swarm-autopilot-plan-contract.json >/dev/null
+python3 -m json.tool docs/contracts/swarm-autopilot-decision-gate-contract.json >/dev/null
 cargo fmt --check
 git diff --check
 ./scripts/reconcile_beads_ledger.sh
@@ -507,6 +529,34 @@ Autopilot no-mock E2E evidence:
 }
 ```
 
+Autopilot final decision-gate evidence:
+
+```json
+{
+  "schema": "pi.swarm.autopilot_decision_gate.v1",
+  "purpose": "prompt_to_artifact_autopilot_epic_close_gate_not_source_of_truth",
+  "status": "pass",
+  "required_checks": [
+    "child_beads_closed",
+    "input_pack_contract",
+    "planner_contract",
+    "work_partitions",
+    "failure_actions",
+    "budget_drift",
+    "e2e_logging",
+    "runpack_handoff",
+    "safety_guards",
+    "pushed_commits",
+    "quality_gates"
+  ],
+  "missing_checks": [],
+  "follow_up_required": false,
+  "follow_up_beads": [],
+  "decision": "close_final_gate_and_parent_epic",
+  "epic_can_close_after_this_commit": true
+}
+```
+
 Swarm flight-recorder report evidence:
 
 ```json
@@ -534,6 +584,7 @@ python3 scripts/build_swarm_operator_runpack.py \
 python3 -m json.tool docs/contracts/swarm-operator-runpack-contract.json >/dev/null
 python3 -m json.tool docs/contracts/swarm-autopilot-input-pack-contract.json >/dev/null
 python3 -m json.tool docs/contracts/swarm-autopilot-plan-contract.json >/dev/null
+python3 -m json.tool docs/contracts/swarm-autopilot-decision-gate-contract.json >/dev/null
 cargo fmt --check
 git diff --check
 ./scripts/reconcile_beads_ledger.sh
