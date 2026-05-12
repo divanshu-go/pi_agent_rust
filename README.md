@@ -1913,6 +1913,9 @@ RPC swarm E2E evidence, and RCH artifact-sync preflight. The dashboard is
 operator evidence only; release-facing speed, drop-in, or performance claims
 still require the claim-integrity gates below to pass.
 
+For the full launch, throttling, recovery, and handoff workflow for large
+multi-agent runs, see [docs/swarm-operations-runbook.md](docs/swarm-operations-runbook.md).
+
 ### Claim-Integrity Gates for Performance Reporting
 
 Pi's perf pipeline includes strict evidence checks so global speed claims cannot be based on partial or stale data.
