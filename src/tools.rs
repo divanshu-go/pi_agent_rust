@@ -6896,94 +6896,262 @@ mod tests {
             .unwrap_or("")
     }
 
+    async fn assert_read_cache_hit_and_stale(tmp: &Path) {
+        let note = tmp.join("note.txt");
+        std::fs::write(&note, "alpha\n").expect("write note");
+
+        let read_tool = ReadTool::new(tmp);
+        let read_input = serde_json::json!({ "path": "note.txt" });
+        let first = read_tool
+            .execute("read-1", read_input.clone(), None)
+            .await
+            .expect("first read");
+        assert!(first_text(&first).contains("alpha"));
+
+        let hits_before = tool_output_cache_stats_for_tests().hits;
+        let second = read_tool
+            .execute("read-2", read_input.clone(), None)
+            .await
+            .expect("cached read");
+        assert_eq!(first_text(&first), first_text(&second));
+        assert!(tool_output_cache_stats_for_tests().hits > hits_before);
+
+        let invalidations_before = tool_output_cache_stats_for_tests().invalidations;
+        std::fs::write(&note, "beta\n").expect("rewrite note");
+        let third = read_tool
+            .execute("read-3", read_input.clone(), None)
+            .await
+            .expect("invalidated read");
+        assert!(first_text(&third).contains("beta"));
+        assert!(!first_text(&third).contains("alpha"));
+        assert!(tool_output_cache_stats_for_tests().invalidations > invalidations_before);
+    }
+
+    async fn assert_ls_cache_hit_and_stale(tmp: &Path) {
+        let ls_tool = LsTool::new(tmp);
+        let ls_input = serde_json::json!({ "path": "." });
+        let ls_first = ls_tool
+            .execute("ls-1", ls_input.clone(), None)
+            .await
+            .expect("first ls");
+        assert!(first_text(&ls_first).contains("note.txt"));
+
+        let hits_before = tool_output_cache_stats_for_tests().hits;
+        let ls_second = ls_tool
+            .execute("ls-2", ls_input.clone(), None)
+            .await
+            .expect("cached ls");
+        assert_eq!(first_text(&ls_first), first_text(&ls_second));
+        assert!(tool_output_cache_stats_for_tests().hits > hits_before);
+
+        let invalidations_before = tool_output_cache_stats_for_tests().invalidations;
+        std::fs::write(tmp.join("new.txt"), "new\n").expect("write new file");
+        let ls_third = ls_tool
+            .execute("ls-3", ls_input.clone(), None)
+            .await
+            .expect("invalidated ls");
+        assert!(first_text(&ls_third).contains("new.txt"));
+        assert!(tool_output_cache_stats_for_tests().invalidations > invalidations_before);
+    }
+
+    async fn assert_grep_cache_hit_and_stale_when_available(tmp: &Path) {
+        if find_rg_binary().is_none() {
+            return;
+        }
+
+        let grep_tool = GrepTool::new(tmp);
+        let grep_input = serde_json::json!({ "pattern": "needle", "path": "." });
+        std::fs::write(tmp.join("a.txt"), "needle\n").expect("write grep file");
+
+        let grep_first = grep_tool
+            .execute("grep-1", grep_input.clone(), None)
+            .await
+            .expect("first grep");
+        assert!(first_text(&grep_first).contains("a.txt"));
+
+        let hits_before = tool_output_cache_stats_for_tests().hits;
+        let grep_second = grep_tool
+            .execute("grep-2", grep_input.clone(), None)
+            .await
+            .expect("cached grep");
+        assert_eq!(first_text(&grep_first), first_text(&grep_second));
+        assert!(tool_output_cache_stats_for_tests().hits > hits_before);
+
+        let invalidations_before = tool_output_cache_stats_for_tests().invalidations;
+        std::fs::write(tmp.join("b.txt"), "needle\n").expect("write new match");
+        let grep_third = grep_tool
+            .execute("grep-3", grep_input.clone(), None)
+            .await
+            .expect("invalidated grep");
+        assert!(first_text(&grep_third).contains("b.txt"));
+        assert!(tool_output_cache_stats_for_tests().invalidations > invalidations_before);
+    }
+
+    async fn assert_find_cache_hit_and_stale_when_available(tmp: &Path) {
+        if find_fd_binary().is_none() {
+            return;
+        }
+
+        let find_tool = FindTool::new(tmp);
+        let find_input = serde_json::json!({ "pattern": "*find*.txt", "path": "." });
+        std::fs::write(tmp.join("find-a.txt"), "find\n").expect("write first find file");
+
+        let find_first = find_tool
+            .execute("find-1", find_input.clone(), None)
+            .await
+            .expect("first find");
+        assert!(first_text(&find_first).contains("find-a.txt"));
+
+        let hits_before = tool_output_cache_stats_for_tests().hits;
+        let find_second = find_tool
+            .execute("find-2", find_input.clone(), None)
+            .await
+            .expect("cached find");
+        assert_eq!(first_text(&find_first), first_text(&find_second));
+        assert!(tool_output_cache_stats_for_tests().hits > hits_before);
+
+        let invalidations_before = tool_output_cache_stats_for_tests().invalidations;
+        std::fs::write(tmp.join("find-b.txt"), "find\n").expect("write second find file");
+        let find_third = find_tool
+            .execute("find-3", find_input.clone(), None)
+            .await
+            .expect("invalidated find");
+        assert!(first_text(&find_third).contains("find-b.txt"));
+        assert!(tool_output_cache_stats_for_tests().invalidations > invalidations_before);
+    }
+
+    async fn assert_side_effect_tools_remain_uncached(tmp: &Path) {
+        let side_effect_stats_before = tool_output_cache_stats_for_tests();
+        let write_tool = WriteTool::new(tmp);
+        write_tool
+            .execute(
+                "write-1",
+                serde_json::json!({
+                    "path": "side-effect.txt",
+                    "content": "one\n"
+                }),
+                None,
+            )
+            .await
+            .expect("write side-effect file");
+
+        let edit_tool = EditTool::new(tmp);
+        edit_tool
+            .execute(
+                "edit-1",
+                serde_json::json!({
+                    "path": "side-effect.txt",
+                    "oldText": "one",
+                    "newText": "two"
+                }),
+                None,
+            )
+            .await
+            .expect("edit side-effect file");
+
+        let bash_tool = BashTool::new(tmp);
+        bash_tool
+            .execute(
+                "bash-1",
+                serde_json::json!({
+                    "command": "printf 'cache-uncached\\n'",
+                    "timeout": 5
+                }),
+                None,
+            )
+            .await
+            .expect("run uncached bash");
+
+        assert_eq!(
+            tool_output_cache_stats_for_tests(),
+            side_effect_stats_before,
+            "write, edit, and bash must not consult or populate the read-only output cache"
+        );
+    }
+
     #[test]
-    fn tool_output_cache_reuses_and_invalidates_read_ls_grep_outputs() {
+    fn tool_output_cache_reuses_and_invalidates_read_only_tool_outputs() {
         asupersync::test_utils::run_test(|| async {
             reset_tool_output_cache_for_tests();
 
             let tmp = tempfile::tempdir().expect("create temp dir");
-            let note = tmp.path().join("note.txt");
-            std::fs::write(&note, "alpha\n").expect("write note");
-
-            let read_tool = ReadTool::new(tmp.path());
-            let read_input = serde_json::json!({ "path": "note.txt" });
-            let first = read_tool
-                .execute("read-1", read_input.clone(), None)
-                .await
-                .expect("first read");
-            assert!(first_text(&first).contains("alpha"));
-
-            let hits_before = tool_output_cache_stats_for_tests().hits;
-            let second = read_tool
-                .execute("read-2", read_input.clone(), None)
-                .await
-                .expect("cached read");
-            assert_eq!(first_text(&first), first_text(&second));
-            assert!(tool_output_cache_stats_for_tests().hits > hits_before);
-
-            let invalidations_before = tool_output_cache_stats_for_tests().invalidations;
-            std::fs::write(&note, "beta\n").expect("rewrite note");
-            let third = read_tool
-                .execute("read-3", read_input.clone(), None)
-                .await
-                .expect("invalidated read");
-            assert!(first_text(&third).contains("beta"));
-            assert!(!first_text(&third).contains("alpha"));
-            assert!(tool_output_cache_stats_for_tests().invalidations > invalidations_before);
-
-            let ls_tool = LsTool::new(tmp.path());
-            let ls_input = serde_json::json!({ "path": "." });
-            let ls_first = ls_tool
-                .execute("ls-1", ls_input.clone(), None)
-                .await
-                .expect("first ls");
-            assert!(first_text(&ls_first).contains("note.txt"));
-            let hits_before = tool_output_cache_stats_for_tests().hits;
-            let ls_second = ls_tool
-                .execute("ls-2", ls_input.clone(), None)
-                .await
-                .expect("cached ls");
-            assert_eq!(first_text(&ls_first), first_text(&ls_second));
-            assert!(tool_output_cache_stats_for_tests().hits > hits_before);
-
-            let invalidations_before = tool_output_cache_stats_for_tests().invalidations;
-            std::fs::write(tmp.path().join("new.txt"), "new\n").expect("write new file");
-            let ls_third = ls_tool
-                .execute("ls-3", ls_input.clone(), None)
-                .await
-                .expect("invalidated ls");
-            assert!(first_text(&ls_third).contains("new.txt"));
-            assert!(tool_output_cache_stats_for_tests().invalidations > invalidations_before);
-
-            if find_rg_binary().is_some() {
-                let grep_tool = GrepTool::new(tmp.path());
-                let grep_input = serde_json::json!({ "pattern": "needle", "path": "." });
-                std::fs::write(tmp.path().join("a.txt"), "needle\n").expect("write grep file");
-
-                let grep_first = grep_tool
-                    .execute("grep-1", grep_input.clone(), None)
-                    .await
-                    .expect("first grep");
-                assert!(first_text(&grep_first).contains("a.txt"));
-
-                let hits_before = tool_output_cache_stats_for_tests().hits;
-                let grep_second = grep_tool
-                    .execute("grep-2", grep_input.clone(), None)
-                    .await
-                    .expect("cached grep");
-                assert_eq!(first_text(&grep_first), first_text(&grep_second));
-                assert!(tool_output_cache_stats_for_tests().hits > hits_before);
-
-                let invalidations_before = tool_output_cache_stats_for_tests().invalidations;
-                std::fs::write(tmp.path().join("b.txt"), "needle\n").expect("write new match");
-                let grep_third = grep_tool
-                    .execute("grep-3", grep_input.clone(), None)
-                    .await
-                    .expect("invalidated grep");
-                assert!(first_text(&grep_third).contains("b.txt"));
-                assert!(tool_output_cache_stats_for_tests().invalidations > invalidations_before);
-            }
+            assert_read_cache_hit_and_stale(tmp.path()).await;
+            assert_ls_cache_hit_and_stale(tmp.path()).await;
+            assert_grep_cache_hit_and_stale_when_available(tmp.path()).await;
+            assert_find_cache_hit_and_stale_when_available(tmp.path()).await;
+            assert_side_effect_tools_remain_uncached(tmp.path()).await;
         });
+    }
+
+    #[test]
+    fn tool_output_context_cache_evidence_jsonl_covers_required_decisions()
+    -> std::result::Result<(), String> {
+        let evidence = include_str!("../docs/evidence/tool-output-context-cache.jsonl");
+        let mut saw_read_hit = false;
+        let mut saw_grep_stale = false;
+        let mut saw_find_stale = false;
+        let mut saw_ls_stale = false;
+        let mut saw_write_uncached = false;
+        let mut saw_edit_uncached = false;
+        let mut saw_bash_uncached = false;
+
+        for (line_number, line) in evidence.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let event: serde_json::Value = serde_json::from_str(line).map_err(|err| {
+                format!(
+                    "invalid context-cache JSONL at line {}: {err}",
+                    line_number + 1
+                )
+            })?;
+            assert_eq!(
+                event.get("schema").and_then(serde_json::Value::as_str),
+                Some("pi.tool_output_context_cache.evidence.v1")
+            );
+            assert_eq!(
+                event.get("bead").and_then(serde_json::Value::as_str),
+                Some("bd-dklqn.1")
+            );
+
+            let tool = event
+                .get("tool")
+                .and_then(serde_json::Value::as_str)
+                .expect("tool");
+            let outcome = event
+                .get("outcome")
+                .and_then(serde_json::Value::as_str)
+                .expect("outcome");
+            let reason = event
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .expect("reason");
+
+            match (tool, outcome, reason) {
+                ("read", "hit", "unchanged_file_fingerprint") => saw_read_hit = true,
+                ("grep", "stale", "recursive_directory_fingerprint_changed") => {
+                    saw_grep_stale = true;
+                }
+                ("find", "stale", "recursive_directory_fingerprint_changed") => {
+                    saw_find_stale = true;
+                }
+                ("ls", "stale", "directory_entry_fingerprint_changed") => saw_ls_stale = true,
+                ("write", "uncached", "write_effect_tool") => saw_write_uncached = true,
+                ("edit", "uncached", "write_effect_tool") => saw_edit_uncached = true,
+                ("bash", "uncached", "process_effect_tool") => saw_bash_uncached = true,
+                _ => {}
+            }
+        }
+
+        assert!(saw_read_hit, "evidence must include a read cache hit");
+        assert!(saw_grep_stale, "evidence must include grep stale bypass");
+        assert!(saw_find_stale, "evidence must include find stale bypass");
+        assert!(saw_ls_stale, "evidence must include ls stale bypass");
+        assert!(saw_write_uncached, "evidence must include write uncached");
+        assert!(saw_edit_uncached, "evidence must include edit uncached");
+        assert!(saw_bash_uncached, "evidence must include bash uncached");
+        Ok(())
     }
 
     #[test]
