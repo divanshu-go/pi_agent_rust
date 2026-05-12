@@ -417,6 +417,8 @@ pub const COMPAT_LEDGER_SCHEMA_VERSION: &str = "pi.ext.compat_ledger.v1";
 pub const RUNTIME_RISK_LEDGER_SCHEMA_VERSION: &str = "pi.ext.runtime_risk_ledger.v1";
 pub const RUNTIME_RISK_REPLAY_SCHEMA_VERSION: &str = "pi.ext.runtime_risk_replay.v1";
 pub const RUNTIME_RISK_CALIBRATION_SCHEMA_VERSION: &str = "pi.ext.runtime_risk_calibration.v1";
+pub const ADAPTIVE_HOSTCALL_POLICY_DIFF_SCHEMA_VERSION: &str =
+    "pi.ext.adaptive_hostcall_policy_diff.v1";
 pub const RUNTIME_HOSTCALL_TELEMETRY_SCHEMA_VERSION: &str = "pi.ext.hostcall_telemetry.v1";
 pub const RUNTIME_HOSTCALL_FEATURE_SCHEMA_VERSION: &str = "pi.ext.hostcall_feature_vector.v1";
 pub const RUNTIME_HOSTCALL_FEATURE_BUDGET_US: u64 = 250;
@@ -5207,6 +5209,151 @@ impl Default for RuntimeHostcallTelemetryArtifact {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AdaptiveHostcallPolicyDiffConfig {
+    pub min_sample_count: usize,
+    pub min_matched_coverage_bps: u64,
+    pub min_latency_improvement_bps: u64,
+    pub max_compat_rate_increase_bps: u64,
+    pub max_error_rate_increase_bps: u64,
+    pub max_detailed_changes: usize,
+}
+
+impl Default for AdaptiveHostcallPolicyDiffConfig {
+    fn default() -> Self {
+        Self {
+            min_sample_count: 5,
+            min_matched_coverage_bps: 8_000,
+            min_latency_improvement_bps: 500,
+            max_compat_rate_increase_bps: 250,
+            max_error_rate_increase_bps: 100,
+            max_detailed_changes: 64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AdaptiveHostcallPolicyDiffVerdict {
+    Accept,
+    Monitor,
+    Rollback,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdaptiveHostcallPolicySampleSupport {
+    pub baseline_samples: usize,
+    pub candidate_samples: usize,
+    pub matched_samples: usize,
+    pub min_required_samples: usize,
+    pub matched_coverage_bps: u64,
+    pub min_matched_coverage_bps: u64,
+    pub sufficient: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdaptiveHostcallPolicyTelemetryMetrics {
+    pub sample_count: usize,
+    pub fast_lane_count: u64,
+    pub compat_lane_count: u64,
+    pub unknown_lane_count: u64,
+    pub fallback_count: u64,
+    pub forced_compat_count: u64,
+    pub error_count: u64,
+    pub deny_or_terminate_count: u64,
+    pub mean_latency_ms: u64,
+    pub p95_latency_ms: u64,
+    pub mean_risk_score: f64,
+    pub compat_rate_bps: u64,
+    pub fallback_rate_bps: u64,
+    pub error_rate_bps: u64,
+    pub action_counts: BTreeMap<String, u64>,
+    pub fallback_reason_counts: BTreeMap<String, u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdaptiveHostcallPolicyLatencyEffect {
+    pub baseline_mean_latency_ms: u64,
+    pub candidate_mean_latency_ms: u64,
+    pub delta_ms: i64,
+    pub delta_bps: i64,
+    pub expected_effect: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdaptiveHostcallPolicyLaneChange {
+    pub comparison_key: String,
+    pub extension_id: String,
+    pub capability: String,
+    pub method: String,
+    pub baseline_lane: String,
+    pub candidate_lane: String,
+    pub baseline_fallback_reason: Option<String>,
+    pub candidate_fallback_reason: Option<String>,
+    pub baseline_lane_decision_reason: String,
+    pub candidate_lane_decision_reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdaptiveHostcallPolicyActionChange {
+    pub comparison_key: String,
+    pub extension_id: String,
+    pub capability: String,
+    pub method: String,
+    pub baseline_action: RuntimeRiskActionValue,
+    pub candidate_action: RuntimeRiskActionValue,
+    pub baseline_risk_score: f64,
+    pub candidate_risk_score: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdaptiveHostcallPolicyThresholdChange {
+    pub field: String,
+    pub baseline_value: String,
+    pub candidate_value: String,
+    pub direction: String,
+    pub risk_note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdaptiveHostcallPolicyRollbackCondition {
+    pub code: String,
+    pub severity: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AdaptiveHostcallPolicyDiffReport {
+    pub schema: String,
+    pub generated_at_ms: i64,
+    pub baseline_policy_id: String,
+    pub candidate_policy_id: String,
+    pub baseline_source_schema: String,
+    pub candidate_source_schema: String,
+    pub verdict: AdaptiveHostcallPolicyDiffVerdict,
+    pub reason_codes: Vec<String>,
+    pub sample_support: AdaptiveHostcallPolicySampleSupport,
+    pub baseline_metrics: AdaptiveHostcallPolicyTelemetryMetrics,
+    pub candidate_metrics: AdaptiveHostcallPolicyTelemetryMetrics,
+    pub latency_effect: AdaptiveHostcallPolicyLatencyEffect,
+    pub risk_threshold_changes: Vec<AdaptiveHostcallPolicyThresholdChange>,
+    pub lane_changes: Vec<AdaptiveHostcallPolicyLaneChange>,
+    pub action_changes: Vec<AdaptiveHostcallPolicyActionChange>,
+    pub rollback_conditions: Vec<AdaptiveHostcallPolicyRollbackCondition>,
+}
+
+pub struct AdaptiveHostcallPolicyDiffRequest<'a> {
+    pub baseline_policy_id: &'a str,
+    pub candidate_policy_id: &'a str,
+    pub baseline_config: &'a RuntimeRiskConfig,
+    pub candidate_config: &'a RuntimeRiskConfig,
+    pub baseline_telemetry: &'a RuntimeHostcallTelemetryArtifact,
+    pub candidate_telemetry: &'a RuntimeHostcallTelemetryArtifact,
+    pub config: &'a AdaptiveHostcallPolicyDiffConfig,
+    pub generated_at_ms: i64,
+}
+
 // ==========================================================================
 // SEC-5.1: Security alert types and alert stream
 // ==========================================================================
@@ -8501,6 +8648,619 @@ pub fn calibrate_runtime_risk_from_ledger(
         recommended,
         candidates,
     })
+}
+
+fn adaptive_policy_usize_to_f64(value: usize) -> f64 {
+    f64::from(u32::try_from(value).unwrap_or(u32::MAX))
+}
+
+fn adaptive_policy_rate_bps(count: u64, total: usize) -> u64 {
+    if total == 0 {
+        return 0;
+    }
+
+    let count = u128::from(count);
+    let total = u128::from(u64::try_from(total).unwrap_or(u64::MAX));
+    let rate = (count.saturating_mul(10_000)).saturating_add(total / 2) / total;
+    u64::try_from(rate).unwrap_or(u64::MAX)
+}
+
+fn adaptive_policy_signed_delta_bps(candidate: u64, baseline: u64) -> i64 {
+    if baseline == 0 {
+        return if candidate == 0 { 0 } else { 10_000 };
+    }
+
+    let delta = i128::from(candidate) - i128::from(baseline);
+    let scaled = delta.saturating_mul(10_000) / i128::from(baseline);
+    i64::try_from(scaled).unwrap_or_else(|_| {
+        if scaled.is_negative() {
+            i64::MIN
+        } else {
+            i64::MAX
+        }
+    })
+}
+
+const fn runtime_risk_action_value_code(action: RuntimeRiskActionValue) -> &'static str {
+    match action {
+        RuntimeRiskActionValue::Allow => "allow",
+        RuntimeRiskActionValue::Harden => "harden",
+        RuntimeRiskActionValue::Deny => "deny",
+        RuntimeRiskActionValue::Terminate => "terminate",
+    }
+}
+
+fn adaptive_policy_is_forced_compat_reason(reason: &str) -> bool {
+    reason.starts_with("forced_compat_")
+}
+
+fn adaptive_policy_increment(map: &mut BTreeMap<String, u64>, key: impl Into<String>) {
+    let count = map.entry(key.into()).or_insert(0);
+    *count = count.saturating_add(1);
+}
+
+fn adaptive_policy_mean_latency_ms(entries: &[RuntimeHostcallTelemetryEvent]) -> u64 {
+    if entries.is_empty() {
+        return 0;
+    }
+
+    let sum = entries.iter().fold(0_u128, |acc, entry| {
+        acc.saturating_add(u128::from(entry.latency_ms))
+    });
+    let count = u128::from(u64::try_from(entries.len()).unwrap_or(u64::MAX));
+    u64::try_from(sum / count).unwrap_or(u64::MAX)
+}
+
+fn adaptive_policy_p95_latency_ms(entries: &[RuntimeHostcallTelemetryEvent]) -> u64 {
+    if entries.is_empty() {
+        return 0;
+    }
+
+    let mut latencies = entries
+        .iter()
+        .map(|entry| entry.latency_ms)
+        .collect::<Vec<_>>();
+    latencies.sort_unstable();
+    let index = latencies.len().saturating_mul(95).div_ceil(100);
+    latencies[index.saturating_sub(1).min(latencies.len() - 1)]
+}
+
+fn adaptive_policy_comparison_key(entry: &RuntimeHostcallTelemetryEvent) -> String {
+    if entry.call_id.trim().is_empty() {
+        format!(
+            "trace:{}|{}|{}|{}",
+            entry.extension_id, entry.capability, entry.method, entry.params_hash
+        )
+    } else {
+        format!("call:{}", entry.call_id)
+    }
+}
+
+fn adaptive_policy_event_map(
+    entries: &[RuntimeHostcallTelemetryEvent],
+) -> BTreeMap<String, &RuntimeHostcallTelemetryEvent> {
+    let mut by_key = BTreeMap::new();
+    for entry in entries {
+        by_key
+            .entry(adaptive_policy_comparison_key(entry))
+            .or_insert(entry);
+    }
+    by_key
+}
+
+fn adaptive_policy_telemetry_metrics(
+    artifact: &RuntimeHostcallTelemetryArtifact,
+) -> AdaptiveHostcallPolicyTelemetryMetrics {
+    let mut fast_lane_count = 0_u64;
+    let mut compat_lane_count = 0_u64;
+    let mut unknown_lane_count = 0_u64;
+    let mut fallback_count = 0_u64;
+    let mut forced_compat_count = 0_u64;
+    let mut error_count = 0_u64;
+    let mut deny_or_terminate_count = 0_u64;
+    let mut risk_score_sum = 0.0_f64;
+    let mut action_counts = BTreeMap::new();
+    let mut fallback_reason_counts = BTreeMap::new();
+
+    for entry in &artifact.entries {
+        match entry.lane.as_str() {
+            "fast" => fast_lane_count = fast_lane_count.saturating_add(1),
+            "compat" => compat_lane_count = compat_lane_count.saturating_add(1),
+            _ => unknown_lane_count = unknown_lane_count.saturating_add(1),
+        }
+
+        if entry.outcome == "error" {
+            error_count = error_count.saturating_add(1);
+        }
+        if matches!(
+            entry.selected_action,
+            RuntimeRiskActionValue::Deny | RuntimeRiskActionValue::Terminate
+        ) {
+            deny_or_terminate_count = deny_or_terminate_count.saturating_add(1);
+        }
+
+        risk_score_sum += entry.risk_score;
+        adaptive_policy_increment(
+            &mut action_counts,
+            runtime_risk_action_value_code(entry.selected_action),
+        );
+
+        if let Some(reason) = entry
+            .lane_fallback_reason
+            .as_deref()
+            .filter(|reason| !reason.is_empty())
+        {
+            fallback_count = fallback_count.saturating_add(1);
+            adaptive_policy_increment(&mut fallback_reason_counts, reason);
+            if adaptive_policy_is_forced_compat_reason(reason) {
+                forced_compat_count = forced_compat_count.saturating_add(1);
+            }
+        } else if adaptive_policy_is_forced_compat_reason(&entry.lane_decision_reason) {
+            forced_compat_count = forced_compat_count.saturating_add(1);
+        }
+    }
+
+    let sample_count = artifact.entries.len();
+    let mean_risk_score = if sample_count == 0 {
+        0.0
+    } else {
+        risk_score_sum / adaptive_policy_usize_to_f64(sample_count)
+    };
+
+    AdaptiveHostcallPolicyTelemetryMetrics {
+        sample_count,
+        fast_lane_count,
+        compat_lane_count,
+        unknown_lane_count,
+        fallback_count,
+        forced_compat_count,
+        error_count,
+        deny_or_terminate_count,
+        mean_latency_ms: adaptive_policy_mean_latency_ms(&artifact.entries),
+        p95_latency_ms: adaptive_policy_p95_latency_ms(&artifact.entries),
+        mean_risk_score,
+        compat_rate_bps: adaptive_policy_rate_bps(compat_lane_count, sample_count),
+        fallback_rate_bps: adaptive_policy_rate_bps(fallback_count, sample_count),
+        error_rate_bps: adaptive_policy_rate_bps(error_count, sample_count),
+        action_counts,
+        fallback_reason_counts,
+    }
+}
+
+fn adaptive_policy_sample_support(
+    baseline: &RuntimeHostcallTelemetryArtifact,
+    candidate: &RuntimeHostcallTelemetryArtifact,
+    config: &AdaptiveHostcallPolicyDiffConfig,
+) -> AdaptiveHostcallPolicySampleSupport {
+    let candidate_by_key = adaptive_policy_event_map(&candidate.entries);
+    let matched_samples = baseline
+        .entries
+        .iter()
+        .filter(|entry| candidate_by_key.contains_key(&adaptive_policy_comparison_key(entry)))
+        .count();
+    let matched_coverage_bps = adaptive_policy_rate_bps(
+        u64::try_from(matched_samples).unwrap_or(u64::MAX),
+        baseline.entries.len(),
+    );
+    let sufficient = baseline.entries.len() >= config.min_sample_count
+        && candidate.entries.len() >= config.min_sample_count
+        && matched_coverage_bps >= config.min_matched_coverage_bps;
+
+    AdaptiveHostcallPolicySampleSupport {
+        baseline_samples: baseline.entries.len(),
+        candidate_samples: candidate.entries.len(),
+        matched_samples,
+        min_required_samples: config.min_sample_count,
+        matched_coverage_bps,
+        min_matched_coverage_bps: config.min_matched_coverage_bps,
+        sufficient,
+    }
+}
+
+fn adaptive_policy_push_threshold_change(
+    changes: &mut Vec<AdaptiveHostcallPolicyThresholdChange>,
+    field: &str,
+    baseline_value: impl Into<String>,
+    candidate_value: impl Into<String>,
+    direction: &str,
+    risk_note: &str,
+) {
+    changes.push(AdaptiveHostcallPolicyThresholdChange {
+        field: field.to_string(),
+        baseline_value: baseline_value.into(),
+        candidate_value: candidate_value.into(),
+        direction: direction.to_string(),
+        risk_note: risk_note.to_string(),
+    });
+}
+
+fn adaptive_policy_mode_threshold_changes(
+    baseline: &RuntimeRiskConfig,
+    candidate: &RuntimeRiskConfig,
+    changes: &mut Vec<AdaptiveHostcallPolicyThresholdChange>,
+) {
+    if baseline.enabled != candidate.enabled {
+        let direction = if candidate.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        adaptive_policy_push_threshold_change(
+            changes,
+            "enabled",
+            baseline.enabled.to_string(),
+            candidate.enabled.to_string(),
+            direction,
+            "runtime risk scoring master switch changed",
+        );
+    }
+
+    if baseline.enforce != candidate.enforce {
+        let direction = if candidate.enforce {
+            "enforced"
+        } else {
+            "shadowed"
+        };
+        adaptive_policy_push_threshold_change(
+            changes,
+            "enforce",
+            baseline.enforce.to_string(),
+            candidate.enforce.to_string(),
+            direction,
+            "runtime risk enforcement mode changed",
+        );
+    }
+
+    if baseline.fail_closed != candidate.fail_closed {
+        let direction = if candidate.fail_closed {
+            "tightened"
+        } else {
+            "relaxed"
+        };
+        adaptive_policy_push_threshold_change(
+            changes,
+            "fail_closed",
+            baseline.fail_closed.to_string(),
+            candidate.fail_closed.to_string(),
+            direction,
+            "controller fallback behavior changed",
+        );
+    }
+}
+
+fn adaptive_policy_numeric_threshold_changes(
+    baseline: &RuntimeRiskConfig,
+    candidate: &RuntimeRiskConfig,
+    changes: &mut Vec<AdaptiveHostcallPolicyThresholdChange>,
+) {
+    if baseline.alpha.total_cmp(&candidate.alpha) != std::cmp::Ordering::Equal {
+        let direction = if candidate.alpha > baseline.alpha {
+            "relaxed"
+        } else {
+            "tightened"
+        };
+        adaptive_policy_push_threshold_change(
+            changes,
+            "alpha",
+            format!("{:.6}", baseline.alpha),
+            format!("{:.6}", candidate.alpha),
+            direction,
+            "sequential detector type-I error budget changed",
+        );
+    }
+
+    if baseline.window_size != candidate.window_size {
+        let direction = if candidate.window_size < baseline.window_size {
+            "more_sensitive"
+        } else {
+            "less_sensitive"
+        };
+        adaptive_policy_push_threshold_change(
+            changes,
+            "window_size",
+            baseline.window_size.to_string(),
+            candidate.window_size.to_string(),
+            direction,
+            "sliding window size changed",
+        );
+    }
+
+    if baseline.ledger_limit != candidate.ledger_limit {
+        let direction = if candidate.ledger_limit < baseline.ledger_limit {
+            "shorter_retention"
+        } else {
+            "longer_retention"
+        };
+        adaptive_policy_push_threshold_change(
+            changes,
+            "ledger_limit",
+            baseline.ledger_limit.to_string(),
+            candidate.ledger_limit.to_string(),
+            direction,
+            "risk evidence retention changed",
+        );
+    }
+
+    if baseline.decision_timeout_ms != candidate.decision_timeout_ms {
+        let direction = if candidate.decision_timeout_ms < baseline.decision_timeout_ms {
+            "tightened"
+        } else {
+            "relaxed"
+        };
+        adaptive_policy_push_threshold_change(
+            changes,
+            "decision_timeout_ms",
+            baseline.decision_timeout_ms.to_string(),
+            candidate.decision_timeout_ms.to_string(),
+            direction,
+            "per-hostcall risk decision budget changed",
+        );
+    }
+}
+
+fn adaptive_policy_threshold_changes(
+    baseline: &RuntimeRiskConfig,
+    candidate: &RuntimeRiskConfig,
+) -> Vec<AdaptiveHostcallPolicyThresholdChange> {
+    let mut changes = Vec::new();
+    adaptive_policy_mode_threshold_changes(baseline, candidate, &mut changes);
+    adaptive_policy_numeric_threshold_changes(baseline, candidate, &mut changes);
+
+    changes
+}
+
+fn adaptive_policy_lane_changes(
+    baseline: &RuntimeHostcallTelemetryArtifact,
+    candidate: &RuntimeHostcallTelemetryArtifact,
+    max_changes: usize,
+) -> Vec<AdaptiveHostcallPolicyLaneChange> {
+    let candidate_by_key = adaptive_policy_event_map(&candidate.entries);
+    let mut changes = Vec::new();
+
+    for baseline_entry in &baseline.entries {
+        if changes.len() >= max_changes {
+            break;
+        }
+        let key = adaptive_policy_comparison_key(baseline_entry);
+        let Some(candidate_entry) = candidate_by_key.get(&key) else {
+            continue;
+        };
+        if baseline_entry.lane == candidate_entry.lane
+            && baseline_entry.lane_fallback_reason == candidate_entry.lane_fallback_reason
+            && baseline_entry.lane_decision_reason == candidate_entry.lane_decision_reason
+        {
+            continue;
+        }
+
+        changes.push(AdaptiveHostcallPolicyLaneChange {
+            comparison_key: key,
+            extension_id: baseline_entry.extension_id.clone(),
+            capability: baseline_entry.capability.clone(),
+            method: baseline_entry.method.clone(),
+            baseline_lane: baseline_entry.lane.clone(),
+            candidate_lane: candidate_entry.lane.clone(),
+            baseline_fallback_reason: baseline_entry.lane_fallback_reason.clone(),
+            candidate_fallback_reason: candidate_entry.lane_fallback_reason.clone(),
+            baseline_lane_decision_reason: baseline_entry.lane_decision_reason.clone(),
+            candidate_lane_decision_reason: candidate_entry.lane_decision_reason.clone(),
+        });
+    }
+
+    changes
+}
+
+fn adaptive_policy_action_changes(
+    baseline: &RuntimeHostcallTelemetryArtifact,
+    candidate: &RuntimeHostcallTelemetryArtifact,
+    max_changes: usize,
+) -> Vec<AdaptiveHostcallPolicyActionChange> {
+    let candidate_by_key = adaptive_policy_event_map(&candidate.entries);
+    let mut changes = Vec::new();
+
+    for baseline_entry in &baseline.entries {
+        if changes.len() >= max_changes {
+            break;
+        }
+        let key = adaptive_policy_comparison_key(baseline_entry);
+        let Some(candidate_entry) = candidate_by_key.get(&key) else {
+            continue;
+        };
+        if baseline_entry.selected_action == candidate_entry.selected_action {
+            continue;
+        }
+
+        changes.push(AdaptiveHostcallPolicyActionChange {
+            comparison_key: key,
+            extension_id: baseline_entry.extension_id.clone(),
+            capability: baseline_entry.capability.clone(),
+            method: baseline_entry.method.clone(),
+            baseline_action: baseline_entry.selected_action,
+            candidate_action: candidate_entry.selected_action,
+            baseline_risk_score: baseline_entry.risk_score,
+            candidate_risk_score: candidate_entry.risk_score,
+        });
+    }
+
+    changes
+}
+
+fn adaptive_policy_latency_effect(
+    baseline: &AdaptiveHostcallPolicyTelemetryMetrics,
+    candidate: &AdaptiveHostcallPolicyTelemetryMetrics,
+    config: &AdaptiveHostcallPolicyDiffConfig,
+) -> AdaptiveHostcallPolicyLatencyEffect {
+    let delta_bps =
+        adaptive_policy_signed_delta_bps(candidate.mean_latency_ms, baseline.mean_latency_ms);
+    let improvement_bps = i64::try_from(config.min_latency_improvement_bps).unwrap_or(i64::MAX);
+    let expected_effect = if delta_bps <= -improvement_bps {
+        "improved"
+    } else if delta_bps > 0 {
+        "regressed"
+    } else {
+        "neutral"
+    };
+
+    AdaptiveHostcallPolicyLatencyEffect {
+        baseline_mean_latency_ms: baseline.mean_latency_ms,
+        candidate_mean_latency_ms: candidate.mean_latency_ms,
+        delta_ms: i64::try_from(candidate.mean_latency_ms).unwrap_or(i64::MAX)
+            - i64::try_from(baseline.mean_latency_ms).unwrap_or(i64::MAX),
+        delta_bps,
+        expected_effect: expected_effect.to_string(),
+    }
+}
+
+fn adaptive_policy_push_condition(
+    conditions: &mut Vec<AdaptiveHostcallPolicyRollbackCondition>,
+    code: &str,
+    severity: &str,
+    message: &str,
+) {
+    conditions.push(AdaptiveHostcallPolicyRollbackCondition {
+        code: code.to_string(),
+        severity: severity.to_string(),
+        message: message.to_string(),
+    });
+}
+
+#[allow(clippy::too_many_lines)]
+pub fn build_adaptive_hostcall_policy_diff_report(
+    request: &AdaptiveHostcallPolicyDiffRequest<'_>,
+) -> AdaptiveHostcallPolicyDiffReport {
+    let baseline_metrics = adaptive_policy_telemetry_metrics(request.baseline_telemetry);
+    let candidate_metrics = adaptive_policy_telemetry_metrics(request.candidate_telemetry);
+    let sample_support = adaptive_policy_sample_support(
+        request.baseline_telemetry,
+        request.candidate_telemetry,
+        request.config,
+    );
+    let lane_changes = adaptive_policy_lane_changes(
+        request.baseline_telemetry,
+        request.candidate_telemetry,
+        request.config.max_detailed_changes,
+    );
+    let action_changes = adaptive_policy_action_changes(
+        request.baseline_telemetry,
+        request.candidate_telemetry,
+        request.config.max_detailed_changes,
+    );
+    let risk_threshold_changes =
+        adaptive_policy_threshold_changes(request.baseline_config, request.candidate_config);
+    let latency_effect =
+        adaptive_policy_latency_effect(&baseline_metrics, &candidate_metrics, request.config);
+
+    let mut rollback_conditions = Vec::new();
+    if !sample_support.sufficient {
+        adaptive_policy_push_condition(
+            &mut rollback_conditions,
+            "weak_sample_support",
+            "warning",
+            "candidate policy lacks the minimum replay sample support or matched coverage",
+        );
+    }
+    if candidate_metrics.forced_compat_count > 0 {
+        adaptive_policy_push_condition(
+            &mut rollback_conditions,
+            "forced_compat_kill_switch_active",
+            "error",
+            "candidate telemetry contains forced compatibility lane decisions",
+        );
+    }
+    if !action_changes.is_empty() {
+        adaptive_policy_push_condition(
+            &mut rollback_conditions,
+            "policy_action_divergence",
+            "error",
+            "candidate selected different runtime risk actions for replayed hostcalls",
+        );
+    }
+    if candidate_metrics.compat_rate_bps
+        > baseline_metrics
+            .compat_rate_bps
+            .saturating_add(request.config.max_compat_rate_increase_bps)
+    {
+        adaptive_policy_push_condition(
+            &mut rollback_conditions,
+            "compat_lane_regression",
+            "error",
+            "candidate increased compatibility lane routing beyond the configured tolerance",
+        );
+    }
+    if candidate_metrics.error_rate_bps
+        > baseline_metrics
+            .error_rate_bps
+            .saturating_add(request.config.max_error_rate_increase_bps)
+    {
+        adaptive_policy_push_condition(
+            &mut rollback_conditions,
+            "error_rate_regression",
+            "error",
+            "candidate increased hostcall error rate beyond the configured tolerance",
+        );
+    }
+    if request.baseline_config.fail_closed && !request.candidate_config.fail_closed {
+        adaptive_policy_push_condition(
+            &mut rollback_conditions,
+            "fail_closed_disabled",
+            "error",
+            "candidate disables fail-closed controller fallback behavior",
+        );
+    }
+    if request.candidate_config.alpha > request.baseline_config.alpha {
+        adaptive_policy_push_condition(
+            &mut rollback_conditions,
+            "risk_error_budget_relaxed",
+            "warning",
+            "candidate relaxes the runtime risk type-I error budget",
+        );
+    }
+
+    let has_error = rollback_conditions
+        .iter()
+        .any(|condition| condition.severity == "error");
+    let verdict = if has_error {
+        AdaptiveHostcallPolicyDiffVerdict::Rollback
+    } else if rollback_conditions.is_empty() && latency_effect.expected_effect == "improved" {
+        AdaptiveHostcallPolicyDiffVerdict::Accept
+    } else {
+        AdaptiveHostcallPolicyDiffVerdict::Monitor
+    };
+
+    let mut reason_codes = Vec::new();
+    if sample_support.sufficient {
+        reason_codes.push("sufficient_sample_support".to_string());
+    }
+    reason_codes.push(format!("latency_effect_{}", latency_effect.expected_effect));
+    if lane_changes.is_empty() {
+        reason_codes.push("lane_output_stable".to_string());
+    } else {
+        reason_codes.push("lane_output_changed".to_string());
+    }
+    if action_changes.is_empty() {
+        reason_codes.push("risk_actions_stable".to_string());
+    }
+    for condition in &rollback_conditions {
+        reason_codes.push(condition.code.clone());
+    }
+
+    AdaptiveHostcallPolicyDiffReport {
+        schema: ADAPTIVE_HOSTCALL_POLICY_DIFF_SCHEMA_VERSION.to_string(),
+        generated_at_ms: request.generated_at_ms,
+        baseline_policy_id: request.baseline_policy_id.to_string(),
+        candidate_policy_id: request.candidate_policy_id.to_string(),
+        baseline_source_schema: request.baseline_telemetry.schema.clone(),
+        candidate_source_schema: request.candidate_telemetry.schema.clone(),
+        verdict,
+        reason_codes,
+        sample_support,
+        baseline_metrics,
+        candidate_metrics,
+        latency_effect,
+        risk_threshold_changes,
+        lane_changes,
+        action_changes,
+        rollback_conditions,
+    }
 }
 
 // ============================================================================
@@ -39445,6 +40205,354 @@ mod tests {
                 "calibration output must be deterministic for identical input"
             );
         });
+    }
+
+    fn adaptive_diff_runtime_config() -> RuntimeRiskConfig {
+        RuntimeRiskConfig {
+            enabled: true,
+            enforce: true,
+            alpha: 0.01,
+            window_size: 64,
+            ledger_limit: 256,
+            decision_timeout_ms: 50,
+            fail_closed: true,
+        }
+    }
+
+    fn adaptive_diff_config(min_sample_count: usize) -> AdaptiveHostcallPolicyDiffConfig {
+        AdaptiveHostcallPolicyDiffConfig {
+            min_sample_count,
+            min_matched_coverage_bps: 9_000,
+            min_latency_improvement_bps: 100,
+            max_compat_rate_increase_bps: 250,
+            max_error_rate_increase_bps: 100,
+            max_detailed_changes: 16,
+        }
+    }
+
+    fn adaptive_diff_event(
+        call_id: &str,
+        lane: &str,
+        lane_decision_reason: &str,
+        lane_fallback_reason: Option<&str>,
+        latency_ms: u64,
+        selected_action: RuntimeRiskActionValue,
+        risk_score: f64,
+    ) -> RuntimeHostcallTelemetryEvent {
+        RuntimeHostcallTelemetryEvent {
+            call_id: call_id.to_string(),
+            extension_id: "ext.adaptive".to_string(),
+            capability: "read".to_string(),
+            method: "tool".to_string(),
+            params_hash: format!("params-{call_id}"),
+            policy_reason: "fixture_replay".to_string(),
+            policy_profile: "adaptive".to_string(),
+            risk_score,
+            latency_ms,
+            lane: lane.to_string(),
+            lane_decision_reason: lane_decision_reason.to_string(),
+            lane_fallback_reason: lane_fallback_reason.map(str::to_string),
+            lane_matrix_key: "tool|fixture|filesystem".to_string(),
+            selected_action,
+            outcome: "success".to_string(),
+            ..RuntimeHostcallTelemetryEvent::default()
+        }
+    }
+
+    fn adaptive_diff_artifact(
+        entries: Vec<RuntimeHostcallTelemetryEvent>,
+    ) -> RuntimeHostcallTelemetryArtifact {
+        RuntimeHostcallTelemetryArtifact {
+            schema: RUNTIME_HOSTCALL_TELEMETRY_SCHEMA_VERSION.to_string(),
+            generated_at_ms: 1_700_000_000_000,
+            entry_count: entries.len(),
+            entries,
+        }
+    }
+
+    fn adaptive_diff_report(
+        baseline_entries: Vec<RuntimeHostcallTelemetryEvent>,
+        candidate_entries: Vec<RuntimeHostcallTelemetryEvent>,
+        baseline_config: &RuntimeRiskConfig,
+        candidate_config: &RuntimeRiskConfig,
+        diff_config: &AdaptiveHostcallPolicyDiffConfig,
+    ) -> AdaptiveHostcallPolicyDiffReport {
+        let baseline = adaptive_diff_artifact(baseline_entries);
+        let candidate = adaptive_diff_artifact(candidate_entries);
+        build_adaptive_hostcall_policy_diff_report(&AdaptiveHostcallPolicyDiffRequest {
+            baseline_policy_id: "baseline",
+            candidate_policy_id: "candidate",
+            baseline_config,
+            candidate_config,
+            baseline_telemetry: &baseline,
+            candidate_telemetry: &candidate,
+            config: diff_config,
+            generated_at_ms: 1_700_000_000_100,
+        })
+    }
+
+    #[test]
+    fn adaptive_hostcall_policy_diff_accepts_supported_latency_improvement() {
+        let baseline_config = adaptive_diff_runtime_config();
+        let candidate_config = RuntimeRiskConfig {
+            alpha: 0.005,
+            decision_timeout_ms: 25,
+            ..baseline_config
+        };
+        let diff_config = adaptive_diff_config(3);
+        let baseline_entries = vec![
+            adaptive_diff_event(
+                "call-1",
+                "compat",
+                "reactor_lane_overflow",
+                Some("reactor_lane_overflow"),
+                100,
+                RuntimeRiskActionValue::Allow,
+                0.20,
+            ),
+            adaptive_diff_event(
+                "call-2",
+                "compat",
+                "reactor_lane_overflow",
+                Some("reactor_lane_overflow"),
+                110,
+                RuntimeRiskActionValue::Allow,
+                0.22,
+            ),
+            adaptive_diff_event(
+                "call-3",
+                "compat",
+                "reactor_lane_overflow",
+                Some("reactor_lane_overflow"),
+                90,
+                RuntimeRiskActionValue::Allow,
+                0.18,
+            ),
+        ];
+        let candidate_entries = vec![
+            adaptive_diff_event(
+                "call-1",
+                "fast",
+                "typed_opcode_context_v1",
+                None,
+                60,
+                RuntimeRiskActionValue::Allow,
+                0.20,
+            ),
+            adaptive_diff_event(
+                "call-2",
+                "fast",
+                "typed_opcode_context_v1",
+                None,
+                65,
+                RuntimeRiskActionValue::Allow,
+                0.22,
+            ),
+            adaptive_diff_event(
+                "call-3",
+                "fast",
+                "typed_opcode_context_v1",
+                None,
+                55,
+                RuntimeRiskActionValue::Allow,
+                0.18,
+            ),
+        ];
+
+        let report = adaptive_diff_report(
+            baseline_entries,
+            candidate_entries,
+            &baseline_config,
+            &candidate_config,
+            &diff_config,
+        );
+
+        assert_eq!(report.schema, ADAPTIVE_HOSTCALL_POLICY_DIFF_SCHEMA_VERSION);
+        assert_eq!(report.verdict, AdaptiveHostcallPolicyDiffVerdict::Accept);
+        assert!(report.sample_support.sufficient);
+        assert_eq!(report.latency_effect.expected_effect, "improved");
+        assert_eq!(report.action_changes.len(), 0);
+        assert_eq!(report.rollback_conditions.len(), 0);
+        assert!(
+            report
+                .risk_threshold_changes
+                .iter()
+                .any(|change| change.field == "alpha" && change.direction == "tightened")
+        );
+        assert!(
+            report
+                .risk_threshold_changes
+                .iter()
+                .any(|change| change.field == "decision_timeout_ms")
+        );
+    }
+
+    #[test]
+    fn adaptive_hostcall_policy_diff_monitors_weak_sample_support() {
+        let baseline_config = adaptive_diff_runtime_config();
+        let candidate_config = baseline_config.clone();
+        let diff_config = adaptive_diff_config(5);
+        let report = adaptive_diff_report(
+            vec![adaptive_diff_event(
+                "call-1",
+                "compat",
+                "reactor_lane_overflow",
+                Some("reactor_lane_overflow"),
+                100,
+                RuntimeRiskActionValue::Allow,
+                0.20,
+            )],
+            vec![adaptive_diff_event(
+                "call-1",
+                "fast",
+                "typed_opcode_context_v1",
+                None,
+                50,
+                RuntimeRiskActionValue::Allow,
+                0.20,
+            )],
+            &baseline_config,
+            &candidate_config,
+            &diff_config,
+        );
+
+        assert_eq!(report.verdict, AdaptiveHostcallPolicyDiffVerdict::Monitor);
+        assert!(!report.sample_support.sufficient);
+        assert!(
+            report
+                .reason_codes
+                .iter()
+                .any(|code| code == "weak_sample_support")
+        );
+        assert!(
+            report
+                .rollback_conditions
+                .iter()
+                .any(|condition| condition.code == "weak_sample_support")
+        );
+    }
+
+    #[test]
+    fn adaptive_hostcall_policy_diff_rolls_back_divergent_actions() {
+        let baseline_config = adaptive_diff_runtime_config();
+        let candidate_config = baseline_config.clone();
+        let diff_config = adaptive_diff_config(2);
+        let report = adaptive_diff_report(
+            vec![
+                adaptive_diff_event(
+                    "call-1",
+                    "fast",
+                    "typed_opcode_context_v1",
+                    None,
+                    50,
+                    RuntimeRiskActionValue::Allow,
+                    0.20,
+                ),
+                adaptive_diff_event(
+                    "call-2",
+                    "fast",
+                    "typed_opcode_context_v1",
+                    None,
+                    50,
+                    RuntimeRiskActionValue::Allow,
+                    0.20,
+                ),
+            ],
+            vec![
+                adaptive_diff_event(
+                    "call-1",
+                    "fast",
+                    "typed_opcode_context_v1",
+                    None,
+                    50,
+                    RuntimeRiskActionValue::Deny,
+                    0.92,
+                ),
+                adaptive_diff_event(
+                    "call-2",
+                    "fast",
+                    "typed_opcode_context_v1",
+                    None,
+                    50,
+                    RuntimeRiskActionValue::Allow,
+                    0.20,
+                ),
+            ],
+            &baseline_config,
+            &candidate_config,
+            &diff_config,
+        );
+
+        assert_eq!(report.verdict, AdaptiveHostcallPolicyDiffVerdict::Rollback);
+        assert_eq!(report.action_changes.len(), 1);
+        assert!(
+            report
+                .rollback_conditions
+                .iter()
+                .any(|condition| condition.code == "policy_action_divergence")
+        );
+    }
+
+    #[test]
+    fn adaptive_hostcall_policy_diff_rolls_back_forced_compat_kill_switch() {
+        let baseline_config = adaptive_diff_runtime_config();
+        let candidate_config = baseline_config.clone();
+        let diff_config = adaptive_diff_config(2);
+        let report = adaptive_diff_report(
+            vec![
+                adaptive_diff_event(
+                    "call-1",
+                    "fast",
+                    "typed_opcode_context_v1",
+                    None,
+                    50,
+                    RuntimeRiskActionValue::Allow,
+                    0.20,
+                ),
+                adaptive_diff_event(
+                    "call-2",
+                    "fast",
+                    "typed_opcode_context_v1",
+                    None,
+                    50,
+                    RuntimeRiskActionValue::Allow,
+                    0.20,
+                ),
+            ],
+            vec![
+                adaptive_diff_event(
+                    "call-1",
+                    "compat",
+                    "forced_compat_global_kill_switch",
+                    Some("forced_compat_global_kill_switch"),
+                    95,
+                    RuntimeRiskActionValue::Allow,
+                    0.20,
+                ),
+                adaptive_diff_event(
+                    "call-2",
+                    "compat",
+                    "forced_compat_global_kill_switch",
+                    Some("forced_compat_global_kill_switch"),
+                    95,
+                    RuntimeRiskActionValue::Allow,
+                    0.20,
+                ),
+            ],
+            &baseline_config,
+            &candidate_config,
+            &diff_config,
+        );
+
+        assert_eq!(report.verdict, AdaptiveHostcallPolicyDiffVerdict::Rollback);
+        assert_eq!(report.candidate_metrics.forced_compat_count, 2);
+        assert_eq!(report.lane_changes.len(), 2);
+        assert!(
+            report
+                .rollback_conditions
+                .iter()
+                .any(|condition| condition.code == "forced_compat_kill_switch_active")
+        );
     }
 
     #[test]
