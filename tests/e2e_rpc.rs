@@ -38,6 +38,7 @@ use std::time::{Duration, Instant};
 // ---------------------------------------------------------------------------
 
 const RPC_E2E_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+const KEYLESS_REPLAY_ABORT_WINDOW: Duration = Duration::from_secs(10);
 
 fn cassette_root() -> PathBuf {
     std::env::var("VCR_CASSETTE_DIR").map_or_else(
@@ -167,7 +168,7 @@ impl Provider for KeylessReplayProvider {
 fn build_persistent_keyless_agent_session(session: Session, cwd: &Path) -> AgentSession {
     let provider: Arc<dyn Provider> = Arc::new(KeylessReplayProvider::new(
         "keyless-rpc-replay",
-        Duration::from_secs(2),
+        KEYLESS_REPLAY_ABORT_WINDOW,
     ));
     let tools = ToolRegistry::new(&[], cwd, None);
     let config = AgentConfig::default();
