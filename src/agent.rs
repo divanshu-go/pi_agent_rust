@@ -23,11 +23,11 @@ use crate::extension_events::{
 };
 use crate::extension_tools::collect_extension_tool_wrappers;
 use crate::extensions::{
-    EXTENSION_EVENT_TIMEOUT_MS, ExtensionDeliverAs, ExtensionEventName, ExtensionHostActions,
-    ExtensionLoadSpec, ExtensionManager, ExtensionPolicy, ExtensionRegion, ExtensionRuntimeHandle,
-    ExtensionSendMessage, ExtensionSendUserMessage, JsExtensionLoadSpec, JsExtensionRuntimeHandle,
-    NativeRustExtensionLoadSpec, NativeRustExtensionRuntimeHandle, RepairPolicyMode,
-    resolve_extension_load_spec,
+    EXTENSION_EVENT_TIMEOUT_MS, ExtensionAiCompletionRequest, ExtensionDeliverAs,
+    ExtensionEventName, ExtensionHostActions, ExtensionLoadSpec, ExtensionManager, ExtensionPolicy,
+    ExtensionRegion, ExtensionRuntimeHandle, ExtensionSendMessage, ExtensionSendUserMessage,
+    JsExtensionLoadSpec, JsExtensionRuntimeHandle, NativeRustExtensionLoadSpec,
+    NativeRustExtensionRuntimeHandle, RepairPolicyMode, resolve_extension_load_spec,
 };
 #[cfg(feature = "wasm-host")]
 use crate::extensions::{WasmExtensionHost, WasmExtensionLoadSpec};
@@ -3051,6 +3051,7 @@ pub struct AgentSession {
     extensions_pending_idle_actions: Arc<StdMutex<VecDeque<PendingIdleAction>>>,
     extension_queue_modes: Option<Arc<StdMutex<ExtensionQueueModeState>>>,
     extension_injected_queue: Option<Arc<StdMutex<ExtensionInjectedQueue>>>,
+    extension_ai_completion: Arc<StdMutex<ExtensionAiCompletionHostState>>,
     compaction_settings: ResolvedCompactionSettings,
     compaction_runtime: Option<Runtime>,
     runtime_handle: Option<RuntimeHandle>,
@@ -3160,6 +3161,13 @@ struct AgentSessionHostActions {
     is_streaming: Arc<AtomicBool>,
     is_turn_active: Arc<AtomicBool>,
     pending_idle_actions: Arc<StdMutex<VecDeque<PendingIdleAction>>>,
+    ai_completion: Arc<StdMutex<ExtensionAiCompletionHostState>>,
+}
+
+#[derive(Clone)]
+struct ExtensionAiCompletionHostState {
+    provider: Arc<dyn Provider>,
+    stream_options: StreamOptions,
 }
 
 impl AgentSessionHostActions {
@@ -3249,6 +3257,23 @@ impl ExtensionHostActions for AgentSessionHostActions {
 
         self.queue_pending_idle_action(PendingIdleAction::UserText(text));
         Ok(())
+    }
+
+    async fn complete_ai(&self, request: ExtensionAiCompletionRequest) -> Result<Value> {
+        let (provider_name, model_id, has_api_key) = {
+            let state = self.ai_completion.lock().map_err(|_| {
+                Error::extension("extension completion host state mutex poisoned".to_string())
+            })?;
+            (
+                state.provider.name().to_string(),
+                state.provider.model_id().to_string(),
+                state.stream_options.api_key.is_some(),
+            )
+        };
+        Err(Error::extension(format!(
+            "@mariozechner/pi-ai completion host bridge is not implemented for provider {provider_name}/{model_id} (simple={}, configured_api_key={has_api_key})",
+            request.simple
+        )))
     }
 }
 
@@ -4350,6 +4375,10 @@ mod extensions_integration_tests {
                 is_streaming: Arc::new(AtomicBool::new(false)),
                 is_turn_active: Arc::new(AtomicBool::new(false)),
                 pending_idle_actions: Arc::new(StdMutex::new(VecDeque::new())),
+                ai_completion: Arc::new(StdMutex::new(ExtensionAiCompletionHostState {
+                    provider: Arc::new(NoopProvider),
+                    stream_options: StreamOptions::default(),
+                })),
             };
 
             let hold_cx = crate::agent_cx::AgentCx::for_request();
@@ -6945,6 +6974,11 @@ impl AgentSession {
         save_enabled: bool,
         compaction_settings: ResolvedCompactionSettings,
     ) -> Self {
+        let extension_ai_completion = Arc::new(StdMutex::new(ExtensionAiCompletionHostState {
+            provider: agent.provider(),
+            stream_options: agent.stream_options().clone(),
+        }));
+
         Self {
             agent,
             session,
@@ -6957,6 +6991,7 @@ impl AgentSession {
             extensions_pending_idle_actions: Arc::new(StdMutex::new(VecDeque::new())),
             extension_queue_modes: None,
             extension_injected_queue: None,
+            extension_ai_completion,
             compaction_settings,
             compaction_runtime: None,
             runtime_handle: None,
@@ -7007,6 +7042,15 @@ impl AgentSession {
 
     pub fn set_api_key_override(&mut self, api_key: Option<String>) {
         self.api_key_override = normalize_api_key_opt(api_key);
+    }
+
+    pub fn refresh_extension_completion_host_state(&self) {
+        let Ok(mut state) = self.extension_ai_completion.lock() else {
+            tracing::error!("extension completion host state mutex poisoned; keeping stale state");
+            return;
+        };
+        state.provider = self.agent.provider();
+        state.stream_options = self.agent.stream_options().clone();
     }
 
     pub fn set_semantic_context_bundle(
@@ -7254,6 +7298,7 @@ impl AgentSession {
                 let stream_options = self.agent.stream_options_mut();
                 stream_options.api_key.clone_from(&resolved_key);
                 stream_options.headers.clone_from(&entry.headers);
+                self.refresh_extension_completion_host_state();
                 Ok(())
             }
             Err(e) => Err(Error::validation(format!(
@@ -7914,6 +7959,7 @@ impl AgentSession {
             is_streaming: Arc::clone(&self.extensions_is_streaming),
             is_turn_active: Arc::clone(&self.extensions_turn_active),
             pending_idle_actions: Arc::clone(&self.extensions_pending_idle_actions),
+            ai_completion: Arc::clone(&self.extension_ai_completion),
         };
         self.extension_queue_modes = Some(Arc::clone(&queue_modes));
         self.extension_injected_queue = Some(Arc::clone(&injected));

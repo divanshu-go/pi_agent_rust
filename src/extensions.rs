@@ -13600,10 +13600,24 @@ pub struct ExtensionSendUserMessage {
     pub deliver_as: Option<ExtensionDeliverAs>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ExtensionAiCompletionRequest {
+    pub model: Value,
+    pub context: Value,
+    pub options: Value,
+    pub simple: bool,
+}
+
 #[async_trait]
 pub trait ExtensionHostActions: Send + Sync {
     async fn send_message(&self, message: ExtensionSendMessage) -> Result<()>;
     async fn send_user_message(&self, message: ExtensionSendUserMessage) -> Result<()>;
+
+    async fn complete_ai(&self, _request: ExtensionAiCompletionRequest) -> Result<Value> {
+        Err(Error::extension(
+            "@mariozechner/pi-ai completion host bridge is not configured".to_string(),
+        ))
+    }
 }
 
 impl ExtensionMessage {
@@ -24956,6 +24970,7 @@ enum EventsHostcallOp {
     RegisterFlag,
     GetFlag,
     ListFlags,
+    CompleteAi,
 }
 
 fn parse_events_hostcall_op(op: &str) -> Option<EventsHostcallOp> {
@@ -24975,6 +24990,7 @@ fn parse_events_hostcall_op(op: &str) -> Option<EventsHostcallOp> {
         b"sendusermessage" => Some(EventsHostcallOp::SendUserMessage),
         b"registerprovider" => Some(EventsHostcallOp::RegisterProvider),
         b"registerflag" => Some(EventsHostcallOp::RegisterFlag),
+        b"completeai" => Some(EventsHostcallOp::CompleteAi),
         _ => None,
     })
 }
@@ -25199,6 +25215,32 @@ async fn dispatch_hostcall_events_ref(
                 Ok(()) => HostcallOutcome::Success(Value::Null),
                 Err(err) => HostcallOutcome::Error {
                     code: "io".to_string(),
+                    message: err.to_string(),
+                },
+            }
+        }
+        EventsHostcallOp::CompleteAi => {
+            let Some(actions) = manager.host_actions() else {
+                return HostcallOutcome::Error {
+                    code: "denied".to_string(),
+                    message: "No provider/session host bridge configured".to_string(),
+                };
+            };
+
+            let request = ExtensionAiCompletionRequest {
+                model: payload.get("model").cloned().unwrap_or(Value::Null),
+                context: payload.get("context").cloned().unwrap_or(Value::Null),
+                options: payload.get("options").cloned().unwrap_or_else(|| json!({})),
+                simple: payload
+                    .get("simple")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            };
+
+            match actions.complete_ai(request).await {
+                Ok(value) => HostcallOutcome::Success(value),
+                Err(err) => HostcallOutcome::Error {
+                    code: "provider".to_string(),
                     message: err.to_string(),
                 },
             }

@@ -484,6 +484,8 @@ pub struct SwarmReplayPolicyReport {
     pub policy_ids: Vec<String>,
     pub decision_count: u64,
     pub decisions: Vec<SwarmReplayPolicyDecision>,
+    pub comparison_count: u64,
+    pub policy_comparisons: Vec<SwarmReplayPolicyComparison>,
     pub policy_guards: SwarmReplayPolicyGuards,
 }
 
@@ -521,6 +523,51 @@ pub struct SwarmReplayPolicyEvidenceRef {
     pub event_id: String,
     pub logical_clock: u64,
     pub detail: String,
+}
+
+/// Aggregated comparison row for one policy across a replay report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayPolicyComparison {
+    pub policy_id: String,
+    pub rank: u64,
+    pub score: i64,
+    pub metrics: SwarmReplayPolicyMetrics,
+    pub confidence: SwarmReplayPolicyConfidence,
+    pub missing_data: Vec<SwarmReplayPolicyMissingData>,
+    pub rationale: Vec<String>,
+}
+
+/// Machine-readable metrics used to compare policy behavior.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayPolicyMetrics {
+    pub completed_beads: u64,
+    pub throughput_actions: u64,
+    pub blocked_time_minutes: Option<u64>,
+    pub average_wait_minutes: Option<u64>,
+    pub p95_wait_minutes: Option<u64>,
+    pub rch_slot_occupancy_events: u64,
+    pub local_fallback_risk: String,
+    pub reservation_conflicts_avoided: u64,
+    pub stale_work_reclaimed: u64,
+    pub validation_commands_deferred: u64,
+    pub evidence_freshness: String,
+    pub operator_handoff_quality: String,
+}
+
+/// Confidence attached to policy comparison metrics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayPolicyConfidence {
+    pub level: String,
+    pub score: u64,
+    pub reasons: Vec<String>,
+}
+
+/// Missing evidence that suppresses one or more comparison metrics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SwarmReplayPolicyMissingData {
+    pub claim: String,
+    pub reasons: Vec<String>,
+    pub suppressed_metrics: Vec<String>,
 }
 
 /// Context supplied to policy adapters for each replay snapshot.
@@ -641,13 +688,17 @@ pub fn evaluate_swarm_replay_policies(
             .then_with(|| left.target_id.cmp(&right.target_id))
             .then_with(|| left.reason_codes.cmp(&right.reason_codes))
     });
+    let policy_ids = policy_ids.into_iter().collect::<Vec<_>>();
+    let policy_comparisons = build_swarm_replay_policy_comparisons(report, &policy_ids, &decisions);
 
     Ok(SwarmReplayPolicyReport {
         schema: SWARM_REPLAY_POLICY_REPORT_SCHEMA.to_string(),
         trace_id: report.trace_id.clone(),
-        policy_ids: policy_ids.into_iter().collect(),
+        policy_ids,
         decision_count: u64::try_from(decisions.len()).unwrap_or(u64::MAX),
         decisions,
+        comparison_count: u64::try_from(policy_comparisons.len()).unwrap_or(u64::MAX),
+        policy_comparisons,
         policy_guards: SwarmReplayPolicyGuards {
             advisory_only: true,
             no_live_mutation: true,
@@ -655,6 +706,467 @@ pub fn evaluate_swarm_replay_policies(
             consumed_replay_report_only: true,
         },
     })
+}
+
+#[derive(Debug, Clone)]
+struct PolicyLatencyMetrics {
+    blocked_time_minutes: Option<u64>,
+    average_wait_minutes: Option<u64>,
+    p95_wait_minutes: Option<u64>,
+    missing_reasons: Vec<String>,
+}
+
+fn build_swarm_replay_policy_comparisons(
+    report: &SwarmReplayReport,
+    policy_ids: &[String],
+    decisions: &[SwarmReplayPolicyDecision],
+) -> Vec<SwarmReplayPolicyComparison> {
+    let mut comparisons = policy_ids
+        .iter()
+        .map(|policy_id| {
+            let policy_decisions = decisions
+                .iter()
+                .filter(|decision| decision.policy_id == *policy_id)
+                .collect::<Vec<_>>();
+            let latency = policy_latency_metrics(report, &policy_decisions);
+            let mut missing_data = comparison_missing_data(report, &latency);
+            let metrics = policy_comparison_metrics(report, &policy_decisions, &latency);
+            let score = policy_comparison_score(&metrics, missing_data.len());
+            let confidence = policy_comparison_confidence(report, &metrics, &missing_data);
+            let rationale = policy_comparison_rationale(&metrics, score, &missing_data);
+
+            if policy_decisions.is_empty() {
+                missing_data.push(SwarmReplayPolicyMissingData {
+                    claim: "policy_decision_coverage".to_string(),
+                    reasons: vec![
+                        "policy emitted no advisory decisions for this replay".to_string(),
+                    ],
+                    suppressed_metrics: vec!["policy_effect_ranking".to_string()],
+                });
+            }
+
+            SwarmReplayPolicyComparison {
+                policy_id: policy_id.clone(),
+                rank: 0,
+                score,
+                metrics,
+                confidence,
+                missing_data,
+                rationale,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    comparisons.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.policy_id.cmp(&right.policy_id))
+    });
+    for (index, comparison) in comparisons.iter_mut().enumerate() {
+        comparison.rank = u64::try_from(index + 1).unwrap_or(u64::MAX);
+    }
+    comparisons
+}
+
+fn policy_comparison_metrics(
+    report: &SwarmReplayReport,
+    decisions: &[&SwarmReplayPolicyDecision],
+    latency: &PolicyLatencyMetrics,
+) -> SwarmReplayPolicyMetrics {
+    SwarmReplayPolicyMetrics {
+        completed_beads: count_completed_beads(&report.final_state),
+        throughput_actions: count_throughput_actions(decisions),
+        blocked_time_minutes: latency.blocked_time_minutes,
+        average_wait_minutes: latency.average_wait_minutes,
+        p95_wait_minutes: latency.p95_wait_minutes,
+        rch_slot_occupancy_events: count_rch_slot_occupancy_events(report),
+        local_fallback_risk: local_fallback_risk(report, decisions),
+        reservation_conflicts_avoided: count_reservation_conflicts_avoided(report, decisions),
+        stale_work_reclaimed: count_decisions_with_actions(decisions, &["reclaim_stale_bead"]),
+        validation_commands_deferred: count_decisions_with_actions(
+            decisions,
+            &["back_off_cargo", "wait_for_build_slot"],
+        ),
+        evidence_freshness: evidence_freshness(report, latency),
+        operator_handoff_quality: operator_handoff_quality(&report.final_state),
+    }
+}
+
+fn policy_latency_metrics(
+    report: &SwarmReplayReport,
+    decisions: &[&SwarmReplayPolicyDecision],
+) -> PolicyLatencyMetrics {
+    let mut parsed_times = Vec::with_capacity(report.snapshots.len());
+    let mut missing_reasons = Vec::new();
+    for snapshot in &report.snapshots {
+        match DateTime::parse_from_rfc3339(&snapshot.occurred_at_utc) {
+            Ok(timestamp) => parsed_times.push(timestamp),
+            Err(_) => {
+                missing_reasons.push(format!(
+                    "snapshot:{}:{} invalid occurred_at_utc",
+                    snapshot.logical_clock, snapshot.event_id
+                ));
+            }
+        }
+    }
+
+    if !missing_reasons.is_empty() {
+        missing_reasons.sort();
+        return PolicyLatencyMetrics {
+            blocked_time_minutes: None,
+            average_wait_minutes: None,
+            p95_wait_minutes: None,
+            missing_reasons,
+        };
+    }
+
+    let mut wait_minutes = Vec::new();
+    for decision in decisions
+        .iter()
+        .filter(|decision| policy_action_waits_for_external_state(&decision.action))
+    {
+        let Some(index) = report
+            .snapshots
+            .iter()
+            .position(|snapshot| snapshot.logical_clock == decision.logical_clock)
+        else {
+            continue;
+        };
+        let Some(next_timestamp) = parsed_times.get(index + 1) else {
+            wait_minutes.push(0);
+            continue;
+        };
+        let Some(current_timestamp) = parsed_times.get(index) else {
+            continue;
+        };
+        let minutes = next_timestamp
+            .signed_duration_since(*current_timestamp)
+            .num_minutes()
+            .max(0);
+        wait_minutes.push(u64::try_from(minutes).unwrap_or(0));
+    }
+
+    if wait_minutes.is_empty() {
+        return PolicyLatencyMetrics {
+            blocked_time_minutes: Some(0),
+            average_wait_minutes: Some(0),
+            p95_wait_minutes: Some(0),
+            missing_reasons,
+        };
+    }
+
+    wait_minutes.sort_unstable();
+    let blocked_time = wait_minutes.iter().copied().sum::<u64>();
+    let average_wait = blocked_time / u64::try_from(wait_minutes.len()).unwrap_or(1);
+    let p95_index = percentile_index(wait_minutes.len(), 95);
+
+    PolicyLatencyMetrics {
+        blocked_time_minutes: Some(blocked_time),
+        average_wait_minutes: Some(average_wait),
+        p95_wait_minutes: wait_minutes.get(p95_index).copied(),
+        missing_reasons,
+    }
+}
+
+const fn percentile_index(len: usize, percentile: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let numerator = len * percentile;
+    let ceil_rank = numerator.div_ceil(100);
+    ceil_rank.saturating_sub(1)
+}
+
+fn comparison_missing_data(
+    report: &SwarmReplayReport,
+    latency: &PolicyLatencyMetrics,
+) -> Vec<SwarmReplayPolicyMissingData> {
+    let mut missing = Vec::new();
+    if !latency.missing_reasons.is_empty() {
+        missing.push(SwarmReplayPolicyMissingData {
+            claim: "latency_claims".to_string(),
+            reasons: latency.missing_reasons.clone(),
+            suppressed_metrics: vec![
+                "blocked_time_minutes".to_string(),
+                "average_wait_minutes".to_string(),
+                "p95_wait_minutes".to_string(),
+            ],
+        });
+    }
+    if report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "agent_mail_source_unavailable")
+    {
+        missing.push(SwarmReplayPolicyMissingData {
+            claim: "coordination_completeness".to_string(),
+            reasons: vec!["agent mail evidence unavailable in replay diagnostics".to_string()],
+            suppressed_metrics: vec![
+                "reservation_conflicts_avoided".to_string(),
+                "operator_handoff_quality".to_string(),
+            ],
+        });
+    }
+    missing
+}
+
+fn policy_comparison_score(metrics: &SwarmReplayPolicyMetrics, missing_data_count: usize) -> i64 {
+    let risk_penalty = match metrics.local_fallback_risk.as_str() {
+        "high" => 12,
+        "medium" => 5,
+        _ => 0,
+    };
+    let rch_pressure_bonus =
+        if metrics.rch_slot_occupancy_events > 0 && metrics.validation_commands_deferred > 0 {
+            8
+        } else {
+            0
+        };
+    let conflict_bonus = if metrics.reservation_conflicts_avoided > 0 {
+        4
+    } else {
+        0
+    };
+    let handoff_bonus = match metrics.operator_handoff_quality.as_str() {
+        "complete" => 3,
+        "partial" => 1,
+        _ => 0,
+    };
+
+    i64::try_from(metrics.throughput_actions).unwrap_or(i64::MAX / 12) * 12
+        + i64::try_from(metrics.completed_beads).unwrap_or(i64::MAX / 5) * 5
+        + i64::try_from(metrics.reservation_conflicts_avoided).unwrap_or(i64::MAX / 4) * 4
+        + i64::try_from(metrics.stale_work_reclaimed).unwrap_or(i64::MAX / 10) * 10
+        + i64::from(handoff_bonus)
+        + i64::from(rch_pressure_bonus)
+        + i64::from(conflict_bonus)
+        - i64::try_from(metrics.validation_commands_deferred).unwrap_or(i64::MAX / 2) * 2
+        - i64::from(risk_penalty)
+        - i64::try_from(missing_data_count).unwrap_or(i64::MAX / 8) * 8
+}
+
+fn policy_comparison_confidence(
+    report: &SwarmReplayReport,
+    metrics: &SwarmReplayPolicyMetrics,
+    missing_data: &[SwarmReplayPolicyMissingData],
+) -> SwarmReplayPolicyConfidence {
+    let diagnostic_penalty = u64::try_from(report.diagnostics.len().min(3)).unwrap_or(3) * 10;
+    let missing_penalty = u64::try_from(missing_data.len()).unwrap_or(u64::MAX / 25) * 25;
+    let risk_penalty = if metrics.local_fallback_risk == "high" {
+        5
+    } else {
+        0
+    };
+    let score = 100_u64
+        .saturating_sub(diagnostic_penalty)
+        .saturating_sub(missing_penalty)
+        .saturating_sub(risk_penalty);
+    let level = if score >= 80 {
+        "high"
+    } else if score >= 50 {
+        "medium"
+    } else {
+        "low"
+    };
+
+    let mut reasons = Vec::new();
+    if missing_data.is_empty() {
+        reasons.push("all_required_metrics_supported".to_string());
+    } else {
+        reasons.push("missing_data_suppressed_claims".to_string());
+    }
+    if !report.diagnostics.is_empty() {
+        reasons.push("replay_diagnostics_present".to_string());
+    }
+    if metrics.local_fallback_risk == "high" {
+        reasons.push("policy_has_high_local_fallback_risk".to_string());
+    }
+
+    SwarmReplayPolicyConfidence {
+        level: level.to_string(),
+        score,
+        reasons,
+    }
+}
+
+fn policy_comparison_rationale(
+    metrics: &SwarmReplayPolicyMetrics,
+    score: i64,
+    missing_data: &[SwarmReplayPolicyMissingData],
+) -> Vec<String> {
+    let mut rationale = vec![format!(
+        "Score {score} from {} throughput action(s), {} validation deferral(s), risk {}.",
+        metrics.throughput_actions,
+        metrics.validation_commands_deferred,
+        metrics.local_fallback_risk
+    )];
+    if metrics.throughput_actions > 0 {
+        rationale.push(format!(
+            "Advances replay work through {} advisory work-start decision(s).",
+            metrics.throughput_actions
+        ));
+    } else {
+        rationale.push(
+            "Uses conservative advisory posture with no live-mutation decisions.".to_string(),
+        );
+    }
+    if metrics.validation_commands_deferred > 0 {
+        rationale.push(format!(
+            "Defers {} validation command(s) when build or RCH pressure is observed.",
+            metrics.validation_commands_deferred
+        ));
+    }
+    if metrics.reservation_conflicts_avoided > 0 {
+        rationale.push(format!(
+            "Avoids {} reservation conflict(s) through advisory backoff or review.",
+            metrics.reservation_conflicts_avoided
+        ));
+    }
+    if metrics.operator_handoff_quality != "not_applicable" {
+        rationale.push(format!(
+            "Operator handoff evidence is {}.",
+            metrics.operator_handoff_quality
+        ));
+    }
+    for missing in missing_data {
+        rationale.push(format!(
+            "Suppresses {} because {}.",
+            missing.suppressed_metrics.join(","),
+            missing.reasons.join("; ")
+        ));
+    }
+    rationale
+}
+
+fn count_completed_beads(state: &SwarmReplayState) -> u64 {
+    state
+        .beads
+        .values()
+        .filter(|bead| bead.status == "closed")
+        .count()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn count_throughput_actions(decisions: &[&SwarmReplayPolicyDecision]) -> u64 {
+    count_decisions_with_actions(
+        decisions,
+        &[
+            "acquire_build_slot_for_validation",
+            "claim_bead",
+            "continue_current_work",
+            "reclaim_stale_bead",
+            "split_validation",
+        ],
+    )
+}
+
+fn count_decisions_with_actions(decisions: &[&SwarmReplayPolicyDecision], actions: &[&str]) -> u64 {
+    decisions
+        .iter()
+        .filter(|decision| actions.iter().any(|action| *action == decision.action))
+        .count()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn count_rch_slot_occupancy_events(report: &SwarmReplayReport) -> u64 {
+    report
+        .snapshots
+        .iter()
+        .filter(|snapshot| {
+            active_build_slot(&snapshot.state).is_some()
+                || pressured_rch_job(&snapshot.state).is_some()
+        })
+        .count()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn local_fallback_risk(
+    report: &SwarmReplayReport,
+    decisions: &[&SwarmReplayPolicyDecision],
+) -> String {
+    let has_live_mutation = decisions
+        .iter()
+        .any(|decision| decision.would_require_live_mutation);
+    if !has_live_mutation {
+        return "low".to_string();
+    }
+    if mail_is_unavailable(&report.final_state) {
+        return "high".to_string();
+    }
+    if report
+        .snapshots
+        .iter()
+        .any(|snapshot| pressured_rch_job(&snapshot.state).is_some())
+    {
+        return "medium".to_string();
+    }
+    "medium".to_string()
+}
+
+fn count_reservation_conflicts_avoided(
+    report: &SwarmReplayReport,
+    decisions: &[&SwarmReplayPolicyDecision],
+) -> u64 {
+    let safety_decisions = count_decisions_with_actions(
+        decisions,
+        &[
+            "back_off_cargo",
+            "handoff",
+            "operator_review",
+            "refresh_evidence",
+            "wait",
+            "wait_for_build_slot",
+        ],
+    );
+    safety_decisions.min(report.final_state.coordination.reservation_conflict_count)
+}
+
+fn evidence_freshness(report: &SwarmReplayReport, latency: &PolicyLatencyMetrics) -> String {
+    if report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == "error")
+    {
+        return "degraded".to_string();
+    }
+    if !report.diagnostics.is_empty() || !latency.missing_reasons.is_empty() {
+        return "partial".to_string();
+    }
+    "fresh".to_string()
+}
+
+fn operator_handoff_quality(state: &SwarmReplayState) -> String {
+    if state.operator_handoffs.is_empty() {
+        return "not_applicable".to_string();
+    }
+    let complete = state
+        .operator_handoffs
+        .values()
+        .filter(|handoff| !handoff.next_actions.is_empty() && !handoff.evidence_paths.is_empty())
+        .count();
+    if complete == state.operator_handoffs.len() {
+        "complete".to_string()
+    } else if complete > 0 {
+        "partial".to_string()
+    } else {
+        "missing".to_string()
+    }
+}
+
+fn policy_action_waits_for_external_state(action: &str) -> bool {
+    matches!(
+        action,
+        "back_off_cargo"
+            | "handoff"
+            | "operator_review"
+            | "refresh_evidence"
+            | "wait"
+            | "wait_for_build_slot"
+    )
 }
 
 fn conservative_manual_decisions(

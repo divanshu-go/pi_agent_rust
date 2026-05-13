@@ -1,0 +1,101 @@
+[
+  {
+    "policy_id": "existing_autopilot",
+    "rank": 1,
+    "score": 51,
+    "metrics": {
+      "completed_beads": 1,
+      "throughput_actions": 4,
+      "blocked_time_minutes": 0,
+      "average_wait_minutes": 0,
+      "p95_wait_minutes": 0,
+      "rch_slot_occupancy_events": 3,
+      "local_fallback_risk": "medium",
+      "reservation_conflicts_avoided": 0,
+      "stale_work_reclaimed": 0,
+      "validation_commands_deferred": 0,
+      "evidence_freshness": "fresh",
+      "operator_handoff_quality": "complete"
+    },
+    "confidence": {
+      "level": "high",
+      "score": 100,
+      "reasons": [
+        "all_required_metrics_supported"
+      ]
+    },
+    "missing_data": [],
+    "rationale": [
+      "Score 51 from 4 throughput action(s), 0 validation deferral(s), risk medium.",
+      "Advances replay work through 4 advisory work-start decision(s).",
+      "Operator handoff evidence is complete."
+    ]
+  },
+  {
+    "policy_id": "rch_fanout_limited",
+    "rank": 2,
+    "score": 37,
+    "metrics": {
+      "completed_beads": 1,
+      "throughput_actions": 2,
+      "blocked_time_minutes": 9,
+      "average_wait_minutes": 3,
+      "p95_wait_minutes": 5,
+      "rch_slot_occupancy_events": 3,
+      "local_fallback_risk": "medium",
+      "reservation_conflicts_avoided": 1,
+      "stale_work_reclaimed": 0,
+      "validation_commands_deferred": 3,
+      "evidence_freshness": "fresh",
+      "operator_handoff_quality": "complete"
+    },
+    "confidence": {
+      "level": "high",
+      "score": 100,
+      "reasons": [
+        "all_required_metrics_supported"
+      ]
+    },
+    "missing_data": [],
+    "rationale": [
+      "Score 37 from 2 throughput action(s), 3 validation deferral(s), risk medium.",
+      "Advances replay work through 2 advisory work-start decision(s).",
+      "Defers 3 validation command(s) when build or RCH pressure is observed.",
+      "Avoids 1 reservation conflict(s) through advisory backoff or review.",
+      "Operator handoff evidence is complete."
+    ]
+  },
+  {
+    "policy_id": "conservative_manual",
+    "rank": 3,
+    "score": 16,
+    "metrics": {
+      "completed_beads": 1,
+      "throughput_actions": 0,
+      "blocked_time_minutes": 14,
+      "average_wait_minutes": 3,
+      "p95_wait_minutes": 5,
+      "rch_slot_occupancy_events": 3,
+      "local_fallback_risk": "low",
+      "reservation_conflicts_avoided": 1,
+      "stale_work_reclaimed": 0,
+      "validation_commands_deferred": 0,
+      "evidence_freshness": "fresh",
+      "operator_handoff_quality": "complete"
+    },
+    "confidence": {
+      "level": "high",
+      "score": 100,
+      "reasons": [
+        "all_required_metrics_supported"
+      ]
+    },
+    "missing_data": [],
+    "rationale": [
+      "Score 16 from 0 throughput action(s), 0 validation deferral(s), risk low.",
+      "Uses conservative advisory posture with no live-mutation decisions.",
+      "Avoids 1 reservation conflict(s) through advisory backoff or review.",
+      "Operator handoff evidence is complete."
+    ]
+  }
+]

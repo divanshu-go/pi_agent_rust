@@ -49,6 +49,12 @@ fn write_json(root: &Path, rel: &str, value: &Value) -> std::io::Result<()> {
     write_text(root, rel, &serde_json::to_string_pretty(value)?)
 }
 
+fn load_json(rel: &str) -> Result<Value, Box<dyn Error>> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+    let raw = fs::read_to_string(&path)?;
+    Ok(serde_json::from_str(&raw)?)
+}
+
 fn base_request(root: &Path) -> SwarmReplayIngestRequest {
     SwarmReplayIngestRequest::new("fixture-clean-replay-trace", GENERATED_AT, root)
         .with_git_identity("abc123", "main")
@@ -876,6 +882,164 @@ fn policy_runner_is_deterministic_and_advisory_only() -> TestResult {
             .decisions
             .iter()
             .all(|item| !item.source_evidence.is_empty())
+    );
+    Ok(())
+}
+
+#[test]
+fn policy_report_includes_golden_comparison_metrics() -> TestResult {
+    let trace = trace_from_events(vec![
+        replay_event(
+            "ready-bead",
+            1,
+            "2026-05-13T18:00:00Z",
+            "bead_lifecycle",
+            "beads_jsonl",
+            json!({
+                "bead_id": "bd-compare",
+                "to_status": "open",
+                "priority": 2,
+                "assignee": "unassigned"
+            }),
+        ),
+        replay_event(
+            "reservation-conflict",
+            2,
+            "2026-05-13T18:02:00Z",
+            "reservation_conflict",
+            "agent_mail_archive",
+            json!({
+                "path_pattern": "src/swarm_replay.rs",
+                "holder": "OtherAgent",
+                "conflict_reason": "active exclusive lease"
+            }),
+        ),
+        replay_event(
+            "rch-queued",
+            3,
+            "2026-05-13T18:05:00Z",
+            "rch_job_state",
+            "rch_queue_status",
+            json!({
+                "job_id": "rch-queued",
+                "state": "queued",
+                "worker": "worker-1",
+                "command": "rch exec -- cargo check --all-targets",
+                "queue_position": 3
+            }),
+        ),
+        replay_event(
+            "operator-handoff",
+            4,
+            "2026-05-13T18:09:00Z",
+            "operator_handoff",
+            "operator_runpack",
+            json!({
+                "handoff_id": "handoff-compare",
+                "summary": "continue via beads while mail is unavailable",
+                "next_actions": ["continue bd-compare"],
+                "evidence_paths": ["docs/evidence/swarm-operator-runpack.json"]
+            }),
+        ),
+        replay_event(
+            "closed-bead",
+            5,
+            "2026-05-13T18:14:00Z",
+            "bead_lifecycle",
+            "beads_jsonl",
+            json!({
+                "bead_id": "bd-compare",
+                "to_status": "closed",
+                "priority": 2,
+                "assignee": "Codex"
+            }),
+        ),
+    ]);
+    let replay = replay_swarm_trace(&trace)?;
+    let policies = [
+        SwarmReplayBaselinePolicy::ConservativeManual,
+        SwarmReplayBaselinePolicy::ExistingAutopilot,
+        SwarmReplayBaselinePolicy::RchFanoutLimited,
+    ];
+    let report = evaluate_swarm_replay_baseline_policies(&replay, &policies)?;
+
+    assert_eq!(report.comparison_count, 3);
+    assert_eq!(
+        report
+            .policy_comparisons
+            .iter()
+            .map(|row| row.policy_id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "existing_autopilot",
+            "rch_fanout_limited",
+            "conservative_manual"
+        ]
+    );
+
+    let observed = serde_json::to_value(&report.policy_comparisons)?;
+    let expected =
+        load_json("tests/golden_corpus/swarm_replay_trace/policy_comparison_metrics.json")?;
+    assert_eq!(observed, expected);
+    Ok(())
+}
+
+#[test]
+fn policy_comparison_suppresses_latency_when_timestamps_are_missing() -> TestResult {
+    let trace = trace_from_events(vec![
+        replay_event(
+            "missing-time",
+            1,
+            "not-a-timestamp",
+            "bead_lifecycle",
+            "beads_jsonl",
+            json!({
+                "bead_id": "bd-missing-time",
+                "to_status": "open",
+                "priority": 2,
+                "assignee": "unassigned"
+            }),
+        ),
+        replay_event(
+            "normal-time",
+            2,
+            "2026-05-13T18:01:00Z",
+            "rch_job_state",
+            "rch_queue_status",
+            json!({
+                "job_id": "rch-missing-time",
+                "state": "queued",
+                "worker": "worker-1",
+                "command": "rch exec -- cargo check --all-targets",
+                "queue_position": 2
+            }),
+        ),
+    ]);
+    let replay = replay_swarm_trace(&trace)?;
+    let report = evaluate_swarm_replay_baseline_policies(
+        &replay,
+        &[SwarmReplayBaselinePolicy::RchFanoutLimited],
+    )?;
+    let comparison = report
+        .policy_comparisons
+        .iter()
+        .find(|row| row.policy_id == "rch_fanout_limited")
+        .ok_or("missing rch comparison")?;
+
+    assert_eq!(comparison.metrics.blocked_time_minutes, None);
+    assert_eq!(comparison.metrics.average_wait_minutes, None);
+    assert_eq!(comparison.metrics.p95_wait_minutes, None);
+    assert!(
+        comparison
+            .missing_data
+            .iter()
+            .any(|missing| missing.claim == "latency_claims")
+    );
+    assert!(
+        comparison
+            .confidence
+            .reasons
+            .contains(&"missing_data_suppressed_claims".to_string())
     );
     Ok(())
 }
