@@ -14,6 +14,11 @@ use crate::resource_governor::{
     SwarmCapacityEvidenceSummary, SwarmCapacityPlan, SwarmCapacityPlanError,
     SwarmCapacityPlannerConfig, SwarmHostInventory, SwarmLiveLoad, TailLatencyRegimeSample,
 };
+use crate::semantic_workspace_graph::{
+    ContextArtifactCacheScope, ContextBundleBudget, ContextBundleRequest, EvidenceFreshnessStatus,
+    RedactionStatus, SemanticContextBundle, SemanticContextBundlePlanner, SemanticEdgeType,
+    SemanticNodeType, SemanticWorkspaceGraph, SemanticWorkspaceGraphBuilder,
+};
 use crate::session::SessionHeader;
 use crate::session_index::walk_sessions;
 use chrono::{DateTime, Utc};
@@ -41,6 +46,7 @@ const SWARM_DOCTOR_AGENT_MAIL_DEGRADED_SCHEMA: &str = "pi.doctor.agent_mail_degr
 const SWARM_DOCTOR_STALLED_REAPER_SCHEMA: &str = "pi.doctor.stalled_bead_reaper.v1";
 const SWARM_DOCTOR_NEXT_ACTION_SCHEMA: &str = "pi.doctor.communication_purgatory_next_action.v1";
 const SWARM_DOCTOR_OPERATIONS_DASHBOARD_SCHEMA: &str = "pi.doctor.swarm_operations_dashboard.v1";
+const SWARM_DOCTOR_CONTEXT_INTELLIGENCE_SCHEMA: &str = "pi.doctor.context_intelligence_posture.v1";
 const SWARM_DOCTOR_RCH_AFFINITY_SCHEMA: &str = "pi.doctor.rch_warm_target_affinity.v1";
 const SWARM_RCH_AFFINITY_PLAN_ARTIFACT_SCHEMA: &str = "pi.swarm.rch_affinity_plan.v1";
 const SWARM_DOCTOR_RESERVATION_HEATMAP_SCHEMA: &str =
@@ -1122,6 +1128,7 @@ fn check_swarm(cwd: &Path, findings: &mut Vec<Finding>) {
     check_swarm_rch(findings);
     check_swarm_rch_affinity(cwd, findings);
     check_swarm_temp_dirs(findings);
+    check_swarm_context_intelligence(cwd, findings);
     check_swarm_operations_dashboard(cwd, findings);
 }
 
@@ -4237,6 +4244,592 @@ fn count_agent_mail_reservation_rows(
             }
         }
         _ => {}
+    }
+}
+
+fn check_swarm_context_intelligence(cwd: &Path, findings: &mut Vec<Finding>) {
+    let now = Utc::now();
+    let finding = match build_swarm_context_intelligence_posture(cwd, now) {
+        Ok(posture) => classify_swarm_context_intelligence_posture(&posture),
+        Err(err) => swarm_context_intelligence_unavailable_finding(&err),
+    };
+    findings.push(finding);
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SwarmContextIntelligencePosture {
+    graph_schema: String,
+    graph_builder_schema: String,
+    bundle_schema: String,
+    graph_node_count: usize,
+    graph_edge_count: usize,
+    graph_trace_status_counts: BTreeMap<String, usize>,
+    missing_input_count: usize,
+    malformed_input_count: usize,
+    unreadable_input_count: usize,
+    evidence_freshness_status_counts: BTreeMap<String, usize>,
+    stale_or_untrusted_evidence_count: usize,
+    graph_redaction_status_counts: BTreeMap<String, usize>,
+    graph_validation_link_count: usize,
+    bundle_selected_count: usize,
+    bundle_excluded_count: usize,
+    bundle_stale_evidence_suppression_count: usize,
+    bundle_selected_code_count: usize,
+    bundle_selected_test_signal_count: usize,
+    bundle_missing_test_link_count: usize,
+    bundle_suggested_validation_command_count: usize,
+    bundle_coverage_status: String,
+    bundle_estimated_bytes: u64,
+    bundle_estimated_tokens: u64,
+    bundle_budget: ContextBundleBudget,
+    cache_ttl_seconds: u64,
+    cache_fingerprint_count: usize,
+    cache_status_counts: BTreeMap<String, usize>,
+    cache_pressure_count: usize,
+    cacheable: bool,
+    redaction_summary: serde_json::Value,
+    degraded_reasons: Vec<String>,
+    recommended_actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SwarmContextGraphPosture {
+    trace_status_counts: BTreeMap<String, usize>,
+    missing_input_count: usize,
+    malformed_input_count: usize,
+    unreadable_input_count: usize,
+    evidence_freshness_status_counts: BTreeMap<String, usize>,
+    stale_or_untrusted_evidence_count: usize,
+    redaction_status_counts: BTreeMap<String, usize>,
+    validation_link_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SwarmContextBundlePosture {
+    selected_count: usize,
+    excluded_count: usize,
+    stale_evidence_suppression_count: usize,
+    selected_code_count: usize,
+    selected_test_signal_count: usize,
+    missing_test_link_count: usize,
+    suggested_validation_command_count: usize,
+    coverage_status: String,
+    estimated_bytes: u64,
+    estimated_tokens: u64,
+    budget: ContextBundleBudget,
+    cacheable: bool,
+    redaction_summary: serde_json::Value,
+    unsafe_redaction: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SwarmContextCachePosture {
+    status_counts: BTreeMap<String, usize>,
+    fingerprint_count: usize,
+    pressure_count: usize,
+}
+
+fn build_swarm_context_intelligence_posture(
+    cwd: &Path,
+    now: DateTime<Utc>,
+) -> std::result::Result<SwarmContextIntelligencePosture, String> {
+    let branch_identity =
+        current_git_commit(cwd).unwrap_or_else(|| "git-identity-unavailable".to_string());
+    let cache_scope = ContextArtifactCacheScope::new(
+        "doctor-swarm-context-intelligence",
+        branch_identity,
+        "operator-runpack",
+    );
+    let graph = SemanticWorkspaceGraphBuilder::new(cwd)
+        .with_reference_time(now)
+        .with_cache_scope(cache_scope.clone())
+        .with_cache_ttl_seconds(15 * 60)
+        .build()
+        .map_err(|err| redacted_doctor_text(&err.to_string()))?;
+    let bundle_request = swarm_context_bundle_request(cwd, now);
+    let bundle = SemanticContextBundlePlanner::new(&graph).plan(&bundle_request);
+    Ok(summarize_swarm_context_intelligence(
+        &graph,
+        &bundle,
+        &cache_scope,
+        now,
+    ))
+}
+
+fn swarm_context_bundle_request(cwd: &Path, now: DateTime<Utc>) -> ContextBundleRequest {
+    ContextBundleRequest {
+        query: Some(
+            "doctor swarm runpack context intelligence graph freshness bundle coverage stale suppressions missing tests cache pressure degraded modes"
+                .to_string(),
+        ),
+        bead_id: None,
+        changed_paths: vec![
+            "src/doctor.rs".to_string(),
+            "scripts/build_swarm_operator_runpack.py".to_string(),
+            "tests/doctor_swarm_temp_dir_json.rs".to_string(),
+        ],
+        failing_command: None,
+        workspace_id: Some(format!("doctor-swarm:{}", stable_path_label(cwd))),
+        branch: current_git_commit(cwd),
+        session_id: Some("operator-runpack".to_string()),
+        generated_at_utc: Some(now.to_rfc3339()),
+        cache_ttl_seconds: 15 * 60,
+        budget: ContextBundleBudget {
+            max_items: 24,
+            max_bytes: 32 * 1024,
+        },
+    }
+}
+
+fn stable_path_label(path: &Path) -> String {
+    let text = path.display().to_string();
+    if line_is_sensitive(&text) {
+        "[redacted-sensitive-path]".to_string()
+    } else {
+        truncate_chars(&text, 120)
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn summarize_swarm_context_intelligence(
+    graph: &SemanticWorkspaceGraph,
+    bundle: &SemanticContextBundle,
+    cache_scope: &ContextArtifactCacheScope,
+    now: DateTime<Utc>,
+) -> SwarmContextIntelligencePosture {
+    let graph_posture = summarize_swarm_context_graph(graph);
+    let cache_posture = summarize_swarm_context_cache(graph, cache_scope, now);
+    let bundle_posture = summarize_swarm_context_bundle(bundle);
+    let degraded_reasons =
+        swarm_context_degraded_reasons(&graph_posture, &bundle_posture, &cache_posture);
+    let recommended_actions = swarm_context_recommended_actions(&degraded_reasons);
+
+    SwarmContextIntelligencePosture {
+        graph_schema: graph.schema.clone(),
+        graph_builder_schema: graph.builder_schema.clone(),
+        bundle_schema: bundle.schema.clone(),
+        graph_node_count: graph.nodes.len(),
+        graph_edge_count: graph.edges.len(),
+        graph_trace_status_counts: graph_posture.trace_status_counts,
+        missing_input_count: graph_posture.missing_input_count,
+        malformed_input_count: graph_posture.malformed_input_count,
+        unreadable_input_count: graph_posture.unreadable_input_count,
+        evidence_freshness_status_counts: graph_posture.evidence_freshness_status_counts,
+        stale_or_untrusted_evidence_count: graph_posture.stale_or_untrusted_evidence_count,
+        graph_redaction_status_counts: graph_posture.redaction_status_counts,
+        graph_validation_link_count: graph_posture.validation_link_count,
+        bundle_selected_count: bundle_posture.selected_count,
+        bundle_excluded_count: bundle_posture.excluded_count,
+        bundle_stale_evidence_suppression_count: bundle_posture.stale_evidence_suppression_count,
+        bundle_selected_code_count: bundle_posture.selected_code_count,
+        bundle_selected_test_signal_count: bundle_posture.selected_test_signal_count,
+        bundle_missing_test_link_count: bundle_posture.missing_test_link_count,
+        bundle_suggested_validation_command_count: bundle_posture
+            .suggested_validation_command_count,
+        bundle_coverage_status: bundle_posture.coverage_status,
+        bundle_estimated_bytes: bundle_posture.estimated_bytes,
+        bundle_estimated_tokens: bundle_posture.estimated_tokens,
+        bundle_budget: bundle_posture.budget,
+        cache_ttl_seconds: graph.cache_ttl_seconds,
+        cache_fingerprint_count: cache_posture.fingerprint_count,
+        cache_status_counts: cache_posture.status_counts,
+        cache_pressure_count: cache_posture.pressure_count,
+        cacheable: bundle_posture.cacheable,
+        redaction_summary: bundle_posture.redaction_summary,
+        degraded_reasons,
+        recommended_actions,
+    }
+}
+
+fn summarize_swarm_context_graph(graph: &SemanticWorkspaceGraph) -> SwarmContextGraphPosture {
+    let mut trace_status_counts = BTreeMap::new();
+    for event in &graph.trace {
+        increment_count(&mut trace_status_counts, enum_json_label(event.status));
+    }
+
+    let mut evidence_freshness_status_counts = BTreeMap::new();
+    let mut redaction_status_counts = BTreeMap::new();
+    for node in &graph.nodes {
+        if let Some(status) = node.freshness_status {
+            increment_count(
+                &mut evidence_freshness_status_counts,
+                enum_json_label(status),
+            );
+        }
+        increment_count(
+            &mut redaction_status_counts,
+            enum_json_label(node.redaction_status),
+        );
+    }
+
+    let stale_or_untrusted_evidence_count = [
+        EvidenceFreshnessStatus::HistoricalSnapshot,
+        EvidenceFreshnessStatus::Stale,
+        EvidenceFreshnessStatus::Missing,
+        EvidenceFreshnessStatus::Malformed,
+        EvidenceFreshnessStatus::Uncertified,
+        EvidenceFreshnessStatus::FreshnessUnknown,
+    ]
+    .into_iter()
+    .map(|status| count_map_value(&evidence_freshness_status_counts, &enum_json_label(status)))
+    .sum();
+
+    SwarmContextGraphPosture {
+        missing_input_count: count_map_value(&trace_status_counts, "missing"),
+        malformed_input_count: count_map_value(&trace_status_counts, "malformed"),
+        unreadable_input_count: count_map_value(&trace_status_counts, "unreadable"),
+        trace_status_counts,
+        evidence_freshness_status_counts,
+        stale_or_untrusted_evidence_count,
+        redaction_status_counts,
+        validation_link_count: graph
+            .edges
+            .iter()
+            .filter(|edge| edge.edge_type == SemanticEdgeType::SuggestsValidation)
+            .count(),
+    }
+}
+
+fn summarize_swarm_context_cache(
+    graph: &SemanticWorkspaceGraph,
+    cache_scope: &ContextArtifactCacheScope,
+    now: DateTime<Utc>,
+) -> SwarmContextCachePosture {
+    let mut status_counts = BTreeMap::new();
+    for fingerprint in &graph.input_fingerprints {
+        let status = fingerprint.cache_validation(cache_scope, utc_timestamp_nanos(now));
+        increment_count(&mut status_counts, enum_json_label(status));
+    }
+
+    SwarmContextCachePosture {
+        fingerprint_count: graph.input_fingerprints.len(),
+        pressure_count: graph
+            .input_fingerprints
+            .len()
+            .saturating_sub(count_map_value(&status_counts, "valid")),
+        status_counts,
+    }
+}
+
+fn summarize_swarm_context_bundle(bundle: &SemanticContextBundle) -> SwarmContextBundlePosture {
+    let selected_code_count = bundle
+        .selected_items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item.node_type,
+                SemanticNodeType::CodeSymbol | SemanticNodeType::FileRegion
+            ) && item.source_path.starts_with("src/")
+        })
+        .count();
+    let selected_test_signal_count = bundle
+        .selected_items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item.node_type,
+                SemanticNodeType::TestCase | SemanticNodeType::ValidationCommand
+            )
+        })
+        .count();
+    let redaction_summary = serde_json::to_value(&bundle.redaction_summary).unwrap_or_else(|_| {
+        serde_json::json!({
+            "overall_status": "serialization_failed"
+        })
+    });
+
+    SwarmContextBundlePosture {
+        selected_count: bundle.selected_items.len(),
+        excluded_count: bundle.excluded_items.len(),
+        stale_evidence_suppression_count: bundle.stale_evidence_suppressions.len(),
+        selected_code_count,
+        selected_test_signal_count,
+        missing_test_link_count: selected_code_count.saturating_sub(selected_test_signal_count),
+        suggested_validation_command_count: bundle.suggested_validation_commands.len(),
+        coverage_status: context_bundle_coverage_status(bundle),
+        estimated_bytes: bundle.estimated_bytes,
+        estimated_tokens: bundle.estimated_tokens,
+        budget: bundle.budget.clone(),
+        cacheable: bundle.invalidation_policy.cacheable,
+        redaction_summary,
+        unsafe_redaction: bundle.redaction_summary.overall_status >= RedactionStatus::UnsafeToEmit,
+    }
+}
+
+fn swarm_context_degraded_reasons(
+    graph: &SwarmContextGraphPosture,
+    bundle: &SwarmContextBundlePosture,
+    cache: &SwarmContextCachePosture,
+) -> Vec<String> {
+    let mut degraded_reasons = Vec::new();
+    push_reason_if(
+        &mut degraded_reasons,
+        graph.missing_input_count > 0,
+        "semantic_graph_missing_inputs",
+    );
+    push_reason_if(
+        &mut degraded_reasons,
+        graph.malformed_input_count > 0,
+        "semantic_graph_malformed_inputs",
+    );
+    push_reason_if(
+        &mut degraded_reasons,
+        graph.unreadable_input_count > 0,
+        "semantic_graph_unreadable_inputs",
+    );
+    push_reason_if(
+        &mut degraded_reasons,
+        bundle.selected_count == 0,
+        "context_bundle_empty",
+    );
+    push_reason_if(
+        &mut degraded_reasons,
+        bundle.coverage_status != "covered",
+        "context_bundle_partial_coverage",
+    );
+    push_reason_if(
+        &mut degraded_reasons,
+        bundle.stale_evidence_suppression_count > 0,
+        "stale_or_unsafe_evidence_suppressed",
+    );
+    push_reason_if(
+        &mut degraded_reasons,
+        bundle.missing_test_link_count > 0,
+        "selected_code_without_test_link",
+    );
+    push_reason_if(
+        &mut degraded_reasons,
+        cache.pressure_count > 0,
+        "context_cache_pressure",
+    );
+    push_reason_if(
+        &mut degraded_reasons,
+        graph.stale_or_untrusted_evidence_count > 0,
+        "stale_or_untrusted_evidence_present",
+    );
+    push_reason_if(
+        &mut degraded_reasons,
+        bundle.unsafe_redaction,
+        "unsafe_context_redaction_suppressed",
+    );
+    degraded_reasons
+}
+
+fn classify_swarm_context_intelligence_posture(
+    posture: &SwarmContextIntelligencePosture,
+) -> Finding {
+    let detail = format!(
+        "graph nodes={} edges={} missing_inputs={} malformed_inputs={} unreadable_inputs={}; bundle coverage={} selected={} excluded={} stale_suppressions={} missing_test_links={} validation_commands={}; cache pressure={} fingerprints={}",
+        posture.graph_node_count,
+        posture.graph_edge_count,
+        posture.missing_input_count,
+        posture.malformed_input_count,
+        posture.unreadable_input_count,
+        posture.bundle_coverage_status,
+        posture.bundle_selected_count,
+        posture.bundle_excluded_count,
+        posture.bundle_stale_evidence_suppression_count,
+        posture.bundle_missing_test_link_count,
+        posture.bundle_suggested_validation_command_count,
+        posture.cache_pressure_count,
+        posture.cache_fingerprint_count
+    );
+    let data = swarm_context_intelligence_json(posture);
+    if posture.degraded_reasons.is_empty() {
+        Finding::pass(CheckCategory::Swarm, "Context intelligence posture clear")
+            .with_detail(detail)
+            .with_data(data)
+    } else {
+        Finding::warn(
+            CheckCategory::Swarm,
+            "Context intelligence posture degraded",
+        )
+        .with_detail(format!(
+            "{detail}; degraded_reasons={}",
+            posture.degraded_reasons.join(",")
+        ))
+        .with_remediation(posture.recommended_actions.join("; "))
+        .with_data(data)
+    }
+}
+
+fn swarm_context_intelligence_json(posture: &SwarmContextIntelligencePosture) -> serde_json::Value {
+    serde_json::json!({
+        "schema": SWARM_DOCTOR_CONTEXT_INTELLIGENCE_SCHEMA,
+        "mode": "audit_only",
+        "mutation_performed": false,
+        "status": if posture.degraded_reasons.is_empty() { "ready" } else { "degraded" },
+        "graph": {
+            "schema": posture.graph_schema,
+            "builder_schema": posture.graph_builder_schema,
+            "node_count": posture.graph_node_count,
+            "edge_count": posture.graph_edge_count,
+            "trace_status_counts": posture.graph_trace_status_counts,
+            "missing_input_count": posture.missing_input_count,
+            "malformed_input_count": posture.malformed_input_count,
+            "unreadable_input_count": posture.unreadable_input_count,
+            "evidence_freshness_status_counts": posture.evidence_freshness_status_counts,
+            "stale_or_untrusted_evidence_count": posture.stale_or_untrusted_evidence_count,
+            "redaction_status_counts": posture.graph_redaction_status_counts,
+            "validation_link_count": posture.graph_validation_link_count
+        },
+        "bundle": {
+            "schema": posture.bundle_schema,
+            "coverage_status": posture.bundle_coverage_status,
+            "selected_count": posture.bundle_selected_count,
+            "excluded_count": posture.bundle_excluded_count,
+            "stale_evidence_suppression_count": posture.bundle_stale_evidence_suppression_count,
+            "selected_code_count": posture.bundle_selected_code_count,
+            "selected_test_signal_count": posture.bundle_selected_test_signal_count,
+            "missing_test_link_count": posture.bundle_missing_test_link_count,
+            "suggested_validation_command_count": posture.bundle_suggested_validation_command_count,
+            "estimated_bytes": posture.bundle_estimated_bytes,
+            "estimated_tokens": posture.bundle_estimated_tokens,
+            "budget": {
+                "max_items": posture.bundle_budget.max_items,
+                "max_bytes": posture.bundle_budget.max_bytes
+            }
+        },
+        "cache": {
+            "cache_ttl_seconds": posture.cache_ttl_seconds,
+            "fingerprint_count": posture.cache_fingerprint_count,
+            "status_counts": posture.cache_status_counts,
+            "pressure_count": posture.cache_pressure_count,
+            "pressure": posture.cache_pressure_count > 0,
+            "cacheable": posture.cacheable
+        },
+        "redaction_summary": posture.redaction_summary,
+        "degraded_reasons": posture.degraded_reasons,
+        "recommended_actions": posture.recommended_actions
+    })
+}
+
+fn swarm_context_intelligence_unavailable_finding(error: &str) -> Finding {
+    Finding::warn(
+        CheckCategory::Swarm,
+        "Context intelligence posture unavailable",
+    )
+    .with_detail(error)
+    .with_remediation("Run `pi doctor --only swarm --format json` from a readable project root")
+    .with_data(serde_json::json!({
+        "schema": SWARM_DOCTOR_CONTEXT_INTELLIGENCE_SCHEMA,
+        "mode": "audit_only",
+        "mutation_performed": false,
+        "status": "degraded",
+        "graph": {
+            "status": "unavailable"
+        },
+        "bundle": {
+            "coverage_status": "unavailable",
+            "selected_count": 0,
+            "missing_test_link_count": 0,
+            "stale_evidence_suppression_count": 0
+        },
+        "cache": {
+            "pressure": true,
+            "pressure_count": 1
+        },
+        "redaction_summary": {
+            "overall_status": "unknown"
+        },
+        "degraded_reasons": ["semantic_graph_unavailable"],
+        "source_errors": [error]
+    }))
+}
+
+fn context_bundle_coverage_status(bundle: &SemanticContextBundle) -> String {
+    if bundle.selected_items.is_empty() {
+        return "empty".to_string();
+    }
+    if bundle
+        .excluded_items
+        .iter()
+        .any(|item| item.reason == "budget_exceeded")
+    {
+        return "partial_budget_limited".to_string();
+    }
+    if bundle.stale_evidence_suppressions.is_empty() {
+        "covered".to_string()
+    } else {
+        "partial_stale_suppressed".to_string()
+    }
+}
+
+fn swarm_context_recommended_actions(degraded_reasons: &[String]) -> Vec<String> {
+    let mut actions = Vec::new();
+    if degraded_reasons
+        .iter()
+        .any(|reason| reason.contains("semantic_graph"))
+    {
+        actions.push("Refresh missing or malformed graph inputs before trusting context posture");
+    }
+    if degraded_reasons
+        .iter()
+        .any(|reason| reason == "context_bundle_partial_coverage")
+    {
+        actions.push(
+            "Tighten the context request or raise the context budget before broad swarm work",
+        );
+    }
+    if degraded_reasons
+        .iter()
+        .any(|reason| reason == "stale_or_unsafe_evidence_suppressed")
+    {
+        actions.push("Refresh stale evidence or keep suppressed evidence out of runpack claims");
+    }
+    if degraded_reasons
+        .iter()
+        .any(|reason| reason == "selected_code_without_test_link")
+    {
+        actions.push("Add or link focused validation commands for selected code context");
+    }
+    if degraded_reasons
+        .iter()
+        .any(|reason| reason == "context_cache_pressure")
+    {
+        actions.push("Regenerate context cache fingerprints before reusing cached bundles");
+    }
+    if actions.is_empty() {
+        actions.push("No context-intelligence remediation required");
+    }
+    actions.into_iter().map(str::to_string).collect()
+}
+
+fn push_reason_if(reasons: &mut Vec<String>, condition: bool, reason: &str) {
+    if condition {
+        reasons.push(reason.to_string());
+    }
+}
+
+fn increment_count(counts: &mut BTreeMap<String, usize>, key: String) {
+    *counts.entry(key).or_default() += 1;
+}
+
+fn count_map_value(counts: &BTreeMap<String, usize>, key: &str) -> usize {
+    counts.get(key).copied().unwrap_or(0)
+}
+
+fn enum_json_label<T>(value: T) -> String
+where
+    T: Serialize + fmt::Debug,
+{
+    serde_json::to_value(&value)
+        .ok()
+        .and_then(|value| value.as_str().map(ToString::to_string))
+        .unwrap_or_else(|| format!("{value:?}").to_ascii_lowercase())
+}
+
+fn utc_timestamp_nanos(now: DateTime<Utc>) -> u64 {
+    now.timestamp_nanos_opt()
+        .and_then(|value| u64::try_from(value).ok())
+        .unwrap_or(0)
+}
+
+fn redacted_doctor_text(text: &str) -> String {
+    if line_is_sensitive(text) {
+        "[redacted sensitive diagnostic detail]".to_string()
+    } else {
+        truncate_chars(text, 220)
     }
 }
 
@@ -9270,6 +9863,101 @@ not-json
         assert_eq!(data["rch"]["pressure"], serde_json::json!("clear"));
         assert_eq!(data["agents"]["active_count"], serde_json::json!(1));
         assert_eq!(data["reservations"]["active_count"], serde_json::json!(1));
+    }
+
+    fn write_context_intelligence_fixture(root: &Path) {
+        std::fs::create_dir_all(root.join("src")).expect("create src dir");
+        std::fs::create_dir_all(root.join("tests")).expect("create tests dir");
+        std::fs::create_dir_all(root.join("docs/evidence")).expect("create evidence dir");
+        std::fs::create_dir_all(root.join(".beads")).expect("create beads dir");
+        std::fs::write(
+            root.join("src/doctor.rs"),
+            r"
+pub fn check_swarm_context_intelligence() {}
+pub struct ContextGraphFixture;
+",
+        )
+        .expect("write src fixture");
+        std::fs::write(
+            root.join("tests/doctor_swarm_temp_dir_json.rs"),
+            r"
+#[test]
+fn doctor_swarm_context_intelligence_json_reports_posture() {
+    assert!(true);
+}
+",
+        )
+        .expect("write test fixture");
+        std::fs::write(
+            root.join("README.md"),
+            "# Fixture\n\nSee docs/evidence/dropin-certification-verdict.json.\n",
+        )
+        .expect("write README fixture");
+        std::fs::write(
+            root.join("docs/evidence/dropin-certification-verdict.json"),
+            r#"{"schema":"pi.dropin.verdict.v1","overall_verdict":"NOT_CERTIFIED","token":"super-secret-value"}"#,
+        )
+        .expect("write sensitive evidence fixture");
+        std::fs::write(
+            root.join(".beads/issues.jsonl"),
+            r#"{"id":"bd-context","title":"Surface context intelligence in doctor","status":"open","priority":2}"#,
+        )
+        .expect("write beads fixture");
+    }
+
+    #[test]
+    fn swarm_context_intelligence_reports_bundle_and_redaction_safe_counts() {
+        let project = tempfile::tempdir().expect("project dir");
+        write_context_intelligence_fixture(project.path());
+        let now = DateTime::parse_from_rfc3339("2026-05-09T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let posture =
+            build_swarm_context_intelligence_posture(project.path(), now).expect("posture");
+        let finding = classify_swarm_context_intelligence_posture(&posture);
+
+        let data = finding_data(&finding);
+        assert_eq!(data["schema"], SWARM_DOCTOR_CONTEXT_INTELLIGENCE_SCHEMA);
+        assert_eq!(data["mode"], serde_json::json!("audit_only"));
+        assert_eq!(data["mutation_performed"], serde_json::json!(false));
+        assert!(data["graph"]["node_count"].as_u64().unwrap_or(0) > 0);
+        assert!(data["graph"]["validation_link_count"].as_u64().unwrap_or(0) > 0);
+        assert!(data["bundle"]["selected_count"].as_u64().unwrap_or(0) > 0);
+        assert!(
+            data["bundle"]["suggested_validation_command_count"]
+                .as_u64()
+                .unwrap_or(0)
+                > 0
+        );
+        assert!(data["cache"]["fingerprint_count"].as_u64().unwrap_or(0) > 0);
+        assert!(data["redaction_summary"].is_object());
+        let encoded = serde_json::to_string(data).expect("serialize context data");
+        assert!(!encoded.contains("super-secret-value"));
+    }
+
+    #[test]
+    fn swarm_context_intelligence_degrades_when_graph_inputs_are_missing() {
+        let project = tempfile::tempdir().expect("project dir");
+        let now = DateTime::parse_from_rfc3339("2026-05-09T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let posture =
+            build_swarm_context_intelligence_posture(project.path(), now).expect("posture");
+        let finding = classify_swarm_context_intelligence_posture(&posture);
+
+        assert_eq!(finding.severity, Severity::Warn);
+        let data = finding_data(&finding);
+        assert_eq!(data["status"], serde_json::json!("degraded"));
+        assert!(data["graph"]["missing_input_count"].as_u64().unwrap_or(0) > 0);
+        assert!(
+            data["degraded_reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reason| reason.as_str() == Some("semantic_graph_missing_inputs"))
+        );
     }
 
     #[test]

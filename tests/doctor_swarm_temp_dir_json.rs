@@ -12,6 +12,7 @@ use std::process::{Command, Stdio};
 const SWARM_TEMP_DIR_SCHEMA: &str = "pi.doctor.swarm_temp_dir.v1";
 const SWARM_RESOURCE_PREFLIGHT_SCHEMA: &str = "pi.doctor.swarm_resource_preflight.v1";
 const SWARM_MAIL_DEGRADED_SCHEMA: &str = "pi.doctor.agent_mail_degraded_mode.v1";
+const SWARM_CONTEXT_INTELLIGENCE_SCHEMA: &str = "pi.doctor.context_intelligence_posture.v1";
 const SWARM_TEMP_EXPECTED_ROOT: &str = "/data/tmp/pi_agent_rust_cargo";
 const SWARM_TEMP_WARN_AVAILABLE_KB: u64 = 10 * 1024 * 1024;
 
@@ -118,6 +119,44 @@ fn run_doctor_json(env_overrides: &[(&str, Option<&str>)]) -> TestResult<Value> 
         ))
         .into()
     })
+}
+
+fn run_doctor_text(env_overrides: &[(&str, Option<&str>)]) -> TestResult<String> {
+    let cwd = create_swarm_temp_test_dir(Path::new("/tmp"), "text-cwd")?;
+    let mut command = Command::new(env!("CARGO_BIN_EXE_pi")); // ubs:ignore false positive: Cargo provides the compiled test binary path.
+    command
+        .args(["doctor", "--only", "swarm", "--format", "text"])
+        .current_dir(cwd)
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("GEMINI_API_KEY")
+        .env_remove("GROQ_API_KEY")
+        .env_remove("KIMI_API_KEY")
+        .env_remove("AZURE_OPENAI_API_KEY")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in env_overrides {
+        match value {
+            Some(value) => {
+                command.env(*key, *value);
+            }
+            None => {
+                command.env_remove(*key);
+            }
+        }
+    }
+
+    let output = command.output()?;
+    let exit_code = output.status.code();
+    let stdout = String::from_utf8(output.stdout)?;
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if !matches!(exit_code, Some(0 | 1)) {
+        return fail(format!(
+            "doctor text should exit cleanly with 0 or 1, got {exit_code:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        ));
+    }
+    Ok(stdout)
 }
 
 fn temp_dir_finding<'a>(report: &'a Value, env_name: &str) -> TestResult<&'a Value> {
@@ -353,6 +392,59 @@ fn doctor_swarm_temp_dir_json_reports_missing_env() -> TestResult {
 
     require_missing_env(&report, "CARGO_TARGET_DIR")?;
     require_missing_env(&report, "TMPDIR")
+}
+
+#[test]
+fn doctor_swarm_context_intelligence_json_reports_posture() -> TestResult {
+    let report = run_doctor_json(&[("CARGO_TARGET_DIR", None), ("TMPDIR", None)])?;
+    let finding = finding_by_schema(&report, SWARM_CONTEXT_INTELLIGENCE_SCHEMA)?;
+    require(
+        ["pass", "warn"].contains(&field_str(finding, "severity")?),
+        format!("context finding should be pass or warn: {finding}"),
+    )?;
+    require(
+        field_str(finding, "title")?.contains("Context intelligence posture"),
+        format!("title should name context intelligence: {finding}"),
+    )?;
+
+    let data = field(finding, "data")?;
+    require_eq(
+        field_str(data, "mode")?,
+        "audit_only",
+        "context intelligence mode",
+    )?;
+    require_eq(
+        &field_bool(data, "mutation_performed")?,
+        &false,
+        "context intelligence mutation flag",
+    )?;
+    let graph = field(data, "graph")?;
+    let bundle = field(data, "bundle")?;
+    let cache = field(data, "cache")?;
+    let _ = field_u64(graph, "node_count")?;
+    let _ = field_u64(graph, "missing_input_count")?;
+    let _ = field_u64(bundle, "selected_count")?;
+    let _ = field_u64(bundle, "missing_test_link_count")?;
+    let _ = field_u64(bundle, "stale_evidence_suppression_count")?;
+    let _ = field_u64(cache, "pressure_count")?;
+    let _ = field_bool(cache, "pressure")?;
+    require(
+        field(data, "redaction_summary")?.is_object(),
+        format!("redaction_summary should be present: {data}"),
+    )
+}
+
+#[test]
+fn doctor_swarm_context_intelligence_text_reports_posture() -> TestResult {
+    let stdout = run_doctor_text(&[("CARGO_TARGET_DIR", None), ("TMPDIR", None)])?;
+    require(
+        stdout.contains("Context intelligence posture"),
+        format!("text output should include context intelligence title:\n{stdout}"),
+    )?;
+    require(
+        stdout.contains("bundle"),
+        format!("text output should include bundle detail:\n{stdout}"),
+    )
 }
 
 #[cfg(unix)]

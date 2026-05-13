@@ -66,6 +66,11 @@
     "operator_next_actions"
   ],
   "optional_summary_paths": [
+    "doctor_swarm.context_intelligence",
+    "doctor_swarm.context_intelligence.graph",
+    "doctor_swarm.context_intelligence.bundle",
+    "doctor_swarm.context_intelligence.cache",
+    "doctor_swarm.context_intelligence.redaction_summary",
     "tail_latency.schema",
     "tail_latency.telemetry_enabled",
     "tail_latency.redaction_summary",

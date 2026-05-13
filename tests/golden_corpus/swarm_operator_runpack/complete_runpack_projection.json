@@ -133,7 +133,7 @@
         "label": "doctor swarm findings",
         "overall": "warn",
         "severity_counts": {
-          "warn": 1
+          "warn": 2
         },
         "signal": "doctor_swarm_overall",
         "source": "doctor_swarm",
@@ -503,7 +503,65 @@
         "title": "Agent Mail reservations expire soon"
       }
     ],
-    "finding_count": 1,
+    "context_intelligence": {
+      "bundle": {
+        "estimated_bytes": 8192,
+        "estimated_tokens": 2048,
+        "excluded_count": 3,
+        "missing_test_link_count": 2,
+        "selected_count": 12,
+        "stale_evidence_suppression_count": 1,
+        "suggested_validation_command_count": 4
+      },
+      "cache": {
+        "cacheable": true,
+        "fingerprint_count": 19,
+        "pressure": true,
+        "pressure_count": 1,
+        "status_counts": {
+          "expired": 1,
+          "valid": 18
+        }
+      },
+      "coverage_status": "partial_stale_suppressed",
+      "degraded_reasons": [
+        "context_bundle_partial_coverage",
+        "stale_or_unsafe_evidence_suppressed",
+        "selected_code_without_test_link",
+        "context_cache_pressure"
+      ],
+      "detail": "graph nodes=42 edges=64 missing_inputs=0 malformed_inputs=0 unreadable_inputs=0; bundle coverage=partial_stale_suppressed selected=12 excluded=3 stale_suppressions=1 missing_test_links=2 validation_commands=4; cache pressure=1 fingerprints=19",
+      "graph": {
+        "edge_count": 64,
+        "evidence_freshness_status_counts": {
+          "current": 5,
+          "stale": 1
+        },
+        "malformed_input_count": 0,
+        "missing_input_count": 0,
+        "node_count": 42,
+        "stale_or_untrusted_evidence_count": 1,
+        "trace_status_counts": {
+          "indexed": 19
+        },
+        "unreadable_input_count": 0,
+        "validation_link_count": 7
+      },
+      "recommended_actions": [
+        "Refresh stale evidence or keep suppressed evidence out of runpack claims"
+      ],
+      "redaction_summary": {
+        "overall_status": "redacted",
+        "selected_redacted_nodes": 1,
+        "selected_sensitive_omissions": 0,
+        "suppressed_unsafe_nodes": 0
+      },
+      "schema": "pi.doctor.context_intelligence_posture.v1",
+      "severity": "warn",
+      "status": "degraded",
+      "title": "Context intelligence posture degraded"
+    },
+    "finding_count": 2,
     "findings": [
       {
         "data": {
@@ -514,11 +572,72 @@
         "remediation": "Renew active reservations before long-running verification",
         "severity": "warn",
         "title": "Agent Mail reservations expire soon"
+      },
+      {
+        "data": {
+          "bundle": {
+            "coverage_status": "partial_stale_suppressed",
+            "estimated_bytes": 8192,
+            "estimated_tokens": 2048,
+            "excluded_count": 3,
+            "missing_test_link_count": 2,
+            "selected_count": 12,
+            "stale_evidence_suppression_count": 1,
+            "suggested_validation_command_count": 4
+          },
+          "cache": {
+            "cacheable": true,
+            "fingerprint_count": 19,
+            "pressure": true,
+            "pressure_count": 1,
+            "status_counts": {
+              "expired": 1,
+              "valid": 18
+            }
+          },
+          "degraded_reasons": [
+            "context_bundle_partial_coverage",
+            "stale_or_unsafe_evidence_suppressed",
+            "selected_code_without_test_link",
+            "context_cache_pressure"
+          ],
+          "graph": {
+            "edge_count": 64,
+            "evidence_freshness_status_counts": {
+              "current": 5,
+              "stale": 1
+            },
+            "malformed_input_count": 0,
+            "missing_input_count": 0,
+            "node_count": 42,
+            "stale_or_untrusted_evidence_count": 1,
+            "trace_status_counts": {
+              "indexed": 19
+            },
+            "unreadable_input_count": 0,
+            "validation_link_count": 7
+          },
+          "recommended_actions": [
+            "Refresh stale evidence or keep suppressed evidence out of runpack claims"
+          ],
+          "redaction_summary": {
+            "overall_status": "redacted",
+            "selected_redacted_nodes": 1,
+            "selected_sensitive_omissions": 0,
+            "suppressed_unsafe_nodes": 0
+          },
+          "schema": "pi.doctor.context_intelligence_posture.v1",
+          "status": "degraded"
+        },
+        "detail": "graph nodes=42 edges=64 missing_inputs=0 malformed_inputs=0 unreadable_inputs=0; bundle coverage=partial_stale_suppressed selected=12 excluded=3 stale_suppressions=1 missing_test_links=2 validation_commands=4; cache pressure=1 fingerprints=19",
+        "remediation": "Refresh stale evidence or keep suppressed evidence out of runpack claims",
+        "severity": "warn",
+        "title": "Context intelligence posture degraded"
       }
     ],
     "overall": "warn",
     "severity_counts": {
-      "warn": 1
+      "warn": 2
     },
     "status": "ok",
     "summary": {
@@ -676,7 +795,7 @@
       "path": "[WORKSPACE]/doctor.json",
       "schema": null,
       "sha256": "[SHA256]",
-      "size_bytes": 525,
+      "size_bytes": 2782,
       "status": "ok"
     },
     {

@@ -36,6 +36,7 @@ TAIL_LATENCY_SCHEMA = "pi.operator_tail_latency.v1"
 BOTTLENECK_ATTRIBUTION_SCHEMA = "pi.swarm.bottleneck_attribution_dashboard.v1"
 FLIGHT_RECORDER_REPORT_SCHEMA = "pi.swarm.flight_recorder.report.v1"
 HOST_PREFLIGHT_SCHEMA = "pi.doctor.swarm_resource_preflight.v1"
+CONTEXT_INTELLIGENCE_SCHEMA = "pi.doctor.context_intelligence_posture.v1"
 HOSTCALL_SWARM_PROFILE_SCHEMA = "pi.ext.hostcall_admission_swarm_profile.v1"
 SESSION_RECOVERY_SWARM_PROFILE_SCHEMA = "pi.session_store_v2.recovery_swarm_profile.v1"
 RPC_SWARM_E2E_SCHEMA = "pi.rpc.concurrent_swarm_e2e.v1"
@@ -83,6 +84,11 @@ SENSITIVE_KEY_FRAGMENTS = (
     "secret",
     "token",
     "transcript",
+)
+NON_SENSITIVE_KEY_EXACT = frozenset(
+    {
+        "estimated_tokens",
+    }
 )
 SENSITIVE_VALUE_RE = re.compile(
     r"(?i)\b(bearer\s+[A-Za-z0-9._~+/=-]+|"
@@ -615,6 +621,8 @@ def parse_utc(value: str) -> datetime:
 
 def is_sensitive_key(key: str) -> bool:
     lowered = key.lower()
+    if lowered in NON_SENSITIVE_KEY_EXACT:
+        return False
     return any(fragment in lowered for fragment in SENSITIVE_KEY_FRAGMENTS)
 
 
@@ -1624,6 +1632,69 @@ def bounded(items: list[Any], max_items: int) -> list[Any]:
     return items[: max(0, max_items)]
 
 
+def summarize_context_intelligence(
+    finding: dict[str, Any] | None, max_items: int
+) -> dict[str, Any] | None:
+    if finding is None:
+        return None
+    data = finding.get("data") if isinstance(finding.get("data"), dict) else {}
+    graph = data.get("graph") if isinstance(data.get("graph"), dict) else {}
+    bundle = data.get("bundle") if isinstance(data.get("bundle"), dict) else {}
+    cache = data.get("cache") if isinstance(data.get("cache"), dict) else {}
+    degraded_reasons = data.get("degraded_reasons")
+    if not isinstance(degraded_reasons, list):
+        degraded_reasons = []
+    recommended_actions = data.get("recommended_actions")
+    if not isinstance(recommended_actions, list):
+        recommended_actions = []
+    return {
+        "schema": data.get("schema"),
+        "status": data.get("status"),
+        "severity": finding.get("severity"),
+        "title": finding.get("title"),
+        "detail": finding.get("detail"),
+        "coverage_status": bundle.get("coverage_status"),
+        "graph": {
+            "node_count": graph.get("node_count"),
+            "edge_count": graph.get("edge_count"),
+            "missing_input_count": graph.get("missing_input_count"),
+            "malformed_input_count": graph.get("malformed_input_count"),
+            "unreadable_input_count": graph.get("unreadable_input_count"),
+            "stale_or_untrusted_evidence_count": graph.get(
+                "stale_or_untrusted_evidence_count"
+            ),
+            "validation_link_count": graph.get("validation_link_count"),
+            "trace_status_counts": graph.get("trace_status_counts"),
+            "evidence_freshness_status_counts": graph.get(
+                "evidence_freshness_status_counts"
+            ),
+        },
+        "bundle": {
+            "selected_count": bundle.get("selected_count"),
+            "excluded_count": bundle.get("excluded_count"),
+            "stale_evidence_suppression_count": bundle.get(
+                "stale_evidence_suppression_count"
+            ),
+            "missing_test_link_count": bundle.get("missing_test_link_count"),
+            "suggested_validation_command_count": bundle.get(
+                "suggested_validation_command_count"
+            ),
+            "estimated_bytes": bundle.get("estimated_bytes"),
+            "estimated_tokens": bundle.get("estimated_tokens"),
+        },
+        "cache": {
+            "fingerprint_count": cache.get("fingerprint_count"),
+            "pressure_count": cache.get("pressure_count"),
+            "pressure": cache.get("pressure"),
+            "cacheable": cache.get("cacheable"),
+            "status_counts": cache.get("status_counts"),
+        },
+        "redaction_summary": data.get("redaction_summary"),
+        "degraded_reasons": bounded(degraded_reasons, max_items),
+        "recommended_actions": bounded(recommended_actions, max_items),
+    }
+
+
 def summarize_doctor(source: SourcePayload, max_items: int) -> dict[str, Any]:
     payload = source.payload
     if not isinstance(payload, dict):
@@ -1634,6 +1705,7 @@ def summarize_doctor(source: SourcePayload, max_items: int) -> dict[str, Any]:
     swarm_findings: list[dict[str, Any]] = []
     agent_mail_findings: list[dict[str, Any]] = []
     build_slot_finding: dict[str, Any] | None = None
+    context_intelligence_finding: dict[str, Any] | None = None
     for finding in findings:
         if not isinstance(finding, dict) or finding.get("category") != "swarm":
             continue
@@ -1652,6 +1724,8 @@ def summarize_doctor(source: SourcePayload, max_items: int) -> dict[str, Any]:
             agent_mail_findings.append(item)
         if data_schema == "pi.doctor.agent_mail_build_slots.v1" or "build slot" in title.lower():
             build_slot_finding = item
+        if data_schema == CONTEXT_INTELLIGENCE_SCHEMA:
+            context_intelligence_finding = item
     severity_counts = Counter(str(item.get("severity") or "unknown") for item in swarm_findings)
     return {
         "status": source.status,
@@ -1662,6 +1736,10 @@ def summarize_doctor(source: SourcePayload, max_items: int) -> dict[str, Any]:
         "findings": bounded(swarm_findings, max_items),
         "agent_mail_findings": bounded(agent_mail_findings, max_items),
         "agent_mail_build_slots": build_slot_finding,
+        "context_intelligence": summarize_context_intelligence(
+            context_intelligence_finding,
+            max_items,
+        ),
     }
 
 
@@ -4649,6 +4727,19 @@ def render_markdown(runpack: dict[str, Any]) -> str:
     lines.extend(f"- {action}" for action in runpack["operator_next_actions"])
     lines.extend(["", "## Summaries"])
     lines.append(f"- Doctor swarm overall: `{runpack['doctor_swarm'].get('overall')}`")
+    context_intelligence = runpack["doctor_swarm"].get("context_intelligence")
+    if isinstance(context_intelligence, dict):
+        bundle = context_intelligence.get("bundle")
+        cache = context_intelligence.get("cache")
+        bundle = bundle if isinstance(bundle, dict) else {}
+        cache = cache if isinstance(cache, dict) else {}
+        lines.append(
+            "- Context intelligence: "
+            f"`{context_intelligence.get('status')}` "
+            f"(coverage `{context_intelligence.get('coverage_status')}`, "
+            f"missing tests `{bundle.get('missing_test_link_count')}`, "
+            f"cache pressure `{cache.get('pressure_count')}`)"
+        )
     lines.append(f"- Beads active/stale: `{runpack['beads'].get('active_count')}` active, `{len(runpack['beads'].get('stale') or [])}` stale")
     lines.append(f"- RCH admission: `{runpack['rch_admission'].get('decision')}`")
     lines.append(f"- RCH queue forecast: `{runpack['rch_admission'].get('queue_forecast', {}).get('recommended_action')}`")
@@ -6660,6 +6751,64 @@ def run_self_test() -> int:
                     "remediation": "Renew active reservations before long-running verification",
                     "data": {"schema": "pi.doctor.agent_mail_build_slots.v1", "active": 1},
                     "fixability": "not_fixable",
+                },
+                {
+                    "category": "swarm",
+                    "severity": "warn",
+                    "title": "Context intelligence posture degraded",
+                    "detail": "graph nodes=42 edges=64 missing_inputs=0 malformed_inputs=0 unreadable_inputs=0; bundle coverage=partial_stale_suppressed selected=12 excluded=3 stale_suppressions=1 missing_test_links=2 validation_commands=4; cache pressure=1 fingerprints=19",
+                    "remediation": "Refresh stale evidence or keep suppressed evidence out of runpack claims",
+                    "data": {
+                        "schema": CONTEXT_INTELLIGENCE_SCHEMA,
+                        "status": "degraded",
+                        "graph": {
+                            "node_count": 42,
+                            "edge_count": 64,
+                            "missing_input_count": 0,
+                            "malformed_input_count": 0,
+                            "unreadable_input_count": 0,
+                            "stale_or_untrusted_evidence_count": 1,
+                            "validation_link_count": 7,
+                            "trace_status_counts": {"indexed": 19},
+                            "evidence_freshness_status_counts": {
+                                "current": 5,
+                                "stale": 1,
+                            },
+                        },
+                        "bundle": {
+                            "coverage_status": "partial_stale_suppressed",
+                            "selected_count": 12,
+                            "excluded_count": 3,
+                            "stale_evidence_suppression_count": 1,
+                            "missing_test_link_count": 2,
+                            "suggested_validation_command_count": 4,
+                            "estimated_bytes": 8192,
+                            "estimated_tokens": 2048,
+                        },
+                        "cache": {
+                            "fingerprint_count": 19,
+                            "pressure_count": 1,
+                            "pressure": True,
+                            "cacheable": True,
+                            "status_counts": {"valid": 18, "expired": 1},
+                        },
+                        "redaction_summary": {
+                            "overall_status": "redacted",
+                            "selected_redacted_nodes": 1,
+                            "selected_sensitive_omissions": 0,
+                            "suppressed_unsafe_nodes": 0,
+                        },
+                        "degraded_reasons": [
+                            "context_bundle_partial_coverage",
+                            "stale_or_unsafe_evidence_suppressed",
+                            "selected_code_without_test_link",
+                            "context_cache_pressure",
+                        ],
+                        "recommended_actions": [
+                            "Refresh stale evidence or keep suppressed evidence out of runpack claims"
+                        ],
+                    },
+                    "fixability": "not_fixable",
                 }
             ],
         },
@@ -7009,6 +7158,15 @@ def run_self_test() -> int:
         assert runpack["agent_mail_read_state"]["status"] == "degraded"
         assert runpack["validation_outputs"]["status"] == "failed"
         assert runpack["validation_outputs"]["outputs"][0]["inferred_status"] == "failed"
+        context = runpack["doctor_swarm"]["context_intelligence"]
+        assert context["schema"] == CONTEXT_INTELLIGENCE_SCHEMA
+        assert context["status"] == "degraded"
+        assert context["coverage_status"] == "partial_stale_suppressed"
+        assert context["graph"]["stale_or_untrusted_evidence_count"] == 1
+        assert context["bundle"]["missing_test_link_count"] == 2
+        assert context["bundle"]["estimated_tokens"] == 2048
+        assert context["cache"]["pressure_count"] == 1
+        assert context["redaction_summary"]["overall_status"] == "redacted"
         assert any(
             item["purpose"] == "Regenerate this handoff bundle"
             for item in runpack["resume_commands"]
@@ -7068,6 +7226,7 @@ def run_self_test() -> int:
         markdown = args.out_md.read_text(encoding="utf-8")
         assert "Tail latency telemetry" in markdown
         assert "Bottleneck Attribution" in markdown
+        assert "Context intelligence" in markdown
         assert "Resume Commands" in markdown
         assert "Git Context" in markdown
         assert_runpack_contract(runpack)
