@@ -176,6 +176,8 @@ pub mod rpc;
 pub mod scheduler;
 pub mod sdk;
 #[doc(hidden)]
+pub mod semantic_workspace_graph;
+#[doc(hidden)]
 pub mod session;
 #[doc(hidden)]
 pub mod session_index;
