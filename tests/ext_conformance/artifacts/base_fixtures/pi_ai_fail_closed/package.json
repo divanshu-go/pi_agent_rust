@@ -1,0 +1,7 @@
+{
+  "name": "pi-ai-fail-closed-fixture",
+  "version": "0.0.0",
+  "pi": {
+    "extensions": "index.ts"
+  }
+}

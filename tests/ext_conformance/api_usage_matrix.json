@@ -596,7 +596,7 @@
     "modules": [
       { "module": "@mariozechner/pi-coding-agent", "shim_status": "partial", "notes": "Mix of real utilities and stubs" },
       { "module": "@mariozechner/pi-tui", "shim_status": "partial", "notes": "Real fuzzy matching; stubs for rendering" },
-      { "module": "@mariozechner/pi-ai", "shim_status": "partial", "notes": "Stubs and hardcoded defaults" },
+      { "module": "@mariozechner/pi-ai", "shim_status": "partial", "notes": "Capability-filtered env lookup; unsupported completion/auth/model helpers fail closed" },
       { "module": "vscode-languageserver-protocol", "shim_status": "partial", "notes": "Real constants; stub connections" },
       { "module": "@opentelemetry/*", "shim_status": "stub", "notes": "5 modules, all stubs" },
       { "module": "@xterm/*", "shim_status": "stub", "notes": "2 modules, all stubs" },

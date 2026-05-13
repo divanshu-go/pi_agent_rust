@@ -177,11 +177,14 @@ The Pi SDK virtual module provides the primary extension API surface.
 |--------|------|-------------|
 | `StringEnum(values)` | Function | Enum type builder |
 | `calculateCost()` | Function | Token cost calculation (uses `model.cost` × usage tokens) |
-| `complete(model, messages, opts)` | Function | LLM completion |
-| `completeSimple(model, prompt, opts)` | Function | Simple completion |
-| `streamSimpleAnthropic()` | Function | Anthropic streaming (stub) |
-| `streamSimpleOpenAIResponses()` | Function | OpenAI streaming (stub) |
-| `getModel()`, `getApiProvider()`, `getModels()` | Functions | Model info |
+| `getEnvApiKey(provider)` | Function | Capability-filtered environment key lookup |
+| `getOAuthApiKey(provider)` | Function | Unsupported in PiJS; fails closed |
+| `complete(model, messages, opts)` | Function | Unsupported in PiJS without a provider host bridge; fails closed |
+| `completeSimple(model, prompt, opts)` | Function | Unsupported in PiJS without a provider host bridge; fails closed |
+| `streamSimpleAnthropic()` | Function | Unsupported in PiJS without a provider host bridge; fails closed |
+| `streamSimpleOpenAIResponses()` | Function | Unsupported in PiJS without a provider host bridge; fails closed |
+| `streamSimpleOpenAICompletions()` | Function | Unsupported in PiJS without a provider host bridge; fails closed |
+| `getModel()`, `getApiProvider()`, `getModels()` | Functions | Unsupported in PiJS without session/model host context; fail closed |
 
 ## Conformance Status
 

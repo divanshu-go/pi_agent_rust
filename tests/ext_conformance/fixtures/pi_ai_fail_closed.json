@@ -1,0 +1,34 @@
+{
+  "schema": "pi.ext.scenario_fixture.v1",
+  "extension": {
+    "id": "pi_ai_fail_closed",
+    "source": {
+      "path": "tests/ext_conformance/artifacts/pi_ai_fail_closed/pi_ai_fail_closed.ts"
+    }
+  },
+  "scenarios": [
+    {
+      "id": "scn-pi-ai-fail-closed-001",
+      "kind": "tool",
+      "summary": "@mariozechner/pi-ai completion, model, stream, and auth helpers fail closed instead of returning placeholder data",
+      "tool_name": "pi_ai_contract",
+      "expect": {
+        "content_contains": [
+          "getEnvApiKey:export:function",
+          "getOAuthApiKey:export:function",
+          "complete:fail-closed",
+          "completeSimple:fail-closed",
+          "streamSimpleAnthropic:fail-closed",
+          "streamSimpleOpenAIResponses:fail-closed",
+          "streamSimpleOpenAICompletions:fail-closed",
+          "getModel:fail-closed",
+          "getApiProvider:fail-closed",
+          "getModels:fail-closed",
+          "loginOpenAICodex:fail-closed",
+          "refreshOpenAICodexToken:fail-closed",
+          "getOAuthApiKey:fail-closed"
+        ]
+      }
+    }
+  ]
+}

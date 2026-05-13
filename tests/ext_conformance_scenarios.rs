@@ -3606,6 +3606,24 @@ fn scenario_minimal_template_discovers_pack() {
     );
 }
 
+/// Focused test: Pi AI SDK fixture must fail closed for unsupported helpers.
+#[test]
+fn scenario_pi_ai_helpers_fail_closed() {
+    let (ext, items) = load_scenario_fixture("pi_ai_fail_closed");
+    let scenario = ext
+        .scenarios
+        .iter()
+        .find(|s| s.id == "scn-pi-ai-fail-closed-001")
+        .expect("scn-pi-ai-fail-closed-001");
+
+    let result = run_scenario(&ext, scenario, &items);
+    assert_eq!(
+        result.status, "pass",
+        "Pi AI fail-closed scenario failed: diffs={:?} error={:?} skip={:?}",
+        result.diffs, result.error, result.skip_reason
+    );
+}
+
 // ─── E2E Smoke Suite (bd-2ni) ───────────────────────────────────────────────
 
 /// E2E smoke suite: loads every extension from extension-sample.json, runs

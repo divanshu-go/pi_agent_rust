@@ -7757,6 +7757,14 @@ export function getEnvApiKey(provider) {
   return envVar ? getEnvValue(envVar) : undefined;
 }
 
+function failClosedUnsupported(name) {
+  throw new Error(`@mariozechner/pi-ai.${name} is not available in PiJS without a provider/session host bridge; refusing to return placeholder data`);
+}
+
+export function getOAuthApiKey(_provider) {
+  failClosedUnsupported("getOAuthApiKey");
+}
+
 export function createAssistantMessageEventStream() {
   return {
     push: () => {},
@@ -7765,52 +7773,46 @@ export function createAssistantMessageEventStream() {
 }
 
 export function streamSimpleAnthropic() {
-  throw new Error("@mariozechner/pi-ai.streamSimpleAnthropic is not available in PiJS");
+  failClosedUnsupported("streamSimpleAnthropic");
 }
 
 export function streamSimpleOpenAIResponses() {
-  throw new Error("@mariozechner/pi-ai.streamSimpleOpenAIResponses is not available in PiJS");
+  failClosedUnsupported("streamSimpleOpenAIResponses");
 }
 
 export function streamSimpleOpenAICompletions() {
-  throw new Error("@mariozechner/pi-ai.streamSimpleOpenAICompletions is not available in PiJS");
+  failClosedUnsupported("streamSimpleOpenAICompletions");
 }
 
 export async function complete(_model, _messages, _opts = {}) {
-  // Return a minimal completion response stub
-  return { content: "", model: _model ?? "unknown", usage: { input_tokens: 0, output_tokens: 0 } };
+  failClosedUnsupported("complete");
 }
 
-// Stub: completeSimple returns a simple text completion without streaming
 export async function completeSimple(_model, _prompt, _opts = {}) {
-  // Return an empty string completion
-  return "";
+  failClosedUnsupported("completeSimple");
 }
 
 export function getModel() {
-  // Return a default model identifier
-  return "claude-sonnet-4-5";
+  failClosedUnsupported("getModel");
 }
 
 export function getApiProvider() {
-  // Return a default provider identifier
-  return "anthropic";
+  failClosedUnsupported("getApiProvider");
 }
 
 export function getModels() {
-  // Return a list of available model identifiers
-  return ["claude-sonnet-4-5", "claude-haiku-3-5"];
+  failClosedUnsupported("getModels");
 }
 
 export async function loginOpenAICodex(_opts = {}) {
-  return { accessToken: "", refreshToken: "", expiresAt: Date.now() + 3600000 };
+  failClosedUnsupported("loginOpenAICodex");
 }
 
 export async function refreshOpenAICodexToken(_refreshToken) {
-  return { accessToken: "", refreshToken: "", expiresAt: Date.now() + 3600000 };
+  failClosedUnsupported("refreshOpenAICodexToken");
 }
 
-export default { StringEnum, calculateCost, createAssistantMessageEventStream, streamSimpleAnthropic, streamSimpleOpenAIResponses, streamSimpleOpenAICompletions, complete, completeSimple, getModel, getApiProvider, getModels, loginOpenAICodex, refreshOpenAICodexToken };
+export default { StringEnum, calculateCost, getEnvApiKey, getOAuthApiKey, createAssistantMessageEventStream, streamSimpleAnthropic, streamSimpleOpenAIResponses, streamSimpleOpenAICompletions, complete, completeSimple, getModel, getApiProvider, getModels, loginOpenAICodex, refreshOpenAICodexToken };
 "#
         .trim()
         .to_string(),
@@ -27512,6 +27514,136 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
             assert!((input_cost - 0.002).abs() < 1e-9);
             let output_cost = r["cost"]["output"].as_f64().unwrap_or_default();
             assert!((output_cost - 0.008).abs() < 1e-9);
+        });
+    }
+
+    #[test]
+    fn pijs_pi_ai_unsupported_helpers_fail_closed() {
+        futures::executor::block_on(async {
+            let clock = Arc::new(DeterministicClock::new(0));
+            let runtime = PiJsRuntime::with_clock(Arc::clone(&clock))
+                .await
+                .expect("create runtime");
+
+            runtime
+                .eval(
+                    r#"
+                    globalThis.piAiFailClosed = {};
+                    (async () => {
+                        const ai = await import('@mariozechner/pi-ai');
+                        const checks = [
+                            ["complete", () => ai.complete("model", [{ role: "user", content: "hi" }])],
+                            ["completeSimple", () => ai.completeSimple("model", "hi")],
+                            ["streamSimpleAnthropic", () => ai.streamSimpleAnthropic()],
+                            ["streamSimpleOpenAIResponses", () => ai.streamSimpleOpenAIResponses()],
+                            ["streamSimpleOpenAICompletions", () => ai.streamSimpleOpenAICompletions()],
+                            ["getModel", () => ai.getModel()],
+                            ["getApiProvider", () => ai.getApiProvider()],
+                            ["getModels", () => ai.getModels()],
+                            ["loginOpenAICodex", () => ai.loginOpenAICodex({})],
+                            ["refreshOpenAICodexToken", () => ai.refreshOpenAICodexToken("refresh")],
+                            ["getOAuthApiKey", () => ai.getOAuthApiKey("openai")],
+                        ];
+
+                        for (const [name, call] of checks) {
+                            try {
+                                await call();
+                                globalThis.piAiFailClosed[name] = { ok: true };
+                            } catch (e) {
+                                globalThis.piAiFailClosed[name] = {
+                                    ok: false,
+                                    message: String((e && e.message) || e || ""),
+                                };
+                            }
+                        }
+                        globalThis.piAiFailClosed.done = true;
+                    })();
+                    "#,
+                )
+                .await
+                .expect("eval pi-ai fail-closed helpers");
+
+            drain_until_idle(&runtime, &clock).await;
+
+            let r = get_global_json(&runtime, "piAiFailClosed").await;
+            assert_eq!(r["done"], serde_json::json!(true));
+
+            for name in [
+                "complete",
+                "completeSimple",
+                "streamSimpleAnthropic",
+                "streamSimpleOpenAIResponses",
+                "streamSimpleOpenAICompletions",
+                "getModel",
+                "getApiProvider",
+                "getModels",
+                "loginOpenAICodex",
+                "refreshOpenAICodexToken",
+                "getOAuthApiKey",
+            ] {
+                assert_eq!(
+                    r[name]["ok"],
+                    serde_json::json!(false),
+                    "{name} must not silently return placeholder data"
+                );
+                let message = r[name]["message"].as_str().unwrap_or_default();
+                assert!(
+                    message.contains(name),
+                    "{name} error should identify the unsupported API, got {message:?}"
+                );
+                assert!(
+                    message.contains("refusing to return placeholder data"),
+                    "{name} error should be fail-closed, got {message:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn pijs_pi_ai_exports_env_and_oauth_helpers() {
+        futures::executor::block_on(async {
+            let clock = Arc::new(DeterministicClock::new(0));
+            let mut config = PiJsRuntimeConfig::default();
+            config.env.insert(
+                "OPENAI_API_KEY".to_string(),
+                "sk-test-pi-ai-export".to_string(),
+            );
+            config
+                .env
+                .insert("PI_EXT_COMPAT_SCAN".to_string(), "1".to_string());
+            config.deny_env = false;
+            let runtime = PiJsRuntime::with_clock_and_config(Arc::clone(&clock), config)
+                .await
+                .expect("create runtime");
+
+            runtime
+                .eval(
+                    r#"
+                    globalThis.piAiExports = {};
+                    (async () => {
+                        const ai = await import('@mariozechner/pi-ai');
+                        const named = await import('@mariozechner/pi-ai');
+                        globalThis.piAiExports.namedEnv = typeof named.getEnvApiKey;
+                        globalThis.piAiExports.namedOauth = typeof named.getOAuthApiKey;
+                        globalThis.piAiExports.defaultEnv = typeof ai.default.getEnvApiKey;
+                        globalThis.piAiExports.defaultOauth = typeof ai.default.getOAuthApiKey;
+                        globalThis.piAiExports.envValue = named.getEnvApiKey("openai");
+                        globalThis.piAiExports.done = true;
+                    })();
+                    "#,
+                )
+                .await
+                .expect("eval pi-ai exports");
+
+            drain_until_idle(&runtime, &clock).await;
+
+            let r = get_global_json(&runtime, "piAiExports").await;
+            assert_eq!(r["done"], serde_json::json!(true));
+            assert_eq!(r["namedEnv"], serde_json::json!("function"));
+            assert_eq!(r["namedOauth"], serde_json::json!("function"));
+            assert_eq!(r["defaultEnv"], serde_json::json!("function"));
+            assert_eq!(r["defaultOauth"], serde_json::json!("function"));
+            assert_eq!(r["envValue"], serde_json::json!("pi-compat-openai_api_key"));
         });
     }
 
