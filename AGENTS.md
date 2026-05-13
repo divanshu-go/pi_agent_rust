@@ -63,18 +63,18 @@ We only use **Cargo** in this project, NEVER any other package manager.
 
 ### Release Profile
 
-The release build optimizes for runtime speed:
+The default release build optimizes for shipping size while retaining LTO:
 
 ```toml
 [profile.release]
-opt-level = 3       # Maximum optimization for speed (inlining, vectorization, loop unrolling)
+opt-level = "z"     # Optimize generated code for size
 lto = true          # Link-time optimization
 codegen-units = 1   # Single codegen unit for better optimization
 panic = "abort"     # Smaller binary, no unwinding overhead
 strip = true        # Remove debug symbols
 ```
 
-jemalloc is enabled by default for 10-20% improvement on allocation-heavy paths.
+jemalloc is opt-in via `--features jemalloc` for allocation-heavy benchmark variants.
 
 ---
 
@@ -285,7 +285,7 @@ This port uses two key libraries from sibling projects:
 | Metric | Target | Notes |
 |--------|--------|-------|
 | Startup time | <100ms | No heavy initialization |
-| Binary size (release) | <20MB | LTO + strip enabled |
+| Binary size (release) | <22 MiB | CI size budget with LTO + strip enabled |
 | TUI framerate | 60fps | Differential rendering |
 | Memory (idle) | <50MB | No leaks on long sessions |
 
