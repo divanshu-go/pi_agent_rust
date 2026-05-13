@@ -3,8 +3,8 @@
 
 use chrono::{DateTime, Utc};
 use pi::semantic_workspace_graph::{
-    BeadActionabilityStatus, EvidenceFreshnessStatus, GraphInputStatus, SemanticNodeType,
-    SemanticWorkspaceGraph, SemanticWorkspaceGraphBuilder,
+    BeadActionabilityStatus, EvidenceFreshnessStatus, GraphInputStatus, SemanticEdgeType,
+    SemanticNodeType, SemanticWorkspaceGraph, SemanticWorkspaceGraphBuilder,
 };
 use serde_json::json;
 use std::error::Error;
@@ -71,7 +71,12 @@ fn builds_widget() {
 
 ## Evidence
 
-See docs/evidence/dropin-certification-verdict.json.
+Strict drop-in certification cites docs/evidence/dropin-certification-verdict.json.
+Release-facing claims must suppress docs/evidence/uncertified.json.
+Missing evidence must suppress docs/evidence/missing.json.
+Perf budget claims cite tests/perf/reports/budget_summary.json.
+Extension closeout claims cite docs/evidence/extension-health-delta-failure-disposition.json.
+Parity ledger claims cite docs/evidence/dropin-parity-gap-ledger.json.
 ",
     )?;
     write_fixture(
@@ -82,6 +87,35 @@ See docs/evidence/dropin-certification-verdict.json.
   "generated_at": "2026-01-01T00:00:00Z",
   "overall_verdict": "CERTIFIED",
   "claim_surface": "release_facing"
+}"#,
+    )?;
+    write_fixture(
+        root,
+        "tests/perf/reports/budget_summary.json",
+        r#"{
+  "schema": "pi.perf.budget_summary.v1",
+  "generated_at": "2026-05-13T00:00:00Z",
+  "claim_surface": "release_facing"
+}"#,
+    )?;
+    write_fixture(
+        root,
+        "docs/evidence/extension-health-delta-failure-disposition.json",
+        r#"{
+  "schema": "pi.ext.health_delta_failure_disposition.v1",
+  "generated_at": "2026-05-13T00:00:00Z",
+  "source_report_generated_at": "2026-05-13T00:00:00Z",
+  "claim_surface": "release_facing"
+}"#,
+    )?;
+    write_fixture(
+        root,
+        "docs/evidence/dropin-parity-gap-ledger.json",
+        r#"{
+  "schema": "pi.dropin.parity_gap_ledger.v1",
+  "generated_at_utc": "2026-05-13T00:00:00Z",
+  "claim_surface": "release_facing",
+  "gaps": []
 }"#,
     )?;
     write_fixture(
@@ -103,7 +137,8 @@ See docs/evidence/dropin-certification-verdict.json.
             "status": "open",
             "priority": 1,
             "issue_type": "feature",
-            "updated_at": "2026-05-13T00:00:00Z"
+            "updated_at": "2026-05-13T00:00:00Z",
+            "external_ref": "docs/evidence/dropin-parity-gap-ledger.json"
         })
         .to_string(),
         json!({
@@ -227,6 +262,14 @@ fn builder_indexes_workspace_surfaces_and_classifies_fail_closed() -> TestResult
         stale.metadata.get("release_claim_allowed"),
         Some(&json!(false))
     );
+    assert_eq!(
+        stale.metadata.get("claim_gate_status"),
+        Some(&json!("blocked_stale"))
+    );
+    assert_eq!(
+        stale.metadata.get("strict_replacement_claim_allowed"),
+        Some(&json!(false))
+    );
 
     let uncertified = node_with_source(
         &graph,
@@ -236,6 +279,54 @@ fn builder_indexes_workspace_surfaces_and_classifies_fail_closed() -> TestResult
     assert_eq!(
         uncertified.freshness_status,
         Some(EvidenceFreshnessStatus::Uncertified)
+    );
+    assert_eq!(
+        uncertified.metadata.get("claim_gate_status"),
+        Some(&json!("blocked_uncertified"))
+    );
+
+    let perf_budget = node_with_source(
+        &graph,
+        SemanticNodeType::EvidenceArtifact,
+        "tests/perf/reports/budget_summary.json",
+    )?;
+    assert_eq!(
+        perf_budget.freshness_status,
+        Some(EvidenceFreshnessStatus::Current)
+    );
+    assert_eq!(
+        perf_budget.metadata.get("claim_gate_status"),
+        Some(&json!("allowed"))
+    );
+
+    let extension_closeout = node_with_source(
+        &graph,
+        SemanticNodeType::EvidenceArtifact,
+        "docs/evidence/extension-health-delta-failure-disposition.json",
+    )?;
+    assert_eq!(
+        extension_closeout.freshness_status,
+        Some(EvidenceFreshnessStatus::Current)
+    );
+    assert_eq!(
+        extension_closeout
+            .metadata
+            .get("source_report_generated_at"),
+        Some(&json!("2026-05-13T00:00:00Z"))
+    );
+
+    let parity_ledger = node_with_source(
+        &graph,
+        SemanticNodeType::EvidenceArtifact,
+        "docs/evidence/dropin-parity-gap-ledger.json",
+    )?;
+    assert_eq!(
+        parity_ledger.freshness_status,
+        Some(EvidenceFreshnessStatus::Current)
+    );
+    assert_eq!(
+        parity_ledger.metadata.get("generated_at"),
+        Some(&json!("2026-05-13T00:00:00Z"))
     );
 
     let malformed = node_with_source(
@@ -257,6 +348,39 @@ fn builder_indexes_workspace_surfaces_and_classifies_fail_closed() -> TestResult
         missing.freshness_status,
         Some(EvidenceFreshnessStatus::Missing)
     );
+    assert_eq!(
+        graph.evidence_status_for_path("docs/evidence/missing.json"),
+        Some(EvidenceFreshnessStatus::Missing)
+    );
+    assert_eq!(
+        graph.release_claim_allowed_for_path("docs/evidence/missing.json"),
+        Some(false)
+    );
+    assert!(
+        graph
+            .suppressible_claim_evidence()
+            .iter()
+            .any(|node| { node.source_path == "docs/evidence/missing.json" })
+    );
+
+    for cited_path in [
+        "docs/evidence/dropin-certification-verdict.json",
+        "docs/evidence/uncertified.json",
+        "docs/evidence/missing.json",
+        "tests/perf/reports/budget_summary.json",
+        "docs/evidence/extension-health-delta-failure-disposition.json",
+        "docs/evidence/dropin-parity-gap-ledger.json",
+    ] {
+        let target = node_with_source(&graph, SemanticNodeType::EvidenceArtifact, cited_path)?;
+        assert!(
+            graph.edges.iter().any(|edge| {
+                edge.edge_type == SemanticEdgeType::CitesEvidence
+                    && edge.target == target.id
+                    && edge.metadata.get("citation_path") == Some(&json!(cited_path))
+            }),
+            "missing citation edge for {cited_path}"
+        );
+    }
 
     assert_eq!(
         bead_status(&graph, "bd-open")?,
@@ -282,6 +406,27 @@ fn builder_indexes_workspace_surfaces_and_classifies_fail_closed() -> TestResult
         bead_status(&graph, "malformed-line-6")?,
         BeadActionabilityStatus::UnknownFailClosed
     );
+
+    let open_bead = graph
+        .nodes
+        .iter()
+        .find(|node| {
+            node.node_type == SemanticNodeType::Bead
+                && node.metadata.get("bead_id") == Some(&json!("bd-open"))
+        })
+        .ok_or("missing bd-open bead node")?;
+    assert_eq!(
+        open_bead.metadata.get("external_ref"),
+        Some(&json!("docs/evidence/dropin-parity-gap-ledger.json"))
+    );
+    assert!(graph.edges.iter().any(|edge| {
+        edge.edge_type == SemanticEdgeType::Tracks
+            && edge.reason == "bead_external_ref"
+            && edge.source == open_bead.id
+            && edge.target == parity_ledger.id
+            && edge.metadata.get("external_ref")
+                == Some(&json!("docs/evidence/dropin-parity-gap-ledger.json"))
+    }));
 
     assert!(graph.trace.iter().any(|event| {
         event.status == GraphInputStatus::Missing

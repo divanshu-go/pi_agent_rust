@@ -98,6 +98,7 @@ impl SemanticWorkspaceGraphBuilder {
         for input in self.discover_inputs(&mut state) {
             self.ingest_file(&input, &mut state);
         }
+        state.resolve_pending_links();
         state.sort();
 
         Ok(SemanticWorkspaceGraph {
@@ -187,11 +188,13 @@ impl SemanticWorkspaceGraphBuilder {
                 0,
             ));
             if input.surface == SourceSurface::EvidenceArtifacts {
-                state.push_node(missing_or_unreadable_evidence_node(
+                let node = missing_or_unreadable_evidence_node(
                     &input.source_path,
                     EvidenceFreshnessStatus::Missing,
                     "file_read_failed",
-                ));
+                );
+                state.register_evidence_node(&input.source_path, &node.id);
+                state.push_node(node);
             }
             return;
         };
@@ -342,23 +345,48 @@ impl SemanticWorkspaceGraphBuilder {
         state.push_node(file_node);
 
         for (idx, line) in content.lines().enumerate() {
-            let Some((level, title)) = parse_markdown_heading(line) else {
-                continue;
-            };
-            let section_node = doc_section_node(
-                &input.source_path,
-                level,
-                &title,
-                idx.saturating_add(1),
-                content_sha256,
-            );
-            state.push_edge(edge(
-                SemanticEdgeType::Contains,
-                &file_node_id,
-                &section_node.id,
-                "markdown_heading",
-            ));
-            state.push_node(section_node);
+            let line_number = idx.saturating_add(1);
+            if let Some((level, title)) = parse_markdown_heading(line) {
+                let section_node = doc_section_node(
+                    &input.source_path,
+                    level,
+                    &title,
+                    line_number,
+                    content_sha256,
+                );
+                state.push_edge(edge(
+                    SemanticEdgeType::Contains,
+                    &file_node_id,
+                    &section_node.id,
+                    "markdown_heading",
+                ));
+                state.push_node(section_node);
+            }
+
+            for target_path in extract_evidence_citations(line) {
+                let claim_surface = claim_surface_for_markdown_line(line);
+                let citation_node = doc_citation_node(
+                    &input.source_path,
+                    &target_path,
+                    line_number,
+                    content_sha256,
+                    claim_surface,
+                );
+                state.push_edge(edge(
+                    SemanticEdgeType::Contains,
+                    &file_node_id,
+                    &citation_node.id,
+                    "markdown_evidence_citation",
+                ));
+                state.push_pending_citation(PendingEvidenceCitation {
+                    source_node_id: citation_node.id.clone(),
+                    source_path: input.source_path.clone(),
+                    target_path,
+                    line_number,
+                    claim_surface,
+                });
+                state.push_node(citation_node);
+            }
         }
     }
 
@@ -396,6 +424,7 @@ impl SemanticWorkspaceGraphBuilder {
                     &evidence_node.id,
                     "json_evidence_artifact",
                 ));
+                state.register_evidence_node(&input.source_path, &evidence_node.id);
                 state.push_node(evidence_node);
             }
             Err(error) => {
@@ -415,6 +444,7 @@ impl SemanticWorkspaceGraphBuilder {
                     &node.id,
                     "malformed_json_evidence",
                 ));
+                state.register_evidence_node(&input.source_path, &node.id);
                 state.push_node(node);
                 state.push_trace(GraphBuildTraceEvent::new(
                     input.surface.as_str(),
@@ -476,6 +506,13 @@ impl SemanticWorkspaceGraphBuilder {
                         "beads_jsonl_record",
                     ));
                     add_bead_dependency_edges(&node.id, &value, state);
+                    if let Some(external_ref) = bead_external_ref(&value) {
+                        state.push_pending_external_ref(PendingBeadExternalRef {
+                            source_node_id: node.id.clone(),
+                            bead_id: bead_id.to_string(),
+                            external_ref: external_ref.to_string(),
+                        });
+                    }
                     state.push_node(node);
                 }
                 Err(error) => {
@@ -526,11 +563,13 @@ impl SemanticWorkspaceGraphBuilder {
             0,
         ));
         if surface == SourceSurface::EvidenceArtifacts {
-            state.push_node(missing_or_unreadable_evidence_node(
+            let node = missing_or_unreadable_evidence_node(
                 source_path,
                 EvidenceFreshnessStatus::Missing,
                 "expected_input_missing",
-            ));
+            );
+            state.register_evidence_node(source_path, &node.id);
+            state.push_node(node);
         }
     }
 }
@@ -551,6 +590,39 @@ impl SemanticWorkspaceGraph {
         self.nodes
             .iter()
             .filter(|node| node.node_type == node_type)
+            .collect()
+    }
+
+    pub fn evidence_node_for_path(&self, source_path: &str) -> Option<&SemanticGraphNode> {
+        self.nodes.iter().find(|node| {
+            node.node_type == SemanticNodeType::EvidenceArtifact && node.source_path == source_path
+        })
+    }
+
+    pub fn evidence_status_for_path(&self, source_path: &str) -> Option<EvidenceFreshnessStatus> {
+        self.evidence_node_for_path(source_path)
+            .and_then(|node| node.freshness_status)
+    }
+
+    pub fn release_claim_allowed_for_path(&self, source_path: &str) -> Option<bool> {
+        self.evidence_node_for_path(source_path).and_then(|node| {
+            node.metadata
+                .get("release_claim_allowed")
+                .and_then(Value::as_bool)
+        })
+    }
+
+    pub fn suppressible_claim_evidence(&self) -> Vec<&SemanticGraphNode> {
+        self.nodes
+            .iter()
+            .filter(|node| {
+                node.node_type == SemanticNodeType::EvidenceArtifact
+                    && node
+                        .metadata
+                        .get("suppresses_release_claim_context")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+            })
             .collect()
     }
 }
@@ -771,6 +843,9 @@ struct GraphBuildState {
     edges: Vec<SemanticGraphEdge>,
     input_fingerprints: Vec<InputFingerprint>,
     trace: Vec<GraphBuildTraceEvent>,
+    evidence_node_ids: BTreeMap<String, String>,
+    pending_citations: Vec<PendingEvidenceCitation>,
+    pending_external_refs: Vec<PendingBeadExternalRef>,
 }
 
 impl GraphBuildState {
@@ -784,6 +859,86 @@ impl GraphBuildState {
 
     fn push_trace(&mut self, event: GraphBuildTraceEvent) {
         self.trace.push(event);
+    }
+
+    fn register_evidence_node(&mut self, source_path: &str, node_id: &str) {
+        self.evidence_node_ids
+            .insert(source_path.to_string(), node_id.to_string());
+    }
+
+    fn push_pending_citation(&mut self, citation: PendingEvidenceCitation) {
+        self.pending_citations.push(citation);
+    }
+
+    fn push_pending_external_ref(&mut self, external_ref: PendingBeadExternalRef) {
+        self.pending_external_refs.push(external_ref);
+    }
+
+    fn resolve_pending_links(&mut self) {
+        let citations = std::mem::take(&mut self.pending_citations);
+        for citation in citations {
+            let target = self.ensure_evidence_target(&citation.target_path);
+            let mut metadata = BTreeMap::new();
+            metadata.insert(
+                "citation_source_path".to_string(),
+                json!(citation.source_path),
+            );
+            metadata.insert("citation_path".to_string(), json!(citation.target_path));
+            metadata.insert("line_number".to_string(), json!(citation.line_number));
+            metadata.insert("claim_surface".to_string(), json!(citation.claim_surface));
+            self.push_edge(edge_with_metadata(
+                SemanticEdgeType::CitesEvidence,
+                &citation.source_node_id,
+                &target,
+                "markdown_evidence_citation",
+                metadata,
+            ));
+        }
+
+        let external_refs = std::mem::take(&mut self.pending_external_refs);
+        for external_ref in external_refs {
+            let Some(target_path) = evidence_path_from_external_ref(&external_ref.external_ref)
+            else {
+                continue;
+            };
+            let target = self.ensure_evidence_target(target_path);
+            let mut metadata = BTreeMap::new();
+            metadata.insert("bead_id".to_string(), json!(external_ref.bead_id));
+            metadata.insert("external_ref".to_string(), json!(external_ref.external_ref));
+            self.push_edge(edge_with_metadata(
+                SemanticEdgeType::Tracks,
+                &external_ref.source_node_id,
+                &target,
+                "bead_external_ref",
+                metadata,
+            ));
+        }
+    }
+
+    fn ensure_evidence_target(&mut self, source_path: &str) -> String {
+        if let Some(node_id) = self.evidence_node_ids.get(source_path) {
+            return node_id.clone();
+        }
+
+        let mut node = missing_or_unreadable_evidence_node(
+            source_path,
+            EvidenceFreshnessStatus::Missing,
+            "linked_evidence_target_missing",
+        );
+        node.metadata
+            .insert("linked_target_missing".to_string(), json!(true));
+        let node_id = node.id.clone();
+        self.register_evidence_node(source_path, &node_id);
+        self.push_node(node);
+        self.push_trace(GraphBuildTraceEvent::new(
+            SourceSurface::EvidenceArtifacts.as_str(),
+            source_path.to_string(),
+            GraphInputStatus::Missing,
+            "linked_evidence_target_missing",
+            1,
+            0,
+        ));
+        node_id
     }
 
     fn sort(&mut self) {
@@ -802,6 +957,22 @@ impl GraphBuildState {
                 .then_with(|| left.reason.cmp(&right.reason))
         });
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingEvidenceCitation {
+    source_node_id: String,
+    source_path: String,
+    target_path: String,
+    line_number: usize,
+    claim_surface: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingBeadExternalRef {
+    source_node_id: String,
+    bead_id: String,
+    external_ref: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -944,7 +1115,7 @@ pub fn classify_evidence_freshness(
         );
     }
 
-    let Some(generated_at) = value.get("generated_at").and_then(Value::as_str) else {
+    let Some(generated_at) = evidence_generated_at(value) else {
         return (
             EvidenceFreshnessStatus::FreshnessUnknown,
             false,
@@ -1093,6 +1264,38 @@ fn doc_section_node(
     }
 }
 
+fn doc_citation_node(
+    source_path: &str,
+    target_path: &str,
+    line: usize,
+    content_sha256: &str,
+    claim_surface: &str,
+) -> SemanticGraphNode {
+    let stable_key = format!("{source_path}:citation:{line}:{target_path}");
+    let mut metadata = BTreeMap::new();
+    metadata.insert("citation_path".to_string(), json!(target_path));
+    metadata.insert("claim_surface".to_string(), json!(claim_surface));
+    metadata.insert(
+        "release_claim_candidate".to_string(),
+        json!(claim_surface == "release_facing"),
+    );
+    SemanticGraphNode {
+        id: stable_id("doc_section", &[&stable_key]),
+        node_type: SemanticNodeType::DocSection,
+        source_path: source_path.to_string(),
+        title: format!("citation:{target_path}"),
+        stable_key,
+        content_sha256: Some(content_sha256.to_string()),
+        size_bytes: None,
+        line_start: Some(line),
+        line_end: Some(line),
+        freshness_status: None,
+        bead_actionability_status: None,
+        redaction_status: RedactionStatus::None,
+        metadata,
+    }
+}
+
 fn evidence_artifact_node(
     source_path: &str,
     value: &Value,
@@ -1108,17 +1311,43 @@ fn evidence_artifact_node(
         classify_evidence_freshness(value, options);
     let mut metadata = BTreeMap::new();
     metadata.insert("artifact_schema".to_string(), json!(artifact_schema));
-    if let Some(generated_at) = value.get("generated_at").and_then(Value::as_str) {
+    if let Some(generated_at) = evidence_generated_at(value) {
         metadata.insert("generated_at".to_string(), json!(generated_at));
+    }
+    if let Some(claim_surface) = value.get("claim_surface").and_then(Value::as_str) {
+        metadata.insert("claim_surface".to_string(), json!(claim_surface));
     }
     if let Some(overall_verdict) = value.get("overall_verdict").and_then(Value::as_str) {
         metadata.insert("overall_verdict".to_string(), json!(overall_verdict));
+    }
+    if let Some(source_generated_at) = value
+        .get("source_report_generated_at")
+        .and_then(Value::as_str)
+    {
+        metadata.insert(
+            "source_report_generated_at".to_string(),
+            json!(source_generated_at),
+        );
     }
     metadata.insert(
         "release_claim_allowed".to_string(),
         json!(release_claim_allowed),
     );
     metadata.insert("freshness_reason".to_string(), json!(reason));
+    metadata.insert(
+        "claim_gate_status".to_string(),
+        json!(claim_gate_status(freshness_status, release_claim_allowed)),
+    );
+    metadata.insert(
+        "suppresses_release_claim_context".to_string(),
+        json!(!release_claim_allowed),
+    );
+    if source_path.ends_with("dropin-certification-verdict.json") {
+        metadata.insert(
+            "strict_replacement_claim_allowed".to_string(),
+            json!(release_claim_allowed),
+        );
+    }
 
     SemanticGraphNode {
         id: stable_id("evidence_artifact", &[&stable_key]),
@@ -1146,6 +1375,11 @@ fn missing_or_unreadable_evidence_node(
     let mut metadata = BTreeMap::new();
     metadata.insert("freshness_reason".to_string(), json!(reason));
     metadata.insert("release_claim_allowed".to_string(), json!(false));
+    metadata.insert(
+        "claim_gate_status".to_string(),
+        json!(claim_gate_status(freshness_status, false)),
+    );
+    metadata.insert("suppresses_release_claim_context".to_string(), json!(true));
     SemanticGraphNode {
         id: stable_id("evidence_artifact", &[&stable_key]),
         node_type: SemanticNodeType::EvidenceArtifact,
@@ -1192,6 +1426,9 @@ fn bead_node(
     }
     if let Some(issue_type) = value.get("issue_type").and_then(Value::as_str) {
         metadata.insert("issue_type".to_string(), json!(issue_type));
+    }
+    if let Some(external_ref) = bead_external_ref(value) {
+        metadata.insert("external_ref".to_string(), json!(external_ref));
     }
 
     SemanticGraphNode {
@@ -1269,6 +1506,16 @@ fn edge(
     target: &str,
     reason: &str,
 ) -> SemanticGraphEdge {
+    edge_with_metadata(edge_type, source, target, reason, BTreeMap::new())
+}
+
+fn edge_with_metadata(
+    edge_type: SemanticEdgeType,
+    source: &str,
+    target: &str,
+    reason: &str,
+    metadata: BTreeMap<String, Value>,
+) -> SemanticGraphEdge {
     let edge_type_key = format!("{edge_type:?}");
     let stable_key = [edge_type_key.as_str(), source, target, reason];
     SemanticGraphEdge {
@@ -1277,7 +1524,7 @@ fn edge(
         source: source.to_string(),
         target: target.to_string(),
         reason: reason.to_string(),
-        metadata: BTreeMap::new(),
+        metadata,
     }
 }
 
@@ -1356,6 +1603,113 @@ fn parse_markdown_heading(line: &str) -> Option<(usize, String)> {
     Some((level, title.to_string()))
 }
 
+fn extract_evidence_citations(line: &str) -> Vec<String> {
+    let mut paths = BTreeSet::new();
+    for token in line.split(|ch: char| {
+        ch.is_whitespace()
+            || matches!(
+                ch,
+                '`' | '(' | ')' | '[' | ']' | ',' | ';' | '<' | '>' | '"' | '\''
+            )
+    }) {
+        if let Some(path) = normalize_citation_path(token) {
+            paths.insert(path);
+        }
+    }
+    paths.into_iter().collect()
+}
+
+fn normalize_citation_path(raw: &str) -> Option<String> {
+    let trimmed = raw.trim_matches(|ch: char| {
+        matches!(
+            ch,
+            '`' | '(' | ')' | '[' | ']' | '<' | '>' | '"' | '\'' | ',' | ';' | ':' | '.'
+        )
+    });
+    let without_anchor = trimmed.split('#').next().unwrap_or(trimmed);
+    if is_claim_evidence_path(without_anchor) {
+        Some(without_anchor.to_string())
+    } else {
+        None
+    }
+}
+
+fn is_claim_evidence_path(path: &str) -> bool {
+    path == "docs/parity-certification.json"
+        || path.starts_with("docs/evidence/") && has_extension(path, "json")
+        || path.starts_with("docs/contracts/") && has_extension(path, "json")
+        || path.starts_with("tests/perf/reports/") && has_extension(path, "json")
+        || path.starts_with("tests/golden_corpus/swarm_claim_readiness/")
+            && has_extension(path, "json")
+}
+
+fn claim_surface_for_markdown_line(line: &str) -> &'static str {
+    let lower = line.to_ascii_lowercase();
+    if lower.contains("historical") || lower.contains("operator evidence only") {
+        "historical_snapshot"
+    } else if [
+        "drop-in",
+        "strict replacement",
+        "release-facing",
+        "release claim",
+        "certified",
+        "certification",
+        "performance claim",
+        "perf claim",
+        "budget",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+    {
+        "release_facing"
+    } else {
+        "documentation"
+    }
+}
+
+fn evidence_generated_at(value: &Value) -> Option<&str> {
+    value
+        .get("generated_at")
+        .or_else(|| value.get("generated_at_utc"))
+        .and_then(Value::as_str)
+}
+
+fn claim_gate_status(
+    freshness_status: EvidenceFreshnessStatus,
+    release_claim_allowed: bool,
+) -> &'static str {
+    match (freshness_status, release_claim_allowed) {
+        (EvidenceFreshnessStatus::Current, true) => "allowed",
+        (EvidenceFreshnessStatus::HistoricalSnapshot, _) => "blocked_historical_snapshot",
+        (EvidenceFreshnessStatus::Stale, _) => "blocked_stale",
+        (EvidenceFreshnessStatus::Missing, _) => "blocked_missing",
+        (EvidenceFreshnessStatus::Malformed, _) => "blocked_malformed",
+        (EvidenceFreshnessStatus::Uncertified, _) => "blocked_uncertified",
+        (EvidenceFreshnessStatus::FreshnessUnknown, _) => "blocked_freshness_unknown",
+        (EvidenceFreshnessStatus::Current, false) => "blocked_current_policy",
+    }
+}
+
+fn bead_external_ref(value: &Value) -> Option<&str> {
+    value
+        .get("external_ref")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("metadata")
+                .and_then(|metadata| metadata.get("external_ref"))
+                .and_then(Value::as_str)
+        })
+}
+
+fn evidence_path_from_external_ref(external_ref: &str) -> Option<&str> {
+    if is_claim_evidence_path(external_ref) {
+        Some(external_ref)
+    } else {
+        None
+    }
+}
+
 fn is_test_attribute(line: &str) -> bool {
     line == "#[test]" || line.starts_with("#[tokio::test") || line.starts_with("#[asupersync::test")
 }
@@ -1381,7 +1735,11 @@ fn surface_for_path(source_path: &str) -> Option<SourceSurface> {
     {
         return Some(SourceSurface::ReadmeAndDocs);
     }
-    if source_path.starts_with("docs/") && has_extension(source_path, "json") {
+    if source_path.starts_with("docs/") && has_extension(source_path, "json")
+        || source_path.starts_with("tests/perf/reports/") && has_extension(source_path, "json")
+        || source_path.starts_with("tests/golden_corpus/swarm_claim_readiness/")
+            && has_extension(source_path, "json")
+    {
         return Some(SourceSurface::EvidenceArtifacts);
     }
     if source_path.starts_with("src/") && has_extension(source_path, "rs") {
