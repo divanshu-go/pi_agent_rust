@@ -507,6 +507,53 @@ def is_zero(value: Any) -> bool:
     return value is None
 
 
+def non_negative_count(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        return int(value) if value >= 0 and value.is_integer() else None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            return int(stripped)
+    return None
+
+
+def zero_path_issue_detail(
+    spec: EvidenceSpec,
+    payload: dict[str, Any],
+    zero_path: str,
+) -> str | None:
+    value = get_path(payload, zero_path)
+    if value is None:
+        return f"{zero_path} is missing"
+
+    if spec.id == "extension_health_delta" and zero_path == "current_summary.skipped":
+        skipped_count = non_negative_count(value)
+        excluded_value = get_path(payload, "current_summary.excluded")
+        excluded_count = non_negative_count(excluded_value)
+        if skipped_count is not None and excluded_count is not None:
+            if excluded_count > skipped_count:
+                return (
+                    f"current_summary.excluded={excluded_value!r} exceeds "
+                    f"{zero_path}={value!r}"
+                )
+            unaccounted_skips = skipped_count - excluded_count
+            if unaccounted_skips == 0:
+                return None
+            return (
+                f"{zero_path}={value!r} with "
+                f"current_summary.excluded={excluded_value!r} leaves "
+                f"unaccounted_skipped={unaccounted_skips}"
+            )
+
+    if not is_zero(value):
+        return f"{zero_path}={value!r}"
+    return None
+
+
 def issue_for(spec: EvidenceSpec, kind: str, detail: str) -> EvidenceIssue:
     blocking = spec.release_blocking and spec.claim_surface == "release_facing"
     return EvidenceIssue(kind=kind, detail=detail, blocking=blocking)
@@ -1069,11 +1116,9 @@ def check_spec(
                     ))
 
             for zero_path in spec.zero_paths:
-                value = get_path(payload, zero_path)
-                if value is None:
-                    issues.append(issue_for(spec, "no_data", f"{zero_path} is missing"))
-                elif not is_zero(value):
-                    issues.append(issue_for(spec, "no_data", f"{zero_path}={value!r}"))
+                detail = zero_path_issue_detail(spec, payload, zero_path)
+                if detail is not None:
+                    issues.append(issue_for(spec, "no_data", detail))
 
     if generated_at is None and spec.generated:
         issues.append(issue_for(spec, "missing_timestamp", "artifact lacks a parseable generated timestamp"))
@@ -1562,6 +1607,39 @@ def run_self_test() -> int:
         report = build_report(repo_root, now=now)
         details = "\n".join(issue["detail"] for issue in report["blocking_issues"])
         assert_condition("ci_no_data=2" in details, "no-data budget summary should block")
+
+        repo_root = fixture_root()
+        make_complete_fixture(repo_root, now)
+        health_delta_spec = next(
+            spec for spec in EVIDENCE_SPECS if spec.id == "extension_health_delta"
+        )
+        payload = fixture_payload(health_delta_spec, now, "fixture-run")
+        assert payload is not None
+        payload["current_summary"] = {"skipped": 1, "excluded": 1}
+        write_artifact(repo_root, health_delta_spec.path, payload, mtime=now)
+        report = build_report(repo_root, now=now)
+        health_delta_blockers = [
+            issue
+            for issue in report["blocking_issues"]
+            if issue["path"] == health_delta_spec.path
+        ]
+        assert_condition(
+            not health_delta_blockers,
+            "explicit health-delta exclusions should not count as no-data skips",
+        )
+
+        payload["current_summary"] = {"skipped": 2, "excluded": 1}
+        write_artifact(repo_root, health_delta_spec.path, payload, mtime=now)
+        report = build_report(repo_root, now=now)
+        health_delta_details = "\n".join(
+            issue["detail"]
+            for issue in report["blocking_issues"]
+            if issue["path"] == health_delta_spec.path
+        )
+        assert_condition(
+            "unaccounted_skipped=1" in health_delta_details,
+            "unaccounted health-delta skips should still block release claims",
+        )
 
         repo_root = fixture_root()
         make_complete_fixture(repo_root, now)
