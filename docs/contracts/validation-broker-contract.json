@@ -3,6 +3,8 @@
   "request_schema": "pi.validation_broker.request.v1",
   "slot_schema": "pi.validation_broker.slot.v1",
   "decision_schema": "pi.validation_broker.decision.v1",
+  "fault_corpus_schema": "pi.validation_broker.fault_corpus.v1",
+  "fault_event_schema": "pi.validation_broker.fault_event.v1",
   "cli_status_schema": "pi.validation_broker.cli_status.v1",
   "cli_plan_schema": "pi.validation_broker.cli_plan.v1",
   "cli_lease_mutation_schema": "pi.validation_broker.cli_lease_mutation.v1",
@@ -235,6 +237,8 @@
       "source_statuses",
       "required_actions",
       "reusable_slot",
+      "coalesced_artifacts",
+      "rejected_reusable_slots",
       "suppressed_claims",
       "no_claims"
     ],
@@ -267,6 +271,47 @@
       "not_permission_to_skip_required_gates",
       "not_permission_to_modify_other_agents_files"
     ]
+  },
+  "fault_corpus_contract": {
+    "corpus_path": "tests/golden_corpus/validation_broker/fault_corpus.json",
+    "event_log_path": "tests/golden_corpus/validation_broker/fault_events.jsonl",
+    "schema": "pi.validation_broker.fault_corpus.v1",
+    "event_schema": "pi.validation_broker.fault_event.v1",
+    "required_faults": [
+      "agent_mail_unavailable",
+      "rch_queue_saturated",
+      "rch_fail_open_local_fallback",
+      "stale_pre_commit_ubs",
+      "stuck_cargo_clippy",
+      "insufficient_tmpdir",
+      "target_dir_collision",
+      "reusable_provenance_mismatch",
+      "duplicate_broad_gate_request",
+      "equivalent_reusable_artifact"
+    ],
+    "required_decisions": [
+      "allow",
+      "wait",
+      "coalesce",
+      "narrow",
+      "deny_local_fallback",
+      "stale_recover",
+      "degraded_block"
+    ],
+    "required_rejected_reusable_slot_reasons": [
+      "command_fingerprint_mismatch",
+      "environment_fingerprint_mismatch",
+      "cwd_mismatch",
+      "git_head_mismatch",
+      "feature_flags_mismatch",
+      "target_dir_mismatch",
+      "tmpdir_mismatch",
+      "runner_mismatch",
+      "rust_toolchain_mismatch",
+      "artifact_schema_mismatch",
+      "artifact_hash_mismatch"
+    ],
+    "artifact_manifest_policy": "Every fault scenario must point at durable corpus and event-log artifacts and name expected decisions, reasons, actions, source statuses, policy fields, reusable slots, coalesced artifacts, and rejected reusable slot mismatch reasons when those fields are material to the fault."
   },
   "cli_surface_contract": {
     "subcommand": "validation-broker",
@@ -443,13 +488,23 @@
         "cli_surface_contract",
         "mutation_policy"
       ]
+    },
+    {
+      "id": "VALIDBROKER-MUST-010",
+      "description": "Build-storm, stale-slot, local-fallback, headroom, duplicate, and reusable-artifact faults are frozen in a golden corpus with event-log evidence and rejected-reuse diagnostics.",
+      "validated_by": [
+        "fault_corpus_contract",
+        "decision_contract.required_top_level_keys"
+      ]
     }
   ],
   "downstream_dependencies": {
     "unblocked_by_this_contract": [
       "bd-gusp4.2",
-      "bd-gusp4.3"
+      "bd-gusp4.3",
+      "bd-gusp4.6"
     ],
+    "fault_corpus_bead": "bd-gusp4.6",
     "final_closeout_bead": "bd-gusp4.11"
   }
 }

@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_lines)]
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io::{Error as IoError, ErrorKind};
 use std::path::PathBuf;
@@ -12,14 +12,15 @@ use pi::validation_broker::{
     VALIDATION_BROKER_SLOT_RECORD_SCHEMA, VALIDATION_BROKER_SLOT_SCHEMA,
     VALIDATION_BROKER_SLOT_STORE_SCHEMA, ValidationAdmissionDecision, ValidationAdmissionPolicy,
     ValidationAdmissionRequestContext, ValidationBrokerInputParts, ValidationBrokerInputSnapshot,
-    ValidationSlotArtifact, ValidationSlotLease, ValidationSlotRequest, ValidationSlotState,
-    ValidationSlotStore, ValidationSlotStoreSnapshot, ValidationSlotStoreStatus,
-    ValidationSourceProvenance, ValidationSourceState, decide_validation_admission,
-    normalize_available_source, normalize_beads_json, normalize_doctor_json,
-    normalize_git_status_text, normalize_headroom_json, normalize_rch_queue_text,
-    normalize_unavailable_source,
+    ValidationRejectedReusableSlot, ValidationSlotArtifact, ValidationSlotLease,
+    ValidationSlotRequest, ValidationSlotState, ValidationSlotStore, ValidationSlotStoreSnapshot,
+    ValidationSlotStoreStatus, ValidationSourceProvenance, ValidationSourceState,
+    decide_validation_admission, normalize_available_source, normalize_beads_json,
+    normalize_doctor_json, normalize_git_status_text, normalize_headroom_json,
+    normalize_rch_queue_text, normalize_unavailable_source,
 };
-use serde_json::json;
+use serde::Deserialize;
+use serde_json::{Value, json};
 
 type TestResult = Result<(), String>;
 
@@ -239,6 +240,633 @@ fn slot_snapshot(leases: Vec<ValidationSlotLease>) -> ValidationSlotStoreSnapsho
         latest_by_slot_id,
         degraded_reasons: Vec::new(),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct FaultCorpus {
+    schema: String,
+    event_log_path: String,
+    scenarios: Vec<FaultScenario>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FaultScenario {
+    scenario_id: String,
+    faults: Vec<String>,
+    request: FaultRequest,
+    inputs: FaultInputs,
+    #[serde(default)]
+    slot_store: Vec<FaultSlot>,
+    #[serde(default)]
+    policy: FaultPolicy,
+    artifact_manifest: Vec<FaultArtifactManifestEntry>,
+    expected: FaultExpected,
+}
+
+#[derive(Debug, Deserialize)]
+struct FaultRequest {
+    slot_id: String,
+    command_class: String,
+    #[serde(default)]
+    runner: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FaultInputs {
+    rch: String,
+    cargo_headroom: String,
+    scratch_headroom: String,
+    doctor: String,
+    git: String,
+    beads: String,
+    agent_mail: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FaultPolicy {
+    allow_narrow_scope: Option<bool>,
+    reuse_required: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FaultSlot {
+    slot_id: String,
+    state: String,
+    equivalence: String,
+    expires_at_utc: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct FaultArtifactManifestEntry {
+    path: String,
+    artifact_schema: String,
+    evidence_kind: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct FaultExpected {
+    decision: String,
+    confidence: String,
+    #[serde(default)]
+    reasons: Vec<String>,
+    #[serde(default)]
+    required_actions: Vec<String>,
+    #[serde(default)]
+    reusable_slot: Option<String>,
+    #[serde(default)]
+    coalesced_artifacts: Option<usize>,
+    #[serde(default)]
+    source_statuses: BTreeMap<String, String>,
+    #[serde(default)]
+    policy: BTreeMap<String, Value>,
+    #[serde(default)]
+    rejected_reusable_slots: Vec<FaultRejectedReusableSlot>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FaultRejectedReusableSlot {
+    slot_id: String,
+    reasons: Vec<String>,
+}
+
+fn fault_corpus_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/golden_corpus/validation_broker/fault_corpus.json")
+}
+
+fn repo_fixture_path(path: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path)
+}
+
+fn load_fault_corpus() -> Result<FaultCorpus, String> {
+    let raw = std::fs::read_to_string(fault_corpus_path())
+        .map_err(|err| format!("read fault corpus: {err}"))?;
+    serde_json::from_str(&raw).map_err(|err| format!("parse fault corpus: {err}"))
+}
+
+fn fault_request(request: &FaultRequest) -> ValidationSlotRequest {
+    let mut slot_request = base_request(&request.slot_id);
+    slot_request.owner_agent = "Codex".to_string();
+    slot_request.bead_id = "bd-gusp4.6".to_string();
+    slot_request
+        .command_class
+        .clone_from(&request.command_class);
+    slot_request.command = fault_command(&request.command_class);
+    if let Some(runner) = &request.runner {
+        slot_request.runner.clone_from(runner);
+    }
+    slot_request
+}
+
+fn fault_command(command_class: &str) -> Vec<String> {
+    match command_class {
+        "cargo_clippy" => vec![
+            "rch".to_string(),
+            "exec".to_string(),
+            "--".to_string(),
+            "cargo".to_string(),
+            "clippy".to_string(),
+            "--all-targets".to_string(),
+            "--".to_string(),
+            "-D".to_string(),
+            "warnings".to_string(),
+        ],
+        "ubs_staged" => vec![
+            "ubs".to_string(),
+            "--staged".to_string(),
+            "--only=rust".to_string(),
+            ".".to_string(),
+        ],
+        _ => vec![
+            "rch".to_string(),
+            "exec".to_string(),
+            "--".to_string(),
+            "cargo".to_string(),
+            "check".to_string(),
+            "--all-targets".to_string(),
+        ],
+    }
+}
+
+fn fault_inputs(inputs: &FaultInputs) -> Result<ValidationBrokerInputSnapshot, String> {
+    let rch = normalize_rch_queue_text(provenance("rch")?, fault_rch_text(&inputs.rch))
+        .map_err(to_string)?;
+    let cargo_headroom = normalize_headroom_json(
+        provenance("cargo_headroom")?,
+        &headroom_value(&inputs.cargo_headroom),
+    )
+    .map_err(to_string)?;
+    let scratch_headroom = normalize_headroom_json(
+        provenance("scratch_headroom")?,
+        &headroom_value(&inputs.scratch_headroom),
+    )
+    .map_err(to_string)?;
+    let doctor = normalize_doctor_json(provenance("doctor")?, &doctor_value(&inputs.doctor))
+        .map_err(to_string)?;
+    let git = normalize_git_status_text(
+        provenance("git")?,
+        "3048e53f3",
+        fault_git_status(&inputs.git),
+    )
+    .map_err(to_string)?;
+    let beads = normalize_beads_json(
+        provenance("beads")?,
+        &beads_value(&inputs.beads),
+        STALE_AT,
+        3600,
+    )
+    .map_err(to_string)?;
+    let agent_mail = match inputs.agent_mail.as_str() {
+        "available" => normalize_available_source(provenance("agent_mail")?).map_err(to_string)?,
+        "unavailable" => {
+            normalize_unavailable_source(provenance("agent_mail")?, "agent_mail_schema_missing")
+                .map_err(to_string)?
+        }
+        other => return Err(format!("unknown agent_mail fixture state: {other}")),
+    };
+
+    ValidationBrokerInputSnapshot::from_parts(ValidationBrokerInputParts {
+        captured_at_utc: STALE_AT.to_string(),
+        rch,
+        cargo_headroom,
+        doctor,
+        git,
+        beads,
+        scratch_headroom,
+        agent_mail,
+    })
+    .map_err(to_string)
+}
+
+fn fault_rch_text(state: &str) -> &'static str {
+    match state {
+        "healthy" => {
+            "Build Queue\n  - 1 Active Build(s)\n  - 0 Queued Build(s)\nWorker Availability\n  -> 4 / 18 slots free\n"
+        }
+        "saturated" => {
+            "Build Queue\n  - 5 Active Build(s)\n  - 2 Queued Build(s)\nWorker Availability\n  -> 0 / 18 slots free\n"
+        }
+        "local_fallback" => {
+            "Build Queue\n  - 1 Active Build(s)\n  - 0 Queued Build(s)\nWorker Availability\n  -> 4 / 18 slots free\nRCH fails open; command may run with local fallback\n"
+        }
+        _ => "",
+    }
+}
+
+fn headroom_value(state: &str) -> Value {
+    match state {
+        "low" => json!({"available_bytes": 5_000_u64, "required_bytes": 10_000_u64}),
+        _ => json!({"available_bytes": 50_000_u64, "required_bytes": 10_000_u64}),
+    }
+}
+
+fn doctor_value(state: &str) -> Value {
+    match state {
+        "failed" => json!({"checks": [{"name": "scratch", "status": "fail"}]}),
+        _ => json!({"checks": [{"name": "scratch", "status": "ok"}]}),
+    }
+}
+
+fn fault_git_status(state: &str) -> &'static str {
+    match state {
+        "dirty" => "## main...origin/main\n M src/validation_broker.rs\n",
+        _ => "## main...origin/main\n",
+    }
+}
+
+fn beads_value(state: &str) -> Value {
+    match state {
+        "stale_in_progress" => json!({"issues": [
+            {"id": "bd-stale", "status": "in_progress", "assignee": "AbsentAgent", "updated_at": START}
+        ]}),
+        _ => json!({"issues": []}),
+    }
+}
+
+fn fault_policy(policy: &FaultPolicy) -> ValidationAdmissionPolicy {
+    let mut result = ValidationAdmissionPolicy::default();
+    if let Some(allow_narrow_scope) = policy.allow_narrow_scope {
+        result.allow_narrow_scope = allow_narrow_scope;
+    }
+    if let Some(reuse_required) = policy.reuse_required {
+        result.reuse_required = reuse_required;
+    }
+    result
+}
+
+fn fault_slot_snapshot(
+    slots: &[FaultSlot],
+    request: &ValidationSlotRequest,
+) -> Result<ValidationSlotStoreSnapshot, String> {
+    let mut leases = Vec::new();
+    for slot in slots {
+        let slot_request = fault_slot_request(slot, request)?;
+        let mut lease = ValidationSlotLease::acquire(slot_request, START, &slot.expires_at_utc)
+            .map_err(to_string)?;
+        match slot.state.as_str() {
+            "active" => {}
+            "reusable" => {
+                lease
+                    .mark_reusable(&request.owner_agent, HEARTBEAT, reusable_fault_artifacts())
+                    .map_err(to_string)?;
+            }
+            other => return Err(unknown_fault_slot_state(other)),
+        }
+        leases.push(lease);
+    }
+    Ok(slot_snapshot(leases))
+}
+
+fn unknown_fault_slot_state(state: &str) -> String {
+    format!("unknown fault slot state: {state}")
+}
+
+fn reusable_fault_artifacts() -> Vec<ValidationSlotArtifact> {
+    vec![ValidationSlotArtifact {
+        path: "target/debug/deps/pi.d".to_string(),
+        sha256: Some("artifact-hash-1".to_string()),
+        schema: Some("cargo_check_result.v1".to_string()),
+    }]
+}
+
+fn fault_slot_request(
+    slot: &FaultSlot,
+    request: &ValidationSlotRequest,
+) -> Result<ValidationSlotRequest, String> {
+    let mut slot_request = ValidationSlotRequest {
+        slot_id: slot.slot_id.clone(),
+        owner_agent: request.owner_agent.clone(),
+        bead_id: request.bead_id.clone(),
+        command: request.command.clone(),
+        command_class: request.command_class.clone(),
+        cwd: request.cwd.clone(),
+        git_head: request.git_head.clone(),
+        feature_flags: request.feature_flags.clone(),
+        target_dir: request.target_dir.clone(),
+        tmpdir: request.tmpdir.clone(),
+        runner: request.runner.clone(),
+        rust_toolchain: request.rust_toolchain.clone(),
+        rch_job_id: request.rch_job_id.clone(),
+        environment: request.environment.clone(),
+        expected_artifacts: request.expected_artifacts.clone(),
+        artifact_schema: request.artifact_schema.clone(),
+        artifact_hash: request.artifact_hash.clone(),
+    };
+    apply_slot_equivalence(&mut slot_request, &slot.equivalence)?;
+    Ok(slot_request)
+}
+
+fn apply_slot_equivalence(
+    request: &mut ValidationSlotRequest,
+    equivalence: &str,
+) -> Result<(), String> {
+    match equivalence {
+        "matching" => Ok(()),
+        "target_dir_mismatch" => {
+            request.target_dir = "/data/tmp/pi_agent_rust_cargo/other/target".to_string();
+            Ok(())
+        }
+        "git_mismatch" => {
+            request.git_head = "different-head".to_string();
+            Ok(())
+        }
+        other => Err(format!("unknown slot equivalence fixture: {other}")),
+    }
+}
+
+fn fault_event_scenario_ids(event_log_path: &str) -> Result<BTreeSet<String>, String> {
+    let raw = std::fs::read_to_string(repo_fixture_path(event_log_path))
+        .map_err(|err| format!("read fault event log: {err}"))?;
+    let mut ids = BTreeSet::new();
+    for (index, line) in raw.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        ids.insert(fault_event_scenario_id(line, index + 1)?);
+    }
+    Ok(ids)
+}
+
+fn fault_event_scenario_id(line: &str, line_number: usize) -> Result<String, String> {
+    let event: Value = serde_json::from_str(line)
+        .map_err(|err| format!("parse fault event line {line_number}: {err}"))?;
+    require(
+        event.get("schema").and_then(Value::as_str) == Some("pi.validation_broker.fault_event.v1"),
+        "fault event schema",
+    )?;
+    event
+        .get("scenario_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("fault event line {line_number} missing scenario_id"))
+}
+
+fn validate_fault_manifest(scenario: &FaultScenario) -> TestResult {
+    require(
+        !scenario.faults.is_empty(),
+        "fault scenario names at least one fault",
+    )?;
+    require(
+        !scenario.artifact_manifest.is_empty(),
+        "fault scenario artifact manifest is not empty",
+    )?;
+    for artifact in &scenario.artifact_manifest {
+        require(
+            repo_fixture_path(&artifact.path).exists(),
+            "fault artifact path exists",
+        )?;
+        require(
+            !artifact.artifact_schema.trim().is_empty(),
+            "fault artifact schema present",
+        )?;
+        require(
+            !artifact.evidence_kind.trim().is_empty(),
+            "fault artifact evidence kind present",
+        )?;
+    }
+    Ok(())
+}
+
+const fn decision_key_for_test(decision: &ValidationAdmissionDecision) -> &'static str {
+    match decision {
+        ValidationAdmissionDecision::Allow => "allow",
+        ValidationAdmissionDecision::Wait => "wait",
+        ValidationAdmissionDecision::Coalesce => "coalesce",
+        ValidationAdmissionDecision::Narrow => "narrow",
+        ValidationAdmissionDecision::DenyLocalFallback => "deny_local_fallback",
+        ValidationAdmissionDecision::StaleRecover => "stale_recover",
+        ValidationAdmissionDecision::DegradedBlock => "degraded_block",
+    }
+}
+
+const fn source_state_key(state: &ValidationSourceState) -> &'static str {
+    match state {
+        ValidationSourceState::Available => "available",
+        ValidationSourceState::Unavailable => "unavailable",
+        ValidationSourceState::Degraded => "degraded",
+    }
+}
+
+fn assert_expected_policy(
+    decision: &pi::validation_broker::ValidationAdmissionDecisionRecord,
+    expected: &BTreeMap<String, Value>,
+) -> TestResult {
+    for (field, expected_value) in expected {
+        let Some(actual) = policy_field_value(decision, field) else {
+            return Err(unknown_expected_policy_field(field));
+        };
+        if &actual != expected_value {
+            return Err(policy_field_mismatch(field));
+        }
+    }
+    Ok(())
+}
+
+fn unknown_expected_policy_field(field: &str) -> String {
+    format!("unknown expected policy field: {field}")
+}
+
+fn policy_field_mismatch(field: &str) -> String {
+    format!("policy field {field} did not match expected value")
+}
+
+fn policy_field_value(
+    decision: &pi::validation_broker::ValidationAdmissionDecisionRecord,
+    field: &str,
+) -> Option<Value> {
+    match field {
+        "active_equivalent_slots" => Some(json!(decision.policy.active_equivalent_slots)),
+        "reusable_equivalent_slots" => Some(json!(decision.policy.reusable_equivalent_slots)),
+        "stale_equivalent_slots" => Some(json!(decision.policy.stale_equivalent_slots)),
+        "active_broad_gates" => Some(json!(decision.policy.active_broad_gates)),
+        "stale_in_progress_beads" => Some(json!(decision.policy.stale_in_progress_beads)),
+        "rch_saturated" => Some(json!(decision.policy.rch_saturated)),
+        "rch_local_fallback" => Some(json!(decision.policy.rch_local_fallback)),
+        "low_cargo_headroom" => Some(json!(decision.policy.low_cargo_headroom)),
+        "low_scratch_headroom" => Some(json!(decision.policy.low_scratch_headroom)),
+        "reuse_required" => Some(json!(decision.policy.reuse_required)),
+        _ => None,
+    }
+}
+
+fn assert_expected_rejections(
+    actual: &[ValidationRejectedReusableSlot],
+    expected: &[FaultRejectedReusableSlot],
+) -> TestResult {
+    require(
+        actual.len() == expected.len(),
+        "rejected reusable slot count matched",
+    )?;
+    for expected_slot in expected {
+        let Some(actual_slot) = actual
+            .iter()
+            .find(|slot| slot.slot_id == expected_slot.slot_id)
+        else {
+            return Err(missing_rejected_reusable_slot(&expected_slot.slot_id));
+        };
+        for reason in &expected_slot.reasons {
+            if !actual_slot
+                .reasons
+                .iter()
+                .any(|actual_reason| actual_reason == reason)
+            {
+                return Err(missing_rejected_reusable_reason(reason));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn missing_rejected_reusable_slot(slot_id: &str) -> String {
+    format!("missing rejected reusable slot {slot_id}")
+}
+
+fn missing_rejected_reusable_reason(reason: &str) -> String {
+    format!("rejected reusable slot reason {reason} missing")
+}
+
+#[test]
+fn validation_broker_fault_corpus_covers_build_storm_and_stale_recovery() -> TestResult {
+    let corpus = load_fault_corpus()?;
+    require(
+        corpus.schema == "pi.validation_broker.fault_corpus.v1",
+        "fault corpus schema",
+    )?;
+    let event_scenario_ids = fault_event_scenario_ids(&corpus.event_log_path)?;
+
+    let mut seen_decisions = BTreeSet::new();
+    for scenario in &corpus.scenarios {
+        require(
+            event_scenario_ids.contains(&scenario.scenario_id),
+            "scenario has JSONL event evidence",
+        )?;
+        validate_fault_manifest(scenario)?;
+
+        let request = fault_request(&scenario.request);
+        let inputs = fault_inputs(&scenario.inputs)?;
+        let slot_store = fault_slot_snapshot(&scenario.slot_store, &request)?;
+        let policy = fault_policy(&scenario.policy);
+        let request_id = scenario_request_id(&scenario.scenario_id);
+        let decision = decide_validation_admission(
+            admission_context_for(&request_id, request, START, 4),
+            &inputs,
+            &slot_store,
+            &policy,
+            STALE_AT,
+        )
+        .map_err(to_string)?;
+
+        let decision_key = decision_key_for_test(&decision.decision);
+        seen_decisions.insert(decision_key);
+        if decision_key != scenario.expected.decision {
+            return Err(scenario_decision_mismatch(&scenario.scenario_id));
+        }
+        if decision.confidence != scenario.expected.confidence {
+            return Err(scenario_confidence_mismatch(&scenario.scenario_id));
+        }
+        for reason in &scenario.expected.reasons {
+            if !decision.reasons.iter().any(|actual| actual == reason) {
+                return Err(scenario_reason_missing(&scenario.scenario_id, reason));
+            }
+        }
+        for action in &scenario.expected.required_actions {
+            if !decision
+                .required_actions
+                .iter()
+                .any(|actual| actual == action)
+            {
+                return Err(scenario_action_missing(&scenario.scenario_id, action));
+            }
+        }
+        if decision.reusable_slot != scenario.expected.reusable_slot {
+            return Err(scenario_reusable_slot_mismatch(&scenario.scenario_id));
+        }
+        if let Some(expected_artifacts) = scenario.expected.coalesced_artifacts {
+            if decision.coalesced_artifacts.len() != expected_artifacts {
+                return Err(scenario_coalesced_artifact_count_mismatch(
+                    &scenario.scenario_id,
+                ));
+            }
+        }
+        for (source_id, expected_state) in &scenario.expected.source_statuses {
+            let Some(actual_status) = decision
+                .source_statuses
+                .iter()
+                .find(|status| &status.source_id == source_id)
+            else {
+                return Err(scenario_source_status_missing(
+                    &scenario.scenario_id,
+                    source_id,
+                ));
+            };
+            if source_state_key(&actual_status.state) != expected_state {
+                return Err(scenario_source_state_mismatch(
+                    &scenario.scenario_id,
+                    source_id,
+                ));
+            }
+        }
+        assert_expected_policy(&decision, &scenario.expected.policy)?;
+        assert_expected_rejections(
+            &decision.rejected_reusable_slots,
+            &scenario.expected.rejected_reusable_slots,
+        )?;
+    }
+
+    for required_decision in [
+        "wait",
+        "coalesce",
+        "narrow",
+        "deny_local_fallback",
+        "stale_recover",
+        "degraded_block",
+    ] {
+        if !seen_decisions.contains(required_decision) {
+            return Err(fault_corpus_missing_decision(required_decision));
+        }
+    }
+
+    Ok(())
+}
+
+fn scenario_request_id(scenario_id: &str) -> String {
+    format!("request-{scenario_id}")
+}
+
+fn scenario_decision_mismatch(scenario_id: &str) -> String {
+    format!("{scenario_id} decision did not match")
+}
+
+fn scenario_confidence_mismatch(scenario_id: &str) -> String {
+    format!("{scenario_id} confidence did not match")
+}
+
+fn scenario_reason_missing(scenario_id: &str, reason: &str) -> String {
+    format!("{scenario_id} reason {reason} missing")
+}
+
+fn scenario_action_missing(scenario_id: &str, action: &str) -> String {
+    format!("{scenario_id} action {action} missing")
+}
+
+fn scenario_reusable_slot_mismatch(scenario_id: &str) -> String {
+    format!("{scenario_id} reusable slot did not match")
+}
+
+fn scenario_coalesced_artifact_count_mismatch(scenario_id: &str) -> String {
+    format!("{scenario_id} coalesced artifact count did not match")
+}
+
+fn scenario_source_status_missing(scenario_id: &str, source_id: &str) -> String {
+    format!("{scenario_id} missing source status {source_id}")
+}
+
+fn scenario_source_state_mismatch(scenario_id: &str, source_id: &str) -> String {
+    format!("{scenario_id} source {source_id} state did not match")
+}
+
+fn fault_corpus_missing_decision(required_decision: &str) -> String {
+    format!("fault corpus missing {required_decision} decision")
 }
 
 #[test]

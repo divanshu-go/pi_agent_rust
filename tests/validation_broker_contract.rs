@@ -10,6 +10,8 @@ const EXPECTED_SCHEMA: &str = "pi.validation_broker.contract.v1";
 const EXPECTED_REQUEST_SCHEMA: &str = "pi.validation_broker.request.v1";
 const EXPECTED_SLOT_SCHEMA: &str = "pi.validation_broker.slot.v1";
 const EXPECTED_DECISION_SCHEMA: &str = "pi.validation_broker.decision.v1";
+const EXPECTED_FAULT_CORPUS_SCHEMA: &str = "pi.validation_broker.fault_corpus.v1";
+const EXPECTED_FAULT_EVENT_SCHEMA: &str = "pi.validation_broker.fault_event.v1";
 const EXPECTED_BEAD_ID: &str = "bd-gusp4.1";
 const EXPECTED_PARENT_BEAD_ID: &str = "bd-gusp4";
 
@@ -127,6 +129,14 @@ fn validation_broker_contract_has_identity_and_advisory_purpose() -> TestResult 
     require(
         pointer_str(&contract, "/decision_schema")? == EXPECTED_DECISION_SCHEMA,
         "decision schema mismatch",
+    )?;
+    require(
+        pointer_str(&contract, "/fault_corpus_schema")? == EXPECTED_FAULT_CORPUS_SCHEMA,
+        "fault corpus schema mismatch",
+    )?;
+    require(
+        pointer_str(&contract, "/fault_event_schema")? == EXPECTED_FAULT_EVENT_SCHEMA,
+        "fault event schema mismatch",
     )?;
     require(
         pointer_str(&contract, "/bead_id")? == EXPECTED_BEAD_ID,
@@ -300,6 +310,8 @@ fn validation_broker_contract_covers_request_slot_and_decision_shapes() -> TestR
             "reasons",
             "source_statuses",
             "required_actions",
+            "coalesced_artifacts",
+            "rejected_reusable_slots",
             "suppressed_claims",
             "no_claims",
         ],
@@ -322,6 +334,148 @@ fn validation_broker_contract_covers_request_slot_and_decision_shapes() -> TestR
             "artifact_hash",
         ],
         "coalescing equivalence field",
+    )
+}
+
+#[test]
+fn validation_broker_contract_declares_fault_corpus() -> TestResult {
+    let contract = load_contract()?;
+
+    require(
+        pointer_str(&contract, "/fault_corpus_contract/schema")? == EXPECTED_FAULT_CORPUS_SCHEMA,
+        "fault corpus contract schema mismatch",
+    )?;
+    require(
+        pointer_str(&contract, "/fault_corpus_contract/event_schema")?
+            == EXPECTED_FAULT_EVENT_SCHEMA,
+        "fault corpus event schema mismatch",
+    )?;
+    require_set(
+        &contract,
+        "/fault_corpus_contract/required_faults",
+        &[
+            "agent_mail_unavailable",
+            "rch_queue_saturated",
+            "rch_fail_open_local_fallback",
+            "stale_pre_commit_ubs",
+            "stuck_cargo_clippy",
+            "insufficient_tmpdir",
+            "target_dir_collision",
+            "reusable_provenance_mismatch",
+            "duplicate_broad_gate_request",
+            "equivalent_reusable_artifact",
+        ],
+        "fault corpus fault",
+    )?;
+    require_set(
+        &contract,
+        "/fault_corpus_contract/required_decisions",
+        &[
+            "allow",
+            "wait",
+            "coalesce",
+            "narrow",
+            "deny_local_fallback",
+            "stale_recover",
+            "degraded_block",
+        ],
+        "fault corpus decision",
+    )?;
+    require_set(
+        &contract,
+        "/fault_corpus_contract/required_rejected_reusable_slot_reasons",
+        &[
+            "command_fingerprint_mismatch",
+            "environment_fingerprint_mismatch",
+            "target_dir_mismatch",
+            "artifact_hash_mismatch",
+        ],
+        "rejected reusable slot reason",
+    )?;
+
+    let corpus_path = pointer_str(&contract, "/fault_corpus_contract/corpus_path")?;
+    let event_log_path = pointer_str(&contract, "/fault_corpus_contract/event_log_path")?;
+    let corpus_abs = repo_root().join(corpus_path);
+    let event_log_abs = repo_root().join(event_log_path);
+    require(corpus_abs.exists(), "fault corpus artifact exists")?;
+    require(event_log_abs.exists(), "fault event log artifact exists")?;
+
+    let corpus_raw = std::fs::read_to_string(&corpus_abs)
+        .map_err(|err| format!("failed to read {}: {err}", corpus_abs.display()))?;
+    let corpus: Value = serde_json::from_str(&corpus_raw)
+        .map_err(|err| format!("failed to parse {}: {err}", corpus_abs.display()))?;
+    require(
+        pointer_str(&corpus, "/schema")? == EXPECTED_FAULT_CORPUS_SCHEMA,
+        "fault corpus artifact schema mismatch",
+    )?;
+    require(
+        pointer_str(&corpus, "/event_log_path")? == event_log_path,
+        "fault corpus event log linkage mismatch",
+    )?;
+
+    let mut observed_faults = HashSet::new();
+    let mut observed_decisions = HashSet::new();
+    let scenarios = pointer_array(&corpus, "/scenarios")?;
+    require(
+        scenarios.len() >= 9,
+        "fault corpus must cover all required scenarios",
+    )?;
+    for scenario in scenarios {
+        let faults = scenario
+            .get("faults")
+            .and_then(Value::as_array)
+            .ok_or("scenario faults must be an array")?;
+        for fault in faults {
+            let fault_name = fault.as_str().ok_or("scenario fault must be a string")?;
+            observed_faults.insert(fault_name);
+        }
+        let decision = scenario
+            .pointer("/expected/decision")
+            .and_then(Value::as_str)
+            .ok_or("scenario expected decision must be a string")?;
+        observed_decisions.insert(decision);
+    }
+    for required_fault in string_set(&contract, "/fault_corpus_contract/required_faults")? {
+        if !observed_faults.contains(required_fault) {
+            return Err(missing_fault_message(required_fault));
+        }
+    }
+    for required_decision in string_set(&contract, "/fault_corpus_contract/required_decisions")? {
+        if !observed_decisions.contains(required_decision) {
+            return Err(missing_decision_message(required_decision));
+        }
+    }
+
+    let event_log_raw = std::fs::read_to_string(&event_log_abs)
+        .map_err(|err| format!("failed to read {}: {err}", event_log_abs.display()))?;
+    let mut event_count = 0_usize;
+    for (line_index, line) in event_log_raw.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        validate_fault_event_line(line, line_index + 1)?;
+        event_count += 1;
+    }
+    require(
+        event_count >= scenarios.len(),
+        "fault event log must cover every corpus scenario",
+    )
+}
+
+fn missing_fault_message(required_fault: &str) -> String {
+    format!("fault corpus missing scenario fault {required_fault}")
+}
+
+fn missing_decision_message(required_decision: &str) -> String {
+    format!("fault corpus missing decision {required_decision}")
+}
+
+fn validate_fault_event_line(line: &str, line_number: usize) -> TestResult {
+    let event: Value = serde_json::from_str(line)
+        .map_err(|err| format!("failed to parse event line {line_number}: {err}"))?;
+    require(
+        pointer_str(&event, "/schema")? == EXPECTED_FAULT_EVENT_SCHEMA,
+        format!("fault event line {line_number} schema mismatch"),
     )
 }
 
@@ -440,8 +594,12 @@ fn validation_broker_contract_links_downstream_beads_and_requirements() -> TestR
     require_set(
         &contract,
         "/downstream_dependencies/unblocked_by_this_contract",
-        &["bd-gusp4.2", "bd-gusp4.3"],
+        &["bd-gusp4.2", "bd-gusp4.3", "bd-gusp4.6"],
         "downstream bead",
+    )?;
+    require(
+        pointer_str(&contract, "/downstream_dependencies/fault_corpus_bead")? == "bd-gusp4.6",
+        "fault corpus bead mismatch",
     )?;
     require(
         pointer_str(&contract, "/downstream_dependencies/final_closeout_bead")? == "bd-gusp4.11",

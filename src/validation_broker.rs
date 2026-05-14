@@ -1080,6 +1080,12 @@ pub struct ValidationAdmissionSourceStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationRejectedReusableSlot {
+    pub slot_id: String,
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ValidationAdmissionDecisionRecord {
     pub schema: String,
     pub decision_id: String,
@@ -1092,6 +1098,7 @@ pub struct ValidationAdmissionDecisionRecord {
     pub required_actions: Vec<String>,
     pub reusable_slot: Option<String>,
     pub coalesced_artifacts: Vec<ValidationSlotArtifact>,
+    pub rejected_reusable_slots: Vec<ValidationRejectedReusableSlot>,
     pub suppressed_claims: Vec<String>,
     pub no_claims: Vec<String>,
     pub policy: ValidationAdmissionPolicyFields,
@@ -1122,6 +1129,7 @@ pub fn decide_validation_admission(
     let mut coalesced_artifacts = Vec::new();
     let blocking_source_reasons = blocking_source_reasons(inputs, slot_store);
     let source_statuses = admission_source_statuses(inputs, slot_store);
+    let rejected_reusable_slots = rejected_reusable_slots(&context.request, slot_store)?;
     let hard_rch_backpressure = inputs.rch.free_slots == Some(0)
         || inputs
             .rch
@@ -1254,6 +1262,7 @@ pub fn decide_validation_admission(
         required_actions,
         reusable_slot,
         coalesced_artifacts,
+        rejected_reusable_slots,
         suppressed_claims: default_suppressed_claims(),
         no_claims: default_no_claims(),
         policy: fields,
@@ -1362,6 +1371,102 @@ fn active_broad_gate_count(
         }
     }
     Ok(count)
+}
+
+fn rejected_reusable_slots(
+    request: &ValidationSlotRequest,
+    slot_store: &ValidationSlotStoreSnapshot,
+) -> Result<Vec<ValidationRejectedReusableSlot>> {
+    let command_fingerprint = command_fingerprint(request)?;
+    let environment_fingerprint = environment_fingerprint(&request.environment)?;
+    let mut rejected = Vec::new();
+
+    for lease in slot_store.latest_by_slot_id.values() {
+        if !matches!(lease.state, ValidationSlotState::Reusable) {
+            continue;
+        }
+        let reasons = reusable_slot_mismatch_reasons(
+            lease,
+            request,
+            &command_fingerprint,
+            &environment_fingerprint,
+        );
+        if !reasons.is_empty() {
+            rejected.push(ValidationRejectedReusableSlot {
+                slot_id: lease.slot_id.as_str().into(),
+                reasons,
+            });
+        }
+    }
+
+    Ok(rejected)
+}
+
+fn reusable_slot_mismatch_reasons(
+    lease: &ValidationSlotLease,
+    request: &ValidationSlotRequest,
+    request_command_fingerprint: &str,
+    request_environment_fingerprint: &str,
+) -> Vec<String> {
+    let mut reasons = Vec::new();
+    push_mismatch(
+        &mut reasons,
+        "command_fingerprint",
+        lease.command_fingerprint.as_str(),
+        request_command_fingerprint,
+    );
+    push_mismatch(
+        &mut reasons,
+        "environment_fingerprint",
+        lease.environment_fingerprint.as_str(),
+        request_environment_fingerprint,
+    );
+    push_mismatch(&mut reasons, "cwd", &lease.cwd, &request.cwd);
+    push_mismatch(&mut reasons, "git_head", &lease.git_head, &request.git_head);
+    push_mismatch(
+        &mut reasons,
+        "feature_flags",
+        &lease.feature_flags,
+        &request.feature_flags,
+    );
+    push_mismatch(
+        &mut reasons,
+        "target_dir",
+        &lease.target_dir,
+        &request.target_dir,
+    );
+    push_mismatch(&mut reasons, "tmpdir", &lease.tmpdir, &request.tmpdir);
+    push_mismatch(&mut reasons, "runner", &lease.runner, &request.runner);
+    push_mismatch(
+        &mut reasons,
+        "rust_toolchain",
+        &lease.rust_toolchain,
+        &request.rust_toolchain,
+    );
+    push_mismatch(
+        &mut reasons,
+        "artifact_schema",
+        &lease.artifact_schema,
+        &request.artifact_schema,
+    );
+    push_mismatch(
+        &mut reasons,
+        "artifact_hash",
+        &lease.artifact_hash,
+        &request.artifact_hash,
+    );
+    reasons
+}
+
+fn push_mismatch<T: PartialEq + ?Sized>(
+    reasons: &mut Vec<String>,
+    field: &str,
+    lease_value: &T,
+    request_value: &T,
+) {
+    if lease_value != request_value {
+        reasons.push(format!("{field}_mismatch"));
+    }
 }
 
 fn is_broad_validation_request(request: &ValidationSlotRequest) -> bool {
