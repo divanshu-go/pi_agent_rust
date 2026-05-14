@@ -1931,7 +1931,8 @@ read-only, emits `pi.swarm.replay_preview.v1` JSON or concise text, refuses to
 overwrite requested output files, and can feed
 `scripts/build_swarm_operator_runpack.py --swarm-replay-preview-json <preview.json>`
 so runpacks carry the replay policy comparison without treating the runpack as
-source-of-truth replay evidence.
+source-of-truth replay evidence. Operator workflow, privacy, and degraded-data
+guidance lives in [docs/swarm-replay-operator-workflow.md](docs/swarm-replay-operator-workflow.md).
 
 The autopilot closeout gate emits `pi.swarm.autopilot_decision_gate.v1` to audit
 the shipped input pack, planner, work partitions, failure actions, budget drift
