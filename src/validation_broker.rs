@@ -20,6 +20,14 @@ use crate::error::{Error, Result};
 pub const VALIDATION_BROKER_SLOT_SCHEMA: &str = "pi.validation_broker.slot.v1";
 pub const VALIDATION_BROKER_SLOT_STORE_SCHEMA: &str = "pi.validation_broker.slot_store.v1";
 pub const VALIDATION_BROKER_SLOT_RECORD_SCHEMA: &str = "pi.validation_broker.slot_store.record.v1";
+pub const VALIDATION_BROKER_INPUT_SCHEMA: &str = "pi.validation_broker.input_snapshot.v1";
+pub const VALIDATION_BROKER_SOURCE_PROVENANCE_SCHEMA: &str =
+    "pi.validation_broker.source_provenance.v1";
+pub const VALIDATION_BROKER_RCH_INPUT_SCHEMA: &str = "pi.validation_broker.rch_input.v1";
+pub const VALIDATION_BROKER_HEADROOM_INPUT_SCHEMA: &str = "pi.validation_broker.headroom_input.v1";
+pub const VALIDATION_BROKER_DOCTOR_INPUT_SCHEMA: &str = "pi.validation_broker.doctor_input.v1";
+pub const VALIDATION_BROKER_GIT_INPUT_SCHEMA: &str = "pi.validation_broker.git_input.v1";
+pub const VALIDATION_BROKER_BEADS_INPUT_SCHEMA: &str = "pi.validation_broker.beads_input.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -456,6 +464,604 @@ impl ValidationSlotStore {
             .collect();
         snapshot(leases, latest_by_slot_id, degraded_reasons)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidationSourceState {
+    Available,
+    Degraded,
+    Unavailable,
+}
+
+impl ValidationSourceState {
+    #[must_use]
+    pub const fn is_degraded(&self) -> bool {
+        matches!(self, Self::Degraded | Self::Unavailable)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationSourceProvenance {
+    pub schema: String,
+    pub source: String,
+    pub command: Vec<String>,
+    pub cwd: String,
+    pub captured_at_utc: String,
+    pub artifact_path: Option<String>,
+}
+
+impl ValidationSourceProvenance {
+    pub fn new(
+        source: impl Into<String>,
+        command: Vec<String>,
+        cwd: impl Into<String>,
+        captured_at_utc: impl Into<String>,
+        artifact_path: Option<String>,
+    ) -> Result<Self> {
+        let provenance = Self {
+            schema: VALIDATION_BROKER_SOURCE_PROVENANCE_SCHEMA.to_string(),
+            source: source.into(),
+            command,
+            cwd: cwd.into(),
+            captured_at_utc: captured_at_utc.into(),
+            artifact_path,
+        };
+        provenance.validate()?;
+        Ok(provenance)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.schema != VALIDATION_BROKER_SOURCE_PROVENANCE_SCHEMA {
+            return Err(Error::validation(format!(
+                "source provenance has unexpected schema {}",
+                self.schema
+            )));
+        }
+        require_non_empty(&self.source, "source")?;
+        require_non_empty(&self.cwd, "source cwd")?;
+        parse_utc(&self.captured_at_utc)?;
+        for segment in &self.command {
+            require_non_empty(segment, "source command segment")?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationSourceHealth {
+    pub state: ValidationSourceState,
+    pub provenance: ValidationSourceProvenance,
+    pub degraded_reasons: Vec<String>,
+}
+
+impl ValidationSourceHealth {
+    const fn available(provenance: ValidationSourceProvenance) -> Self {
+        Self {
+            state: ValidationSourceState::Available,
+            provenance,
+            degraded_reasons: Vec::new(),
+        }
+    }
+
+    const fn degraded(provenance: ValidationSourceProvenance, reasons: Vec<String>) -> Self {
+        Self {
+            state: ValidationSourceState::Degraded,
+            provenance,
+            degraded_reasons: reasons,
+        }
+    }
+
+    fn unavailable(provenance: ValidationSourceProvenance, reason: String) -> Self {
+        Self {
+            state: ValidationSourceState::Unavailable,
+            provenance,
+            degraded_reasons: vec![reason],
+        }
+    }
+
+    #[must_use]
+    pub const fn is_degraded(&self) -> bool {
+        self.state.is_degraded()
+    }
+}
+
+pub fn normalize_available_source(
+    provenance: ValidationSourceProvenance,
+) -> Result<ValidationSourceHealth> {
+    provenance.validate()?;
+    Ok(ValidationSourceHealth::available(provenance))
+}
+
+pub fn normalize_unavailable_source(
+    provenance: ValidationSourceProvenance,
+    reason: impl Into<String>,
+) -> Result<ValidationSourceHealth> {
+    provenance.validate()?;
+    let reason = non_empty(reason.into(), "unavailable reason")?;
+    Ok(ValidationSourceHealth::unavailable(provenance, reason))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationRchInput {
+    pub schema: String,
+    pub health: ValidationSourceHealth,
+    pub active_builds: Option<u64>,
+    pub queued_builds: Option<u64>,
+    pub free_slots: Option<u64>,
+    pub total_slots: Option<u64>,
+    pub local_fallback: bool,
+    pub saturated: bool,
+}
+
+pub fn normalize_rch_queue_text(
+    provenance: ValidationSourceProvenance,
+    raw: &str,
+) -> Result<ValidationRchInput> {
+    provenance.validate()?;
+    let mut degraded_reasons = Vec::new();
+    if raw.trim().is_empty() {
+        degraded_reasons.push("rch_queue_output_missing".to_string());
+    }
+
+    let active_builds = count_from_line(raw, "Active Build");
+    let queued_builds = count_from_line(raw, "Queued Build").or(Some(0));
+    let (free_slots, total_slots) = worker_slots(raw);
+    let local_fallback = contains_any(raw, &["fail open", "fails open", "local fallback"]);
+
+    if active_builds.is_none() {
+        degraded_reasons.push("rch_active_build_count_missing".to_string());
+    }
+    if free_slots.is_none() || total_slots.is_none() {
+        degraded_reasons.push("rch_worker_slot_count_missing".to_string());
+    }
+    if local_fallback {
+        degraded_reasons.push("rch_local_fallback_detected".to_string());
+    }
+
+    let saturated = queued_builds.unwrap_or_default() > 0 || free_slots == Some(0);
+    Ok(ValidationRchInput {
+        schema: VALIDATION_BROKER_RCH_INPUT_SCHEMA.to_string(),
+        health: source_health(provenance, degraded_reasons),
+        active_builds,
+        queued_builds,
+        free_slots,
+        total_slots,
+        local_fallback,
+        saturated,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationHeadroomInput {
+    pub schema: String,
+    pub health: ValidationSourceHealth,
+    pub available_bytes: Option<u64>,
+    pub required_bytes: Option<u64>,
+    pub low_headroom: bool,
+}
+
+pub fn normalize_headroom_json(
+    provenance: ValidationSourceProvenance,
+    value: &Value,
+) -> Result<ValidationHeadroomInput> {
+    provenance.validate()?;
+    let mut degraded_reasons = Vec::new();
+    if !value.is_object() {
+        degraded_reasons.push("headroom_source_not_object".to_string());
+    }
+    let available_bytes = u64_field(value, &["available_bytes", "free_bytes", "free"]);
+    let required_bytes = u64_field(
+        value,
+        &[
+            "required_bytes",
+            "min_required_bytes",
+            "minimum_required_bytes",
+        ],
+    );
+    if available_bytes.is_none() {
+        degraded_reasons.push("headroom_available_bytes_missing".to_string());
+    }
+    if required_bytes.is_none() {
+        degraded_reasons.push("headroom_required_bytes_missing".to_string());
+    }
+    let low_headroom = matches!(
+        (available_bytes, required_bytes),
+        (Some(available), Some(required)) if available < required
+    );
+
+    Ok(ValidationHeadroomInput {
+        schema: VALIDATION_BROKER_HEADROOM_INPUT_SCHEMA.to_string(),
+        health: source_health(provenance, degraded_reasons),
+        available_bytes,
+        required_bytes,
+        low_headroom,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationDoctorCheck {
+    pub name: String,
+    pub status: String,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationDoctorInput {
+    pub schema: String,
+    pub health: ValidationSourceHealth,
+    pub checks: Vec<ValidationDoctorCheck>,
+    pub has_failures: bool,
+}
+
+pub fn normalize_doctor_json(
+    provenance: ValidationSourceProvenance,
+    value: &Value,
+) -> Result<ValidationDoctorInput> {
+    provenance.validate()?;
+    let mut degraded_reasons = Vec::new();
+    let checks_value = value.get("checks").or_else(|| {
+        value
+            .get("preflight")
+            .and_then(|preflight| preflight.get("checks"))
+    });
+    let mut checks = Vec::new();
+
+    if let Some(raw_checks) = checks_value.and_then(Value::as_array) {
+        for (index, raw_check) in raw_checks.iter().enumerate() {
+            let name = string_field(raw_check, &["name", "id"]).unwrap_or_else(|| {
+                degraded_reasons.push(format!("doctor_check_{}_name_missing", index + 1));
+                format!("unnamed_check_{}", index + 1)
+            });
+            let status = string_field(raw_check, &["status", "result"]).unwrap_or_else(|| {
+                degraded_reasons.push(format!("doctor_check_{}_status_missing", index + 1));
+                "unknown".to_string()
+            });
+            checks.push(ValidationDoctorCheck {
+                name,
+                status,
+                message: string_field(raw_check, &["message", "reason"]),
+            });
+        }
+    } else {
+        degraded_reasons.push("doctor_checks_missing".to_string());
+    }
+
+    if checks.is_empty() {
+        degraded_reasons.push("doctor_checks_empty".to_string());
+    }
+
+    let has_failures = checks.iter().any(|check| !is_success_status(&check.status));
+    Ok(ValidationDoctorInput {
+        schema: VALIDATION_BROKER_DOCTOR_INPUT_SCHEMA.to_string(),
+        health: source_health(provenance, degraded_reasons),
+        checks,
+        has_failures,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationGitInput {
+    pub schema: String,
+    pub health: ValidationSourceHealth,
+    pub head: String,
+    pub branch: Option<String>,
+    pub dirty: bool,
+    pub staged_paths: Vec<String>,
+    pub unstaged_paths: Vec<String>,
+    pub untracked_paths: Vec<String>,
+}
+
+pub fn normalize_git_status_text(
+    provenance: ValidationSourceProvenance,
+    head: impl Into<String>,
+    status: &str,
+) -> Result<ValidationGitInput> {
+    provenance.validate()?;
+    let head = non_empty(head.into(), "git head")?;
+    let mut branch = None;
+    let mut staged_paths = Vec::new();
+    let mut unstaged_paths = Vec::new();
+    let mut untracked_paths = Vec::new();
+    let mut degraded_reasons = Vec::new();
+
+    for line in status.lines() {
+        if let Some(raw_branch) = line.strip_prefix("## ") {
+            branch = raw_branch
+                .split("...")
+                .next()
+                .and_then(|candidate| candidate.split_whitespace().next())
+                .filter(|candidate| !candidate.is_empty())
+                .map(ToOwned::to_owned);
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Some(code) = line.get(..2) else {
+            degraded_reasons.push(format!("git_status_line_malformed: {line}"));
+            continue;
+        };
+        let Some(separator) = line.get(2..3) else {
+            degraded_reasons.push(format!("git_status_line_malformed: {line}"));
+            continue;
+        };
+        let Some(raw_path) = line.get(3..) else {
+            degraded_reasons.push(format!("git_status_line_malformed: {line}"));
+            continue;
+        };
+        if separator != " " || !code.bytes().all(is_git_short_status_code) {
+            degraded_reasons.push(format!("git_status_line_malformed: {line}"));
+            continue;
+        }
+        let path = raw_path.trim().to_string();
+        if path.is_empty() {
+            degraded_reasons.push("git_status_path_missing".to_string());
+            continue;
+        }
+        if code == "??" {
+            untracked_paths.push(path);
+        } else {
+            let mut chars = code.chars();
+            let staged = chars.next().is_some_and(|state| state != ' ');
+            let unstaged = chars.next().is_some_and(|state| state != ' ');
+            if staged {
+                staged_paths.push(path.clone());
+            }
+            if unstaged {
+                unstaged_paths.push(path);
+            }
+        }
+    }
+
+    if branch.is_none() {
+        degraded_reasons.push("git_branch_missing".to_string());
+    }
+    let dirty =
+        !staged_paths.is_empty() || !unstaged_paths.is_empty() || !untracked_paths.is_empty();
+
+    Ok(ValidationGitInput {
+        schema: VALIDATION_BROKER_GIT_INPUT_SCHEMA.to_string(),
+        health: source_health(provenance, degraded_reasons),
+        head,
+        branch,
+        dirty,
+        staged_paths,
+        unstaged_paths,
+        untracked_paths,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationBeadInput {
+    pub id: String,
+    pub status: String,
+    pub assignee: Option<String>,
+    pub updated_at_utc: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationBeadsInput {
+    pub schema: String,
+    pub health: ValidationSourceHealth,
+    pub ready_count: usize,
+    pub in_progress: Vec<ValidationBeadInput>,
+    pub stale_in_progress_ids: Vec<String>,
+}
+
+pub fn normalize_beads_json(
+    provenance: ValidationSourceProvenance,
+    value: &Value,
+    now_utc: &str,
+    stale_after_seconds: i64,
+) -> Result<ValidationBeadsInput> {
+    provenance.validate()?;
+    let now = parse_utc(now_utc)?;
+    if stale_after_seconds < 0 {
+        return Err(Error::validation(
+            "stale_after_seconds must be non-negative",
+        ));
+    }
+    let mut degraded_reasons = Vec::new();
+    let issue_values = value
+        .as_array()
+        .or_else(|| value.get("issues").and_then(Value::as_array));
+    let mut ready_count = 0;
+    let mut in_progress = Vec::new();
+    let mut stale_in_progress_ids = Vec::new();
+
+    if let Some(issues) = issue_values {
+        for (index, issue) in issues.iter().enumerate() {
+            let Some(id) = string_field(issue, &["id"]) else {
+                degraded_reasons.push(format!("bead_{}_id_missing", index + 1));
+                continue;
+            };
+            let Some(status) = string_field(issue, &["status"]) else {
+                degraded_reasons.push(format!("bead_{id}_status_missing"));
+                continue;
+            };
+            if status == "open" {
+                ready_count += 1;
+            }
+            if status == "in_progress" {
+                let updated_at_utc = string_field(issue, &["updated_at", "updated_at_utc"]);
+                if let Some(updated_at) = &updated_at_utc {
+                    match parse_utc(updated_at) {
+                        Ok(updated) => {
+                            if now.signed_duration_since(updated).num_seconds()
+                                > stale_after_seconds
+                            {
+                                stale_in_progress_ids.push(id.clone());
+                            }
+                        }
+                        Err(err) => {
+                            degraded_reasons.push(format!("bead_{id}_updated_at_invalid: {err}"));
+                        }
+                    }
+                } else {
+                    degraded_reasons.push(format!("bead_{id}_updated_at_missing"));
+                }
+                in_progress.push(ValidationBeadInput {
+                    id,
+                    status,
+                    assignee: string_field(issue, &["assignee"]),
+                    updated_at_utc,
+                });
+            }
+        }
+    } else {
+        degraded_reasons.push("beads_issue_array_missing".to_string());
+    }
+
+    Ok(ValidationBeadsInput {
+        schema: VALIDATION_BROKER_BEADS_INPUT_SCHEMA.to_string(),
+        health: source_health(provenance, degraded_reasons),
+        ready_count,
+        in_progress,
+        stale_in_progress_ids,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationBrokerInputParts {
+    pub captured_at_utc: String,
+    pub rch: ValidationRchInput,
+    pub cargo_headroom: ValidationHeadroomInput,
+    pub doctor: ValidationDoctorInput,
+    pub git: ValidationGitInput,
+    pub beads: ValidationBeadsInput,
+    pub scratch_headroom: ValidationHeadroomInput,
+    pub agent_mail: ValidationSourceHealth,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidationBrokerInputSnapshot {
+    pub schema: String,
+    pub captured_at_utc: String,
+    pub rch: ValidationRchInput,
+    pub cargo_headroom: ValidationHeadroomInput,
+    pub doctor: ValidationDoctorInput,
+    pub git: ValidationGitInput,
+    pub beads: ValidationBeadsInput,
+    pub scratch_headroom: ValidationHeadroomInput,
+    pub agent_mail: ValidationSourceHealth,
+    pub degraded_reasons: Vec<String>,
+}
+
+impl ValidationBrokerInputSnapshot {
+    pub fn from_parts(parts: ValidationBrokerInputParts) -> Result<Self> {
+        parse_utc(&parts.captured_at_utc)?;
+        let mut degraded_reasons = Vec::new();
+        collect_source_reasons(&mut degraded_reasons, &parts.rch.health);
+        collect_source_reasons(&mut degraded_reasons, &parts.cargo_headroom.health);
+        collect_source_reasons(&mut degraded_reasons, &parts.doctor.health);
+        collect_source_reasons(&mut degraded_reasons, &parts.git.health);
+        collect_source_reasons(&mut degraded_reasons, &parts.beads.health);
+        collect_source_reasons(&mut degraded_reasons, &parts.scratch_headroom.health);
+        collect_source_reasons(&mut degraded_reasons, &parts.agent_mail);
+
+        Ok(Self {
+            schema: VALIDATION_BROKER_INPUT_SCHEMA.to_string(),
+            captured_at_utc: parts.captured_at_utc,
+            rch: parts.rch,
+            cargo_headroom: parts.cargo_headroom,
+            doctor: parts.doctor,
+            git: parts.git,
+            beads: parts.beads,
+            scratch_headroom: parts.scratch_headroom,
+            agent_mail: parts.agent_mail,
+            degraded_reasons,
+        })
+    }
+
+    #[must_use]
+    pub fn is_degraded(&self) -> bool {
+        !self.degraded_reasons.is_empty()
+    }
+}
+
+fn source_health(
+    provenance: ValidationSourceProvenance,
+    degraded_reasons: Vec<String>,
+) -> ValidationSourceHealth {
+    if degraded_reasons.is_empty() {
+        ValidationSourceHealth::available(provenance)
+    } else {
+        ValidationSourceHealth::degraded(provenance, degraded_reasons)
+    }
+}
+
+fn collect_source_reasons(
+    degraded_reasons: &mut Vec<String>,
+    source_health: &ValidationSourceHealth,
+) {
+    for reason in &source_health.degraded_reasons {
+        degraded_reasons.push(format!("{}: {reason}", source_health.provenance.source));
+    }
+}
+
+fn count_from_line(raw: &str, marker: &str) -> Option<u64> {
+    raw.lines()
+        .find(|line| line.contains(marker))
+        .and_then(first_u64)
+}
+
+fn worker_slots(raw: &str) -> (Option<u64>, Option<u64>) {
+    raw.lines()
+        .find(|line| line.contains("slots free"))
+        .map(numbers_in_line)
+        .and_then(|numbers| match numbers.as_slice() {
+            [free, total, ..] => Some((Some(*free), Some(*total))),
+            _ => None,
+        })
+        .unwrap_or((None, None))
+}
+
+fn numbers_in_line(line: &str) -> Vec<u64> {
+    line.split(|ch: char| !ch.is_ascii_digit())
+        .filter(|segment| !segment.is_empty())
+        .filter_map(|segment| segment.parse::<u64>().ok())
+        .collect()
+}
+
+fn first_u64(line: &str) -> Option<u64> {
+    numbers_in_line(line).into_iter().next()
+}
+
+fn contains_any(raw: &str, needles: &[&str]) -> bool {
+    let haystack = raw.to_ascii_lowercase();
+    needles.iter().any(|needle| haystack.contains(needle))
+}
+
+const fn is_git_short_status_code(code: u8) -> bool {
+    matches!(
+        code,
+        b' ' | b'M' | b'T' | b'A' | b'D' | b'R' | b'C' | b'U' | b'?' | b'!'
+    )
+}
+
+fn string_field(value: &Value, names: &[&str]) -> Option<String> {
+    names
+        .iter()
+        .find_map(|name| value.get(*name).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn u64_field(value: &Value, names: &[&str]) -> Option<u64> {
+    names.iter().find_map(|name| {
+        value
+            .get(*name)
+            .and_then(|field| field.as_u64().or_else(|| field.as_str()?.parse().ok()))
+    })
+}
+
+fn is_success_status(status: &str) -> bool {
+    matches!(
+        status.trim().to_ascii_lowercase().as_str(),
+        "ok" | "pass" | "passed" | "success" | "healthy" | "available"
+    )
 }
 
 fn line_degraded_reason(line_index: usize, label: &str, err: impl Display) -> String {
