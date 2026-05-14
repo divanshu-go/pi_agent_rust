@@ -207,6 +207,8 @@ pub mod tools;
 #[doc(hidden)]
 pub mod tui;
 #[doc(hidden)]
+pub mod validation_broker;
+#[doc(hidden)]
 pub mod vcr;
 #[doc(hidden)]
 pub mod version_check;
