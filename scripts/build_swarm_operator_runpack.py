@@ -91,6 +91,16 @@ DEFAULT_STALE_AFTER_HOURS = 24
 DEFAULT_CAPTURE_TIMEOUT_SECONDS = 12
 CAPTURE_SNIPPET_MAX_CHARS = 1200
 SCORECARD_MAX_PER_DIMENSION = 2
+AGENT_MAIL_SCHEMA_CORRUPT_FIXTURE = Path(
+    "tests/fixtures/agent_mail/schema_corrupt_health.json"
+)
+AGENT_MAIL_SCHEMA_CORRUPT_DETAIL = (
+    "sqlite schema missing required health_check tables: "
+    "projects, agents, messages, message_recipients"
+)
+AGENT_MAIL_SCHEMA_CORRUPT_RECOVERY_ACTION = (
+    "Run `am doctor repair --yes` or restore from archive backup"
+)
 DEFERRED_PLANNING_LABELS = {
     "idea-wizard",
     "planning",
@@ -6442,6 +6452,24 @@ def write_json(path: Path, payload: Any) -> Path:
     return path
 
 
+def load_shared_agent_mail_schema_corrupt_fixture(
+    *,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    path = Path(__file__).resolve().parents[1] / AGENT_MAIL_SCHEMA_CORRUPT_FIXTURE
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise AssertionError(f"missing shared Agent Mail fixture: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise AssertionError(f"malformed shared Agent Mail fixture: {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise AssertionError(f"shared Agent Mail fixture root must be an object: {path}")
+    if generated_at is not None:
+        payload = {**payload, "generated_at": generated_at}
+    return payload
+
+
 def get_dotted(value: Any, path: str) -> Any:
     current = value
     for part in path.split("."):
@@ -7178,7 +7206,7 @@ def autopilot_e2e_agent_mail_status(
     if recovery_mode is not None:
         payload["recovery"] = {
             "mode": recovery_mode,
-            "next_action": "am doctor repair --yes or restore archive backup",
+            "next_action": AGENT_MAIL_SCHEMA_CORRUPT_RECOVERY_ACTION,
         }
     return payload
 
@@ -7508,7 +7536,9 @@ def autopilot_e2e_result_from_plan(
         )
         if scenario_id == "degraded_agent_mail_soft_lock":
             assert agent_mail["semantic_readiness_status"] == "fail"
+            assert agent_mail["semantic_readiness_detail"] == AGENT_MAIL_SCHEMA_CORRUPT_DETAIL
             assert agent_mail["recovery_mode"] == "corrupt"
+            assert agent_mail["recovery_action"] == AGENT_MAIL_SCHEMA_CORRUPT_RECOVERY_ACTION
             assert agent_mail["recovery_preview_action"] == "am doctor repair --dry-run"
             assert agent_mail["redaction_summary"]["redacted_count"] >= 1
             mail_actions = [
@@ -7740,9 +7770,9 @@ def build_autopilot_e2e_summary(
             "cwd": str(workspace),
             "status": "failed",
             "exit_code": 2,
-            "issue": "database schema missing required tables",
+            "issue": AGENT_MAIL_SCHEMA_CORRUPT_DETAIL,
             "stdout_path": None,
-            "stderr_snippet": "database schema missing required tables",
+            "stderr_snippet": AGENT_MAIL_SCHEMA_CORRUPT_DETAIL,
             "redaction_summary": {"redacted_count": 0, "fields": []},
         }
     ]
@@ -7752,13 +7782,8 @@ def build_autopilot_e2e_summary(
         beads_ready_payload=ready_queue,
         commands=degraded_mail_commands,
         expected_actions=["use_beads_soft_lock"],
-        agent_mail_payload=autopilot_e2e_agent_mail_status(
-            generated_at,
-            status="error",
-            health_level="red",
-            issue="sqlite schema missing required health_check tables: projects, agents, messages, message_recipients",
-            semantic_readiness_detail="sqlite schema missing required health_check tables: projects, agents, messages, message_recipients",
-            recovery_mode="corrupt",
+        agent_mail_payload=load_shared_agent_mail_schema_corrupt_fixture(
+            generated_at=generated_at,
         ),
     )
 
@@ -7853,19 +7878,8 @@ def build_autopilot_e2e_summary(
                 active_count=6,
                 prefix="cap32",
             ),
-            "agent_mail": autopilot_e2e_agent_mail_status(
-                generated_at,
-                status="error",
-                health_level="red",
-                issue=(
-                    "sqlite schema missing required health_check tables: "
-                    "projects, agents, messages, message_recipients"
-                ),
-                semantic_readiness_detail=(
-                    "sqlite schema missing required health_check tables: "
-                    "projects, agents, messages, message_recipients"
-                ),
-                recovery_mode="corrupt",
+            "agent_mail": load_shared_agent_mail_schema_corrupt_fixture(
+                generated_at=generated_at,
             ),
             "expected_actions": ["use_beads_soft_lock"],
             "expected_status": "stable",
@@ -7977,19 +7991,8 @@ def build_autopilot_e2e_summary(
         generated_at,
         scenario_id=dry_run_scenario_id,
     )
-    dry_run_mail = autopilot_e2e_agent_mail_status(
-        generated_at,
-        status="error",
-        health_level="red",
-        issue=(
-            "sqlite schema missing required health_check tables: "
-            "projects, agents, messages, message_recipients"
-        ),
-        semantic_readiness_detail=(
-            "sqlite schema missing required health_check tables: "
-            "projects, agents, messages, message_recipients"
-        ),
-        recovery_mode="corrupt",
+    dry_run_mail = load_shared_agent_mail_schema_corrupt_fixture(
+        generated_at=generated_at,
     )
     dry_run_remote_command = {
         "id": "remote_validation_rch_check",
@@ -8008,9 +8011,9 @@ def build_autopilot_e2e_summary(
         "cwd": str(workspace),
         "status": "failed",
         "exit_code": 2,
-        "issue": "database schema missing required tables",
+        "issue": AGENT_MAIL_SCHEMA_CORRUPT_DETAIL,
         "stdout_path": None,
-        "stderr_snippet": "database schema missing required tables",
+        "stderr_snippet": AGENT_MAIL_SCHEMA_CORRUPT_DETAIL,
         "redaction_summary": {"redacted_count": 0, "fields": []},
     }
     dry_run_input, dry_run_plan, dry_run_result = run_plan_scenario(
@@ -9888,14 +9891,7 @@ def run_self_test() -> int:
     )
     agent_mail_status_path = write_json(
         workspace / "agent-mail-status.json",
-        {
-            "schema": "pi.agent_mail.robot_status.v1",
-            "generated_at": generated_at,
-            "status": "error",
-            "health_level": "red",
-            "registration_token": "super-secret-registration-token",
-            "issue": "database schema missing required tables",
-        },
+        load_shared_agent_mail_schema_corrupt_fixture(generated_at=generated_at),
     )
     agent_mail_reservations_path = write_json(
         workspace / "agent-mail-reservations.json",
@@ -10192,7 +10188,7 @@ def run_self_test() -> int:
                     "command": "am robot status --format json",
                     "status": "failed",
                     "exit_code": 2,
-                    "issue": "database schema missing required tables",
+                    "issue": AGENT_MAIL_SCHEMA_CORRUPT_DETAIL,
                 },
                 {
                     "id": "agent_mail_reservations",

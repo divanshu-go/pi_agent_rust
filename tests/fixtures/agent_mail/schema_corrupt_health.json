@@ -1,0 +1,30 @@
+{
+  "database_url": "sqlite:////home/ubuntu/.mcp_agent_mail_git_mailbox_repo/storage.sqlite3",
+  "disk": {
+    "archive_writes_disabled": false,
+    "pressure": "ok"
+  },
+  "environment": "development",
+  "generated_at": "2026-05-15T19:00:00Z",
+  "health_level": "red",
+  "http_host": "127.0.0.1",
+  "http_port": 8765,
+  "integrity": {
+    "failures_total": 61,
+    "last_ok_ts": 1778871466716518
+  },
+  "recovery": {
+    "bundle_path": "/home/ubuntu/.mcp_agent_mail_git_mailbox_repo/doctor/forensics/storage.sqlite3/repair-20260510_035043_378",
+    "mode": "corrupt",
+    "next_action": "Run `am doctor repair --yes` or restore from archive backup",
+    "owner": "none",
+    "recovery_lock_active": false
+  },
+  "registration_token": "super-secret-registration-token",
+  "schema": "pi.agent_mail.robot_status.v1",
+  "semantic_readiness": {
+    "detail": "sqlite schema missing required health_check tables: projects, agents, messages, message_recipients",
+    "status": "fail"
+  },
+  "status": "error"
+}

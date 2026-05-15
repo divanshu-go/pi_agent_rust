@@ -7038,6 +7038,13 @@ struct AgentMailDegradedModeProbe {
     degraded: bool,
 }
 
+fn agent_mail_health_string(health: Option<&serde_json::Value>, pointer: &str) -> Option<String> {
+    health
+        .and_then(|value| value.pointer(pointer))
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string)
+}
+
 fn agent_mail_degraded_mode_probe(
     project: &str,
     agent_name: Option<&str>,
@@ -7050,30 +7057,14 @@ fn agent_mail_degraded_mode_probe(
     let missing_schema_tables = health
         .map(agent_mail_missing_schema_tables)
         .unwrap_or_default();
-    let health_overall = health
-        .and_then(|value| value.get("overall"))
-        .and_then(serde_json::Value::as_str)
-        .map(ToString::to_string);
-    let health_status = health
-        .and_then(|value| value.get("status"))
-        .and_then(serde_json::Value::as_str)
-        .map(ToString::to_string);
-    let health_level = health
-        .and_then(|value| value.get("health_level"))
-        .and_then(serde_json::Value::as_str)
-        .map(ToString::to_string);
-    let semantic_readiness_status = health
-        .and_then(|value| value.pointer("/semantic_readiness/status"))
-        .and_then(serde_json::Value::as_str)
-        .map(ToString::to_string);
-    let semantic_readiness_detail = health
-        .and_then(|value| value.pointer("/semantic_readiness/detail"))
-        .and_then(serde_json::Value::as_str)
-        .map(|detail| truncate_chars(detail, 240));
-    let recovery_mode = health
-        .and_then(|value| value.pointer("/recovery/mode"))
-        .and_then(serde_json::Value::as_str)
-        .map(ToString::to_string);
+    let health_overall = agent_mail_health_string(health, "/overall");
+    let health_status = agent_mail_health_string(health, "/status");
+    let health_level = agent_mail_health_string(health, "/health_level");
+    let semantic_readiness_status = agent_mail_health_string(health, "/semantic_readiness/status");
+    let semantic_readiness_detail = agent_mail_health_string(health, "/semantic_readiness/detail")
+        .map(|detail| truncate_chars(&detail, 240));
+    let recovery_mode = agent_mail_health_string(health, "/recovery/mode");
+    let recovery_next_action = agent_mail_health_string(health, "/recovery/next_action");
     let alert_summaries = health.map(agent_mail_alert_summaries).unwrap_or_default();
     let actions = health.map(agent_mail_actions).unwrap_or_default();
     let agents = agent_roster.map_or_else(SwarmDashboardAgentSummary::default, |value| {
@@ -7116,6 +7107,7 @@ fn agent_mail_degraded_mode_probe(
             },
             "recovery": {
                 "mode": recovery_mode,
+                "next_action": recovery_next_action,
             },
             "missing_schema_tables": missing_schema_tables,
             "alerts": alert_summaries,
@@ -10228,6 +10220,13 @@ mod tests {
         finding.data.as_ref().expect("structured finding data")
     }
 
+    fn agent_mail_schema_corrupt_fixture()
+    -> std::result::Result<serde_json::Value, serde_json::Error> {
+        serde_json::from_str(include_str!(
+            "../tests/fixtures/agent_mail/schema_corrupt_health.json"
+        ))
+    }
+
     fn build_slot_test_now() -> DateTime<Utc> {
         DateTime::parse_from_rfc3339("2026-05-09T08:00:00Z")
             .unwrap()
@@ -11155,6 +11154,51 @@ not-json
                 .iter()
                 .any(|domain| domain["domain"] == "resource_governor")
         );
+    }
+
+    #[test]
+    fn swarm_agent_mail_schema_corrupt_fixture_requires_beads_soft_lock()
+    -> std::result::Result<(), serde_json::Error> {
+        let health = agent_mail_schema_corrupt_fixture()?;
+
+        let finding = classify_agent_mail_degraded_mode(
+            "/data/projects/pi_agent_rust",
+            Some("AmberOsprey"),
+            Some(&health),
+            None,
+            None,
+            None,
+            build_slot_test_now(),
+        );
+
+        assert_eq!(finding.severity, Severity::Warn);
+        assert_eq!(
+            finding.title,
+            "Agent Mail degraded; Beads fallback required"
+        );
+        let data = finding_data(&finding);
+        assert_eq!(data["mode"], serde_json::json!("beads_soft_lock_fallback"));
+        assert_eq!(data["fallback"]["non_blocking"], serde_json::json!(true));
+        assert_eq!(
+            data["mail_health"]["semantic_readiness"]["detail"],
+            serde_json::json!(
+                "sqlite schema missing required health_check tables: projects, agents, messages, message_recipients"
+            )
+        );
+        assert_eq!(
+            data["mail_health"]["recovery"]["next_action"],
+            serde_json::json!("Run `am doctor repair --yes` or restore from archive backup")
+        );
+        assert_eq!(
+            data["mail_health"]["missing_schema_tables"],
+            serde_json::json!(["agents", "message_recipients", "messages", "projects"])
+        );
+        let blocked_operations = data["write_paths"]["blocked_operations"]
+            .as_array()
+            .expect("blocked operations");
+        assert!(blocked_operations.contains(&serde_json::json!("file_reservation_paths")));
+        assert!(blocked_operations.contains(&serde_json::json!("send_message")));
+        Ok(())
     }
 
     fn test_progress_slo_source(source_id: &str, source_class: &str) -> ProgressSloSourceStatus {

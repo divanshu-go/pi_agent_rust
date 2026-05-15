@@ -36,6 +36,9 @@ DEFERRED_PLANNING_TERMS = (
     "roadmap",
     "work_to_plan",
 )
+AGENT_MAIL_SCHEMA_CORRUPT_FIXTURE = Path(
+    "tests/fixtures/agent_mail/schema_corrupt_health.json"
+)
 
 
 @dataclass(frozen=True)
@@ -87,6 +90,10 @@ def read_json(path: Path | None) -> LoadedJson:
         return LoadedJson(path=str(path), payload=json.loads(text), error=None)
     except json.JSONDecodeError as exc:
         return LoadedJson(path=str(path), payload=None, error=f"invalid JSON: {exc}")
+
+
+def read_fixture_json(repo_root: Path, relative_path: Path) -> LoadedJson:
+    return read_json(repo_root / relative_path)
 
 
 def read_issues(path: Path) -> tuple[list[dict[str, Any]], str | None]:
@@ -356,6 +363,7 @@ def analyze_agent_mail(payload: Any, source_path: str | None, error: str | None)
     semantic = payload.get("semantic_readiness") if isinstance(payload, dict) else None
     recovery = payload.get("recovery") if isinstance(payload, dict) else None
     semantic_status = semantic.get("status") if isinstance(semantic, dict) else None
+    semantic_detail = semantic.get("detail") if isinstance(semantic, dict) else None
     recovery_mode = recovery.get("mode") if isinstance(recovery, dict) else None
     recovery_action = recovery.get("next_action") if isinstance(recovery, dict) else None
     degraded = status not in {"ok", "healthy"} or health_level in {"red", "degraded", "yellow"} or semantic_status == "fail"
@@ -365,6 +373,7 @@ def analyze_agent_mail(payload: Any, source_path: str | None, error: str | None)
         "degraded": degraded,
         "health_level": health_level,
         "semantic_readiness": semantic_status,
+        "semantic_readiness_detail": semantic_detail,
         "recovery_mode": recovery_mode,
         "recovery_action": recovery_action,
         "warnings": [] if not degraded else ["Agent Mail is degraded; this does not block Beads-only progress."],
@@ -834,18 +843,16 @@ def run_self_test() -> int:
             tombstone_report,
         )
 
-        corrupt_mail = {
-            "status": "error",
-            "health_level": "red",
-            "semantic_readiness": {"status": "fail"},
-            "recovery": {"mode": "corrupt", "next_action": "Run am doctor repair --yes"},
-        }
+        corrupt_mail = read_fixture_json(
+            Path(__file__).resolve().parents[1],
+            AGENT_MAIL_SCHEMA_CORRUPT_FIXTURE,
+        )
         mail_report = build_report(
             repo_root=root,
             beads_path=beads_path,
             br_ready_json=read_json(ready_json),
             bv_plan_json=read_json(bv_json),
-            agent_mail_health_json=LoadedJson("mail.json", corrupt_mail, None),
+            agent_mail_health_json=corrupt_mail,
             rch_json=LoadedJson(None, {"status": "ok", "schema": "fixture.rch.v1"}, None),
             closeout_freshness_json=LoadedJson(None, None, None),
             now=now,
@@ -857,8 +864,25 @@ def run_self_test() -> int:
             mail_report,
         )
         assert_condition(
+            mail_report["status"] == "ready_work_available",
+            "corrupt Agent Mail should not hide ready Beads work",
+            mail_report,
+        )
+        assert_condition(
             any(action["action"] == "use_beads_fallback" for action in mail_report["next_actions"]),
             "corrupt Agent Mail should recommend Beads fallback",
+            mail_report,
+        )
+        assert_condition(
+            mail_report["coordination"]["agent_mail"]["semantic_readiness_detail"]
+            == "sqlite schema missing required health_check tables: projects, agents, messages, message_recipients",
+            "corrupt Agent Mail fixture should preserve missing-table detail",
+            mail_report,
+        )
+        assert_condition(
+            mail_report["coordination"]["agent_mail"]["recovery_action"]
+            == "Run `am doctor repair --yes` or restore from archive backup",
+            "corrupt Agent Mail fixture should preserve exact recovery action",
             mail_report,
         )
     print("SELF-TEST PASS")

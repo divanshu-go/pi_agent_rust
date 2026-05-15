@@ -112,7 +112,9 @@
         "normalized_inputs.agent_mail.read_status",
         "normalized_inputs.agent_mail.reservation_status",
         "normalized_inputs.agent_mail.unavailable_operations",
-        "normalized_inputs.beads.active_count"
+        "normalized_inputs.beads.active_count",
+        "normalized_inputs.agent_mail.recovery_action",
+        "normalized_inputs.agent_mail.recovery_preview_action"
       ],
       "forbidden_actions": [
         "automatic file reservation"
@@ -133,7 +135,7 @@
         "Announce/reserve through Agent Mail only after health recovers."
       ],
       "rank": 3,
-      "rationale": "Agent Mail status=degraded; fallback=use_beads_soft_lock; unavailable_operations=fetch_inbox,send_message,acknowledge_message,file_reservation_paths",
+      "rationale": "Agent Mail status=degraded; fallback=use_beads_soft_lock; recovery_mode=corrupt; recovery_preview=am doctor repair --dry-run; unavailable_operations=fetch_inbox,send_message,acknowledge_message,file_reservation_paths",
       "severity": "high",
       "title": "Use Beads assignment as the coordination lock"
     },
@@ -295,7 +297,7 @@
       "id": "FAIL-AGENT-MAIL-SCHEMA",
       "match_confidence": "high",
       "matched_source": "command:agent_mail_status",
-      "raw_excerpt": "id=agent_mail_status status=failed exit_code=2 issue=database schema missing required tables command=am robot status --format json",
+      "raw_excerpt": "id=agent_mail_status status=failed exit_code=2 issue=sqlite schema missing required health_check tables: projects, agents, messages, message_recipients command=am robot status --format json",
       "redaction_summary": {
         "fields": [],
         "redacted_count": 0

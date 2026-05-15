@@ -50,7 +50,7 @@
       {
         "exit_code": 2,
         "id": "agent_mail_status",
-        "issue": "database schema missing required tables",
+        "issue": "sqlite schema missing required health_check tables: projects, agents, messages, message_recipients",
         "status": "failed"
       },
       {
@@ -460,7 +460,7 @@
         "command": "am robot status --format json",
         "exit_code": 2,
         "id": "agent_mail_status",
-        "issue": "database schema missing required tables",
+        "issue": "sqlite schema missing required health_check tables: projects, agents, messages, message_recipients",
         "status": "failed"
       },
       {
