@@ -203,6 +203,11 @@ const BASH_TERMINATE_GRACE_SECS: u64 = 5;
 /// Hard limit for bash output file size (1GB) to prevent disk exhaustion DoS.
 pub(crate) const BASH_FILE_LIMIT_BYTES: usize = 1024 * 1024 * 1024; // 1 GiB
 
+const TOOL_OUTPUT_ARTIFACT_SCHEMA_V1: &str = "pi.tool_output_artifact.v1";
+const TOOL_OUTPUT_ARTIFACT_THRESHOLD_BYTES: usize = DEFAULT_MAX_BYTES;
+const TOOL_OUTPUT_ARTIFACT_MAX_BYTES_USIZE: usize = 1024 * 1024 * 1024;
+const TOOL_OUTPUT_ARTIFACT_MAX_BYTES: u64 = 1024 * 1024 * 1024;
+
 /// Result of truncation operation.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -726,6 +731,488 @@ fn utf8_prefix_len(s: &str, max_bytes: usize) -> usize {
     valid_bytes
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolOutputArtifactRef {
+    schema: &'static str,
+    id: String,
+    tool_name: String,
+    source_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    path: String,
+    metadata_path: String,
+    sha256: String,
+    byte_count: u64,
+    line_count: usize,
+    preview_bytes: usize,
+    content_type: &'static str,
+}
+
+fn tool_output_artifact_root() -> PathBuf {
+    std::env::var_os("PI_TOOL_OUTPUT_ARTIFACT_DIR").map_or_else(
+        || Config::global_dir().join("tool-output-artifacts"),
+        PathBuf::from,
+    )
+}
+
+static TOOL_OUTPUT_ARTIFACT_SESSIONS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+fn tool_output_artifact_sessions() -> &'static Mutex<HashMap<String, String>> {
+    TOOL_OUTPUT_ARTIFACT_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(crate) struct ToolOutputArtifactSessionGuard {
+    tool_call_id: String,
+    previous_session_id: Option<String>,
+    active: bool,
+}
+
+impl Drop for ToolOutputArtifactSessionGuard {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        let Ok(mut sessions) = tool_output_artifact_sessions().lock() else {
+            return;
+        };
+        if let Some(previous) = self.previous_session_id.take() {
+            sessions.insert(self.tool_call_id.clone(), previous);
+        } else {
+            sessions.remove(&self.tool_call_id);
+        }
+    }
+}
+
+pub(crate) fn register_tool_output_artifact_session(
+    tool_call_id: &str,
+    session_id: &str,
+) -> ToolOutputArtifactSessionGuard {
+    if session_id.is_empty() {
+        return ToolOutputArtifactSessionGuard {
+            tool_call_id: String::new(),
+            previous_session_id: None,
+            active: false,
+        };
+    }
+    let previous_session_id = tool_output_artifact_sessions()
+        .lock()
+        .ok()
+        .and_then(|mut sessions| sessions.insert(tool_call_id.to_string(), session_id.to_string()));
+    ToolOutputArtifactSessionGuard {
+        tool_call_id: tool_call_id.to_string(),
+        previous_session_id,
+        active: true,
+    }
+}
+
+fn tool_output_artifact_session_id(tool_call_id: &str) -> Option<String> {
+    tool_output_artifact_sessions()
+        .lock()
+        .ok()
+        .and_then(|sessions| sessions.get(tool_call_id).cloned())
+}
+
+fn tool_output_artifact_scope_dir(root: &Path, tool_call_id: &str) -> (PathBuf, Option<String>) {
+    let call_scope = sanitize_artifact_scope(tool_call_id);
+    if let Some(session_id) = tool_output_artifact_session_id(tool_call_id) {
+        (
+            root.join(sanitize_artifact_scope(&session_id))
+                .join(call_scope),
+            Some(session_id),
+        )
+    } else {
+        (root.join(call_scope), None)
+    }
+}
+
+fn sanitize_artifact_scope(scope: &str) -> String {
+    let mut out = String::new();
+    for ch in scope.chars().take(96) {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.trim_matches('_').is_empty() {
+        "tool-call".to_string()
+    } else {
+        out
+    }
+}
+
+fn artifact_line_count(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        0
+    } else {
+        memchr::memchr_iter(b'\n', bytes).count() + usize::from(!bytes.ends_with(b"\n"))
+    }
+}
+
+fn artifact_details_object(
+    details: &mut Option<serde_json::Value>,
+) -> &mut serde_json::Map<String, serde_json::Value> {
+    let value = details.get_or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    if !value.is_object() {
+        *value = serde_json::Value::Object(serde_json::Map::new());
+    }
+    value
+        .as_object_mut()
+        .expect("details value forced to object")
+}
+
+fn write_artifact_file_if_absent(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(mut file) => {
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn write_text_tool_output_artifact_at_root(
+    root: &Path,
+    tool_name: &str,
+    tool_call_id: &str,
+    source_kind: &str,
+    full_text: &str,
+    preview_bytes: usize,
+) -> std::io::Result<ToolOutputArtifactRef> {
+    let bytes = full_text.as_bytes();
+    if bytes.len() > TOOL_OUTPUT_ARTIFACT_MAX_BYTES_USIZE {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "artifact source exceeds {} hard limit",
+                format_size(TOOL_OUTPUT_ARTIFACT_MAX_BYTES_USIZE)
+            ),
+        ));
+    }
+    let sha256 = format!("{:x}", sha2::Sha256::digest(bytes));
+    let (scope_dir, session_id) = tool_output_artifact_scope_dir(root, tool_call_id);
+    std::fs::create_dir_all(&scope_dir)?;
+
+    let id = format!("tool-artifact-{}", &sha256[..16]);
+    let content_path = scope_dir.join(format!("{sha256}.txt"));
+    let metadata_path = scope_dir.join(format!("{sha256}.json"));
+    write_artifact_file_if_absent(&content_path, bytes)?;
+
+    let artifact = ToolOutputArtifactRef {
+        schema: TOOL_OUTPUT_ARTIFACT_SCHEMA_V1,
+        id,
+        tool_name: tool_name.to_string(),
+        source_kind: source_kind.to_string(),
+        session_id,
+        path: content_path.display().to_string(),
+        metadata_path: metadata_path.display().to_string(),
+        sha256,
+        byte_count: bytes.len().try_into().unwrap_or(u64::MAX),
+        line_count: artifact_line_count(bytes),
+        preview_bytes,
+        content_type: "text/plain; charset=utf-8",
+    };
+    let metadata = serde_json::to_vec_pretty(&artifact).map_err(std::io::Error::other)?;
+    write_artifact_file_if_absent(&metadata_path, &metadata)?;
+    Ok(artifact)
+}
+
+fn copy_text_tool_output_artifact_from_path_at_root(
+    root: &Path,
+    tool_name: &str,
+    tool_call_id: &str,
+    source_kind: &str,
+    source_path: &Path,
+    preview_bytes: usize,
+) -> std::io::Result<ToolOutputArtifactRef> {
+    let metadata = std::fs::metadata(source_path)?;
+    if metadata.len() > TOOL_OUTPUT_ARTIFACT_MAX_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "artifact source exceeds {} hard limit",
+                format_size(TOOL_OUTPUT_ARTIFACT_MAX_BYTES_USIZE)
+            ),
+        ));
+    }
+
+    let mut source = std::fs::File::open(source_path)?;
+    let mut hasher = sha2::Sha256::new();
+    let mut buf = vec![0_u8; 64 * 1024];
+    let mut byte_count = 0_u64;
+    let mut newline_count = 0usize;
+    let mut last_byte_was_newline = false;
+    loop {
+        let read = source.read(&mut buf)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buf[..read]);
+        byte_count = byte_count.saturating_add(read.try_into().unwrap_or(u64::MAX));
+        newline_count =
+            newline_count.saturating_add(memchr::memchr_iter(b'\n', &buf[..read]).count());
+        last_byte_was_newline = buf[read - 1] == b'\n';
+    }
+
+    let sha256 = format!("{:x}", hasher.finalize());
+    let (scope_dir, session_id) = tool_output_artifact_scope_dir(root, tool_call_id);
+    std::fs::create_dir_all(&scope_dir)?;
+    let id = format!("tool-artifact-{}", &sha256[..16]);
+    let content_path = scope_dir.join(format!("{sha256}.txt"));
+    let metadata_path = scope_dir.join(format!("{sha256}.json"));
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&content_path)
+    {
+        Ok(mut out) => {
+            let mut source = std::fs::File::open(source_path)?;
+            std::io::copy(&mut source, &mut out)?;
+            out.sync_all()?;
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(err) => return Err(err),
+    }
+
+    let line_count = line_count_from_newline_count(
+        usize::try_from(byte_count).unwrap_or(usize::MAX),
+        newline_count,
+        last_byte_was_newline,
+    );
+    let artifact = ToolOutputArtifactRef {
+        schema: TOOL_OUTPUT_ARTIFACT_SCHEMA_V1,
+        id,
+        tool_name: tool_name.to_string(),
+        source_kind: source_kind.to_string(),
+        session_id,
+        path: content_path.display().to_string(),
+        metadata_path: metadata_path.display().to_string(),
+        sha256,
+        byte_count,
+        line_count,
+        preview_bytes,
+        content_type: "text/plain; charset=utf-8",
+    };
+    let metadata = serde_json::to_vec_pretty(&artifact).map_err(std::io::Error::other)?;
+    write_artifact_file_if_absent(&metadata_path, &metadata)?;
+    Ok(artifact)
+}
+
+fn append_tool_output_artifact_notice(output_text: &mut String, artifact: &ToolOutputArtifactRef) {
+    let _ = write!(
+        output_text,
+        "\n\n[Full tool output artifact: {} ({} bytes, {} lines, sha256 {}). Use read on this path to inspect more.]",
+        artifact.path, artifact.byte_count, artifact.line_count, artifact.sha256,
+    );
+}
+
+fn append_artifact_source_line(full_text: &mut String, line: &str) {
+    if !full_text.is_empty() {
+        full_text.push('\n');
+    }
+    full_text.push_str(line);
+}
+
+fn record_tool_output_artifact_error(
+    output_text: &mut String,
+    details: &mut Option<serde_json::Value>,
+    error: &std::io::Error,
+) {
+    let _ = write!(
+        output_text,
+        "\n\n[Tool output artifact persistence failed: {error}. Showing the bounded preview only.]"
+    );
+    artifact_details_object(details).insert(
+        "artifactError".to_string(),
+        serde_json::json!({
+            "schema": TOOL_OUTPUT_ARTIFACT_SCHEMA_V1,
+            "message": error.to_string(),
+        }),
+    );
+}
+
+fn attach_text_artifact_if_needed_at_root(
+    root: &Path,
+    output_text: &mut String,
+    details: &mut Option<serde_json::Value>,
+    tool_name: &str,
+    tool_call_id: &str,
+    source_kind: &str,
+    full_text: &str,
+) -> bool {
+    if full_text.len() <= TOOL_OUTPUT_ARTIFACT_THRESHOLD_BYTES {
+        return false;
+    }
+    match write_text_tool_output_artifact_at_root(
+        root,
+        tool_name,
+        tool_call_id,
+        source_kind,
+        full_text,
+        output_text.len(),
+    ) {
+        Ok(artifact) => {
+            append_tool_output_artifact_notice(output_text, &artifact);
+            artifact_details_object(details).insert(
+                "artifact".to_string(),
+                serde_json::to_value(&artifact).expect("artifact ref serializes"),
+            );
+            true
+        }
+        Err(err) => {
+            record_tool_output_artifact_error(output_text, details, &err);
+            false
+        }
+    }
+}
+
+fn attach_text_artifact_if_needed(
+    output_text: &mut String,
+    details: &mut Option<serde_json::Value>,
+    tool_name: &str,
+    tool_call_id: &str,
+    source_kind: &str,
+    full_text: &str,
+) -> bool {
+    let root = tool_output_artifact_root();
+    attach_text_artifact_if_needed_at_root(
+        &root,
+        output_text,
+        details,
+        tool_name,
+        tool_call_id,
+        source_kind,
+        full_text,
+    )
+}
+
+fn attach_text_artifact_if_needed_with_root(
+    root: Option<&Path>,
+    output_text: &mut String,
+    details: &mut Option<serde_json::Value>,
+    tool_name: &str,
+    tool_call_id: &str,
+    source_kind: &str,
+    full_text: &str,
+) -> bool {
+    if let Some(root) = root {
+        attach_text_artifact_if_needed_at_root(
+            root,
+            output_text,
+            details,
+            tool_name,
+            tool_call_id,
+            source_kind,
+            full_text,
+        )
+    } else {
+        attach_text_artifact_if_needed(
+            output_text,
+            details,
+            tool_name,
+            tool_call_id,
+            source_kind,
+            full_text,
+        )
+    }
+}
+
+fn attach_text_artifact_from_path_if_needed_at_root(
+    root: &Path,
+    output_text: &mut String,
+    details: &mut Option<serde_json::Value>,
+    tool_name: &str,
+    tool_call_id: &str,
+    source_kind: &str,
+    source_path: &Path,
+) -> bool {
+    let Ok(metadata) = std::fs::metadata(source_path) else {
+        return false;
+    };
+    if metadata.len() <= u64::try_from(TOOL_OUTPUT_ARTIFACT_THRESHOLD_BYTES).unwrap_or(u64::MAX) {
+        return false;
+    }
+    match copy_text_tool_output_artifact_from_path_at_root(
+        root,
+        tool_name,
+        tool_call_id,
+        source_kind,
+        source_path,
+        output_text.len(),
+    ) {
+        Ok(artifact) => {
+            append_tool_output_artifact_notice(output_text, &artifact);
+            artifact_details_object(details).insert(
+                "artifact".to_string(),
+                serde_json::to_value(&artifact).expect("artifact ref serializes"),
+            );
+            true
+        }
+        Err(err) => {
+            record_tool_output_artifact_error(output_text, details, &err);
+            false
+        }
+    }
+}
+
+fn attach_text_artifact_from_path_if_needed(
+    output_text: &mut String,
+    details: &mut Option<serde_json::Value>,
+    tool_name: &str,
+    tool_call_id: &str,
+    source_kind: &str,
+    source_path: &Path,
+) -> bool {
+    let root = tool_output_artifact_root();
+    attach_text_artifact_from_path_if_needed_at_root(
+        &root,
+        output_text,
+        details,
+        tool_name,
+        tool_call_id,
+        source_kind,
+        source_path,
+    )
+}
+
+fn attach_text_artifact_from_path_if_needed_with_root(
+    root: Option<&Path>,
+    output_text: &mut String,
+    details: &mut Option<serde_json::Value>,
+    tool_name: &str,
+    tool_call_id: &str,
+    source_kind: &str,
+    source_path: &Path,
+) -> bool {
+    if let Some(root) = root {
+        attach_text_artifact_from_path_if_needed_at_root(
+            root,
+            output_text,
+            details,
+            tool_name,
+            tool_call_id,
+            source_kind,
+            source_path,
+        )
+    } else {
+        attach_text_artifact_from_path_if_needed(
+            output_text,
+            details,
+            tool_name,
+            tool_call_id,
+            source_kind,
+            source_path,
+        )
+    }
+}
+
 const TOOL_OUTPUT_CACHE_MAX_ENTRIES: usize = 128;
 const TOOL_OUTPUT_CACHE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const TOOL_OUTPUT_CACHE_MAX_ENTRY_BYTES: usize = DEFAULT_MAX_BYTES + 64 * 1024;
@@ -914,6 +1401,13 @@ fn cache_tool_output(key: String, deps: Option<Vec<ToolCacheDependency>>, output
     let Some(deps) = deps else {
         return;
     };
+    if output.details.as_ref().is_some_and(|details| {
+        details.as_object().is_some_and(|details| {
+            details.contains_key("artifact") || details.contains_key("artifactError")
+        })
+    }) {
+        return;
+    }
     let Some(weight) = cacheable_tool_output_weight(output) else {
         return;
     };
@@ -1969,6 +2463,7 @@ pub struct ReadTool {
     /// Whether to auto-resize images to fit token limits.
     auto_resize: bool,
     block_images: bool,
+    artifact_root: Option<PathBuf>,
 }
 
 impl ReadTool {
@@ -1977,6 +2472,7 @@ impl ReadTool {
             cwd: cwd.to_path_buf(),
             auto_resize: true,
             block_images: false,
+            artifact_root: None,
         }
     }
 
@@ -1985,6 +2481,17 @@ impl ReadTool {
             cwd: cwd.to_path_buf(),
             auto_resize,
             block_images,
+            artifact_root: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_artifact_root(cwd: &Path, artifact_root: &Path) -> Self {
+        Self {
+            cwd: cwd.to_path_buf(),
+            auto_resize: true,
+            block_images: false,
+            artifact_root: Some(artifact_root.to_path_buf()),
         }
     }
 }
@@ -2053,7 +2560,7 @@ impl Tool for ReadTool {
     #[allow(clippy::too_many_lines)]
     async fn execute(
         &self,
-        _tool_call_id: &str,
+        tool_call_id: &str,
         input: serde_json::Value,
         _on_update: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
     ) -> Result<ToolOutput> {
@@ -2409,6 +2916,9 @@ impl Tool for ReadTool {
             }
         }
 
+        let artifact_source = (selected_content.len() > TOOL_OUTPUT_ARTIFACT_THRESHOLD_BYTES)
+            .then(|| selected_content.clone());
+
         let mut truncation = truncate_head(
             selected_content,
             max_lines_for_truncation,
@@ -2466,6 +2976,18 @@ impl Tool for ReadTool {
             }
         }
 
+        if let Some(artifact_source) = artifact_source.as_deref() {
+            attach_text_artifact_if_needed_with_root(
+                self.artifact_root.as_deref(),
+                &mut output_text,
+                &mut details,
+                "read",
+                tool_call_id,
+                "selectedTextWindow",
+                artifact_source,
+            );
+        }
+
         let output = ToolOutput {
             content: vec![ContentBlock::Text(TextContent::new(output_text))],
             details,
@@ -2496,6 +3018,7 @@ pub struct BashTool {
     cwd: PathBuf,
     shell_path: Option<String>,
     command_prefix: Option<String>,
+    artifact_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -2860,6 +3383,7 @@ impl BashTool {
             cwd: cwd.to_path_buf(),
             shell_path: None,
             command_prefix: None,
+            artifact_root: None,
         }
     }
 
@@ -2872,6 +3396,17 @@ impl BashTool {
             cwd: cwd.to_path_buf(),
             shell_path,
             command_prefix,
+            artifact_root: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_artifact_root(cwd: &Path, artifact_root: &Path) -> Self {
+        Self {
+            cwd: cwd.to_path_buf(),
+            shell_path: None,
+            command_prefix: None,
+            artifact_root: Some(artifact_root.to_path_buf()),
         }
     }
 }
@@ -2913,7 +3448,7 @@ impl Tool for BashTool {
     #[allow(clippy::too_many_lines)]
     async fn execute(
         &self,
-        _tool_call_id: &str,
+        tool_call_id: &str,
         input: serde_json::Value,
         on_update: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
     ) -> Result<ToolOutput> {
@@ -2946,11 +3481,25 @@ impl Tool for BashTool {
         } else {
             Some(serde_json::Value::Object(details_map))
         };
+        let mut details = details;
+        let mut output_text = result.output;
+
+        if let Some(path) = result.full_output_path.as_deref() {
+            attach_text_artifact_from_path_if_needed_with_root(
+                self.artifact_root.as_deref(),
+                &mut output_text,
+                &mut details,
+                "bash",
+                tool_call_id,
+                "fullCommandOutput",
+                Path::new(path),
+            );
+        }
 
         let is_error = result.cancelled || result.exit_code != 0;
 
         Ok(ToolOutput {
-            content: vec![ContentBlock::Text(TextContent::new(result.output))],
+            content: vec![ContentBlock::Text(TextContent::new(output_text))],
             details,
             is_error,
         })
@@ -4036,12 +4585,14 @@ struct GrepInput {
 
 pub struct GrepTool {
     cwd: PathBuf,
+    artifact_root: Option<PathBuf>,
 }
 
 impl GrepTool {
     pub fn new(cwd: &Path) -> Self {
         Self {
             cwd: cwd.to_path_buf(),
+            artifact_root: None,
         }
     }
 }
@@ -4214,7 +4765,7 @@ impl Tool for GrepTool {
     #[allow(clippy::too_many_lines)]
     async fn execute(
         &self,
-        _tool_call_id: &str,
+        tool_call_id: &str,
         input: serde_json::Value,
         _on_update: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
     ) -> Result<ToolOutput> {
@@ -4502,6 +5053,7 @@ impl Tool for GrepTool {
 
         let mut file_cache: HashMap<PathBuf, Vec<String>> = HashMap::new();
         let mut output_builder = HeadTruncatingLineWriter::new(DEFAULT_MAX_BYTES);
+        let mut artifact_source = String::new();
         let mut lines_truncated = false;
 
         // Group matches by file to merge overlapping context windows
@@ -4526,9 +5078,11 @@ impl Tool for GrepTool {
 
             if lines.is_empty() {
                 if let Some(first_match) = match_lines.first() {
-                    output_builder.push_line(&format!(
+                    let line = format!(
                         "{relative_path}:{first_match}: (unable to read file or too large)"
-                    ));
+                    );
+                    output_builder.push_line(&line);
+                    append_artifact_source_line(&mut artifact_source, &line);
                 }
                 continue;
             }
@@ -4561,6 +5115,7 @@ impl Tool for GrepTool {
             for (i, (start, end)) in blocks.into_iter().enumerate() {
                 if i > 0 {
                     output_builder.push_line("--");
+                    append_artifact_source_line(&mut artifact_source, "--");
                 }
                 for current in start..=end {
                     let line_text = lines.get(current - 1).map_or("", String::as_str);
@@ -4573,19 +5128,21 @@ impl Tool for GrepTool {
                     if input.hashline {
                         let line_idx = current - 1; // 0-indexed for hashline
                         let tag = format_hashline_tag(line_idx, &sanitized);
-                        if match_lines.binary_search(&current).is_ok() {
-                            output_builder
-                                .push_line(&format!("{relative_path}:{tag}: {}", truncated.text));
+                        let line = if match_lines.binary_search(&current).is_ok() {
+                            format!("{relative_path}:{tag}: {}", truncated.text)
                         } else {
-                            output_builder
-                                .push_line(&format!("{relative_path}-{tag}- {}", truncated.text));
-                        }
+                            format!("{relative_path}-{tag}- {}", truncated.text)
+                        };
+                        output_builder.push_line(&line);
+                        append_artifact_source_line(&mut artifact_source, &line);
                     } else if match_lines.binary_search(&current).is_ok() {
-                        output_builder
-                            .push_line(&format!("{relative_path}:{current}: {}", truncated.text));
+                        let line = format!("{relative_path}:{current}: {}", truncated.text);
+                        output_builder.push_line(&line);
+                        append_artifact_source_line(&mut artifact_source, &line);
                     } else {
-                        output_builder
-                            .push_line(&format!("{relative_path}-{current}- {}", truncated.text));
+                        let line = format!("{relative_path}-{current}- {}", truncated.text);
+                        output_builder.push_line(&line);
+                        append_artifact_source_line(&mut artifact_source, &line);
                     }
                 }
             }
@@ -4625,11 +5182,21 @@ impl Tool for GrepTool {
             let _ = write!(output, "\n\n[{}]", notices.join(". "));
         }
 
-        let details = if details_map.is_empty() {
+        let mut details = if details_map.is_empty() {
             None
         } else {
             Some(serde_json::Value::Object(details_map))
         };
+
+        attach_text_artifact_if_needed_with_root(
+            self.artifact_root.as_deref(),
+            &mut output,
+            &mut details,
+            "grep",
+            tool_call_id,
+            "searchResults",
+            &artifact_source,
+        );
 
         let output = ToolOutput {
             content: vec![ContentBlock::Text(TextContent::new(output))],
@@ -4666,12 +5233,14 @@ struct FindEntry {
 
 pub struct FindTool {
     cwd: PathBuf,
+    artifact_root: Option<PathBuf>,
 }
 
 impl FindTool {
     pub fn new(cwd: &Path) -> Self {
         Self {
             cwd: cwd.to_path_buf(),
+            artifact_root: None,
         }
     }
 }
@@ -4717,7 +5286,7 @@ impl Tool for FindTool {
     #[allow(clippy::too_many_lines)]
     async fn execute(
         &self,
-        _tool_call_id: &str,
+        tool_call_id: &str,
         input: serde_json::Value,
         _on_update: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
     ) -> Result<ToolOutput> {
@@ -4975,8 +5544,10 @@ impl Tool for FindTool {
 
         let result_limit_reached = entries.len() > effective_limit;
         let mut output_builder = HeadTruncatingLineWriter::new(DEFAULT_MAX_BYTES);
+        let mut artifact_source = String::new();
         for entry in entries.into_iter().take(effective_limit) {
             output_builder.push_line(&entry.rel);
+            append_artifact_source_line(&mut artifact_source, &entry.rel);
         }
         let mut truncation = output_builder.finish();
 
@@ -5009,11 +5580,21 @@ impl Tool for FindTool {
             let _ = write!(result_output, "\n\n[{}]", notices.join(". "));
         }
 
-        let details = if details_map.is_empty() {
+        let mut details = if details_map.is_empty() {
             None
         } else {
             Some(serde_json::Value::Object(details_map))
         };
+
+        attach_text_artifact_if_needed_with_root(
+            self.artifact_root.as_deref(),
+            &mut result_output,
+            &mut details,
+            "find",
+            tool_call_id,
+            "fileResults",
+            &artifact_source,
+        );
 
         let output = ToolOutput {
             content: vec![ContentBlock::Text(TextContent::new(result_output))],
@@ -5043,12 +5624,22 @@ struct LsInput {
 
 pub struct LsTool {
     cwd: PathBuf,
+    artifact_root: Option<PathBuf>,
 }
 
 impl LsTool {
     pub fn new(cwd: &Path) -> Self {
         Self {
             cwd: cwd.to_path_buf(),
+            artifact_root: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_artifact_root(cwd: &Path, artifact_root: &Path) -> Self {
+        Self {
+            cwd: cwd.to_path_buf(),
+            artifact_root: Some(artifact_root.to_path_buf()),
         }
     }
 }
@@ -5088,7 +5679,7 @@ impl Tool for LsTool {
 
     async fn execute(
         &self,
-        _tool_call_id: &str,
+        tool_call_id: &str,
         input: serde_json::Value,
         _on_update: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
     ) -> Result<ToolOutput> {
@@ -5168,6 +5759,7 @@ impl Tool for LsTool {
         entries.sort_by_cached_key(|(a, _)| a.to_lowercase());
 
         let mut output_builder = HeadTruncatingLineWriter::new(DEFAULT_MAX_BYTES);
+        let mut artifact_source = String::new();
         let mut emitted_entries = 0usize;
         let mut entry_limit_reached = false;
 
@@ -5176,11 +5768,9 @@ impl Tool for LsTool {
                 entry_limit_reached = true;
                 break;
             }
-            if is_dir {
-                output_builder.push_line(&format!("{entry}/"));
-            } else {
-                output_builder.push_line(&entry);
-            }
+            let line = if is_dir { format!("{entry}/") } else { entry };
+            output_builder.push_line(&line);
+            append_artifact_source_line(&mut artifact_source, &line);
             emitted_entries = emitted_entries.saturating_add(1);
         }
 
@@ -5235,11 +5825,21 @@ impl Tool for LsTool {
             let _ = write!(output, "\n\n[{}]", notices.join(". "));
         }
 
-        let details = if details_map.is_empty() {
+        let mut details = if details_map.is_empty() {
             None
         } else {
             Some(serde_json::Value::Object(details_map))
         };
+
+        attach_text_artifact_if_needed_with_root(
+            self.artifact_root.as_deref(),
+            &mut output,
+            &mut details,
+            "ls",
+            tool_call_id,
+            "directoryEntries",
+            &artifact_source,
+        );
 
         let output = ToolOutput {
             content: vec![ContentBlock::Text(TextContent::new(output))],
@@ -6056,7 +6656,11 @@ async fn get_file_lines_async<'a>(
         }
         cache.insert(path.to_path_buf(), lines);
     }
-    cache.get(path).unwrap().as_slice()
+    if let Some(lines) = cache.get(path) {
+        lines.as_slice()
+    } else {
+        &[]
+    }
 }
 
 fn find_fd_binary() -> Option<&'static str> {
@@ -6901,6 +7505,229 @@ mod tests {
                 _ => None,
             })
             .unwrap_or("")
+    }
+
+    fn artifact_json(details: Option<&serde_json::Value>) -> &serde_json::Value {
+        details
+            .and_then(|value| value.get("artifact"))
+            .expect("artifact details")
+    }
+
+    fn artifact_str_field<'a>(artifact: &'a serde_json::Value, field: &str) -> &'a str {
+        artifact
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+    }
+
+    #[test]
+    fn tool_output_artifact_respects_spill_threshold() {
+        let tmp = tempfile::tempdir().expect("artifact root");
+        let mut output = "small preview".to_string();
+        let mut details = None;
+        let spilled = attach_text_artifact_if_needed_at_root(
+            tmp.path(),
+            &mut output,
+            &mut details,
+            "read",
+            "call-small",
+            "selectedTextWindow",
+            "small body",
+        );
+
+        assert!(!spilled);
+        assert_eq!(output, "small preview");
+        assert!(details.is_none());
+    }
+
+    #[test]
+    fn tool_output_artifact_writes_content_addressed_text_and_metadata()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir().expect("artifact root");
+        let full = "a".repeat(TOOL_OUTPUT_ARTIFACT_THRESHOLD_BYTES + 1);
+        let mut output = "bounded preview".to_string();
+        let mut details = None;
+        let _session_guard =
+            register_tool_output_artifact_session("call/text:1", "session/artifacts:one");
+        let spilled = attach_text_artifact_if_needed_at_root(
+            tmp.path(),
+            &mut output,
+            &mut details,
+            "read",
+            "call/text:1",
+            "selectedTextWindow",
+            &full,
+        );
+
+        assert!(spilled);
+        assert!(output.contains("Full tool output artifact:"));
+        let artifact = artifact_json(details.as_ref());
+        assert_eq!(artifact["schema"], TOOL_OUTPUT_ARTIFACT_SCHEMA_V1);
+        assert_eq!(artifact["toolName"], "read");
+        assert_eq!(artifact["sourceKind"], "selectedTextWindow");
+        assert_eq!(artifact["sessionId"], "session/artifacts:one");
+        assert_eq!(
+            artifact["byteCount"].as_u64().unwrap(),
+            u64::try_from(full.len()).unwrap()
+        );
+
+        let path_value = artifact_str_field(artifact, "path");
+        let metadata_path_value = artifact_str_field(artifact, "metadataPath");
+        assert!(!path_value.is_empty(), "artifact path must be a string");
+        assert!(
+            !metadata_path_value.is_empty(),
+            "artifact metadataPath must be a string"
+        );
+        let path = PathBuf::from(path_value);
+        let metadata_path = PathBuf::from(metadata_path_value);
+        assert!(path.starts_with(tmp.path().join("session_artifacts_one").join("call_text_1")));
+        assert_eq!(std::fs::read_to_string(path)?, full);
+        let metadata_bytes = std::fs::read(metadata_path)?;
+        let metadata: serde_json::Value = serde_json::from_slice(&metadata_bytes)?;
+        assert_eq!(metadata["sha256"], artifact["sha256"]);
+        Ok(())
+    }
+
+    #[test]
+    fn tool_output_artifact_failure_records_degraded_preview() {
+        let tmp = tempfile::tempdir().expect("artifact root parent");
+        let root_file = tmp.path().join("not-a-directory");
+        std::fs::write(&root_file, "not a directory").expect("root file");
+        let full = "b".repeat(TOOL_OUTPUT_ARTIFACT_THRESHOLD_BYTES + 1);
+        let mut output = "bounded preview".to_string();
+        let mut details = None;
+
+        let spilled = attach_text_artifact_if_needed_at_root(
+            &root_file,
+            &mut output,
+            &mut details,
+            "read",
+            "call-fail",
+            "selectedTextWindow",
+            &full,
+        );
+
+        assert!(!spilled);
+        assert!(output.contains("Tool output artifact persistence failed"));
+        assert!(
+            details
+                .as_ref()
+                .and_then(|value| value.get("artifactError"))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn read_tool_spills_oversized_selected_text_window_to_artifact() {
+        asupersync::test_utils::run_test(|| async {
+            let tmp = tempfile::tempdir().expect("workspace");
+            let artifact_root = tempfile::tempdir().expect("artifact root");
+
+            let body = "r".repeat(TOOL_OUTPUT_ARTIFACT_THRESHOLD_BYTES + 8);
+            std::fs::write(tmp.path().join("large.txt"), &body).expect("large file");
+            let read_tool = ReadTool::with_artifact_root(tmp.path(), artifact_root.path());
+            let output = read_tool
+                .execute(
+                    "read-artifact-call",
+                    serde_json::json!({ "path": "large.txt" }),
+                    None,
+                )
+                .await
+                .expect("read large file");
+
+            assert!(first_text(&output).contains("Full tool output artifact:"));
+            let artifact = artifact_json(output.details.as_ref());
+            assert_eq!(artifact["toolName"], "read");
+            assert_eq!(artifact["sourceKind"], "selectedTextWindow");
+            let path_value = artifact_str_field(artifact, "path");
+            assert!(!path_value.is_empty(), "artifact path must be a string");
+            let path = PathBuf::from(path_value);
+            let spilled = match std::fs::read_to_string(&path) {
+                Ok(spilled) => spilled,
+                Err(err) => {
+                    assert!(false, "read spilled artifact {}: {err}", path.display());
+                    return;
+                }
+            };
+            let prefix = "    1→";
+            assert_eq!(spilled.len(), prefix.len() + DEFAULT_MAX_BYTES);
+            assert_eq!(
+                artifact["byteCount"].as_u64().unwrap(),
+                u64::try_from(spilled.len()).unwrap()
+            );
+            assert!(spilled.starts_with(prefix));
+            assert!(spilled[prefix.len()..].bytes().all(|byte| byte == b'r'));
+        });
+    }
+
+    #[test]
+    fn bash_tool_spills_truncated_full_output_to_artifact() {
+        asupersync::test_utils::run_test(|| async {
+            if !Path::new("/dev/zero").exists() {
+                return;
+            }
+
+            let tmp = tempfile::tempdir().expect("workspace");
+            let artifact_root = tempfile::tempdir().expect("artifact root");
+
+            let bash_tool = BashTool::with_artifact_root(tmp.path(), artifact_root.path());
+            let output = bash_tool
+                .execute(
+                    "bash-artifact-call",
+                    serde_json::json!({
+                        "command": "head -c 1001000 /dev/zero | tr '\\0' x",
+                        "timeout": 10
+                    }),
+                    None,
+                )
+                .await
+                .expect("bash large output");
+
+            assert!(first_text(&output).contains("Full tool output artifact:"));
+            let artifact = artifact_json(output.details.as_ref());
+            assert_eq!(artifact["toolName"], "bash");
+            assert_eq!(artifact["sourceKind"], "fullCommandOutput");
+            let path = PathBuf::from(artifact["path"].as_str().unwrap());
+            assert_eq!(std::fs::metadata(path).unwrap().len(), 1_001_000);
+        });
+    }
+
+    #[test]
+    fn ls_tool_spills_oversized_directory_listing_to_artifact() {
+        asupersync::test_utils::run_test(|| async {
+            let tmp = tempfile::tempdir().expect("workspace");
+            let artifact_root = tempfile::tempdir().expect("artifact root");
+            let suffix = "x".repeat(224);
+            for i in 0..4_500 {
+                let name = format!("entry-{i:04}-{suffix}.txt");
+                std::fs::write(tmp.path().join(name), "").expect("write listing fixture");
+            }
+
+            let ls_tool = LsTool::with_artifact_root(tmp.path(), artifact_root.path());
+            let output = ls_tool
+                .execute(
+                    "ls-artifact-call",
+                    serde_json::json!({ "path": ".", "limit": 4500 }),
+                    None,
+                )
+                .await
+                .expect("ls large directory");
+
+            assert!(first_text(&output).contains("Full tool output artifact:"));
+            let artifact = artifact_json(output.details.as_ref());
+            assert_eq!(artifact["toolName"], "ls");
+            assert_eq!(artifact["sourceKind"], "directoryEntries");
+            assert!(
+                artifact["byteCount"].as_u64().unwrap()
+                    > u64::try_from(TOOL_OUTPUT_ARTIFACT_THRESHOLD_BYTES).unwrap()
+            );
+            let path = PathBuf::from(artifact["path"].as_str().unwrap());
+            assert!(
+                std::fs::read_to_string(path)
+                    .unwrap()
+                    .contains("entry-0000-")
+            );
+        });
     }
 
     async fn assert_read_cache_hit_and_stale(tmp: &Path) {

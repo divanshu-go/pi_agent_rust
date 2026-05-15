@@ -7190,6 +7190,70 @@ mod tests {
     }
 
     #[test]
+    fn test_tool_result_artifact_metadata_round_trip_without_full_payload() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut session = Session::create_with_dir(Some(temp.path().to_path_buf()));
+        session.append_message(make_test_message("list the huge directory"));
+
+        let omitted_payload = "x".repeat(1024);
+        let preview = "entry-0000.txt\nentry-0001.txt\n\n[Full tool output artifact: /tmp/pi-tool-artifacts/call/abc.txt (5000000 bytes, 50000 lines, sha256 abc). Use read on this path to inspect more.]";
+        session.append_message(SessionMessage::ToolResult {
+            tool_call_id: "call_artifact".to_string(),
+            tool_name: "ls".to_string(),
+            content: vec![ContentBlock::Text(TextContent::new(preview))],
+            details: Some(serde_json::json!({
+                "artifact": {
+                    "schema": "pi.tool_output_artifact.v1",
+                    "id": "tool-artifact-abc",
+                    "toolName": "ls",
+                    "sourceKind": "directoryEntries",
+                    "path": "/tmp/pi-tool-artifacts/call/abc.txt",
+                    "metadataPath": "/tmp/pi-tool-artifacts/call/abc.json",
+                    "sha256": "abc",
+                    "byteCount": 5_000_000_u64,
+                    "lineCount": 50_000,
+                    "previewBytes": preview.len(),
+                    "contentType": "text/plain; charset=utf-8"
+                }
+            })),
+            is_error: false,
+            timestamp: Some(12346),
+        });
+
+        run_async(async { session.save().await }).unwrap();
+        let path = session.path.clone().unwrap();
+        let jsonl = std::fs::read_to_string(&path).unwrap();
+        assert!(jsonl.contains("\"schema\":\"pi.tool_output_artifact.v1\""));
+        assert!(!jsonl.contains(&omitted_payload));
+
+        let loaded =
+            run_async(async { Session::open(path.to_string_lossy().as_ref()).await }).unwrap();
+        let tool_result = loaded
+            .to_messages()
+            .into_iter()
+            .find_map(|message| match message {
+                Message::ToolResult(result) if result.tool_call_id.eq("call_artifact") => {
+                    Some(result)
+                }
+                _ => None,
+            })
+            .expect("artifact tool result");
+
+        assert_eq!(
+            tool_result
+                .details
+                .as_ref()
+                .and_then(|details| details.pointer("/artifact/schema"))
+                .and_then(Value::as_str),
+            Some("pi.tool_output_artifact.v1")
+        );
+        assert!(tool_result.content.iter().all(|block| match block {
+            ContentBlock::Text(text) => !text.text.contains(&omitted_payload),
+            _ => true,
+        }));
+    }
+
+    #[test]
     fn test_append_tool_result_error() {
         let mut session = Session::in_memory();
         session.append_message(make_test_message("Hello"));

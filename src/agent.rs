@@ -2847,6 +2847,15 @@ impl Agent {
             });
         };
 
+        let _artifact_session_guard =
+            self.config
+                .stream_options
+                .session_id
+                .as_deref()
+                .map(|session_id| {
+                    crate::tools::register_tool_output_artifact_session(&tool_call.id, session_id)
+                });
+
         match tool
             .execute(
                 &tool_call.id,
