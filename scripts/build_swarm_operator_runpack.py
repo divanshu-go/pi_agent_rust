@@ -38,6 +38,8 @@ FLIGHT_RECORDER_REPORT_SCHEMA = "pi.swarm.flight_recorder.report.v1"
 HOST_PREFLIGHT_SCHEMA = "pi.doctor.swarm_resource_preflight.v1"
 CONTEXT_INTELLIGENCE_SCHEMA = "pi.doctor.context_intelligence_posture.v1"
 VALIDATION_BROKER_DOCTOR_SCHEMA = "pi.doctor.validation_broker_posture.v1"
+PROGRESS_SLO_DOCTOR_SCHEMA = "pi.doctor.swarm_progress_slo_posture.v1"
+PROGRESS_SLO_SCHEMA = "pi.swarm.progress_slo.v1"
 VALIDATION_BROKER_CLI_STATUS_SCHEMA = "pi.validation_broker.cli_status.v1"
 VALIDATION_BROKER_CLI_PLAN_SCHEMA = "pi.validation_broker.cli_plan.v1"
 VALIDATION_BROKER_STORE_ENV = "PI_VALIDATION_BROKER_STORE"
@@ -1123,6 +1125,15 @@ def source_payloads(args: argparse.Namespace) -> list[SourcePayload]:
     validation_broker_json = getattr(args, "validation_broker_json", None)
     if validation_broker_json is not None:
         sources.append(load_validation_broker_source(validation_broker_json))
+    progress_slo_json = getattr(args, "progress_slo_json", None)
+    if progress_slo_json is not None:
+        sources.append(
+            load_json_source(
+                "progress_slo",
+                progress_slo_json,
+                expected_schema=PROGRESS_SLO_SCHEMA,
+            )
+        )
     return sources
 
 
@@ -1837,6 +1848,138 @@ def summarize_context_intelligence(
     }
 
 
+def summarize_progress_slo_payload(
+    payload: dict[str, Any],
+    *,
+    source_status: str,
+    max_items: int,
+) -> dict[str, Any]:
+    if payload.get("schema") == PROGRESS_SLO_DOCTOR_SCHEMA:
+        progress = payload.get("progress") if isinstance(payload.get("progress"), dict) else {}
+        metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+        saturation = (
+            payload.get("saturation_summary")
+            if isinstance(payload.get("saturation_summary"), dict)
+            else {}
+        )
+        redaction = (
+            payload.get("redaction_summary")
+            if isinstance(payload.get("redaction_summary"), dict)
+            else {}
+        )
+        source_summary = (
+            payload.get("source_summary")
+            if isinstance(payload.get("source_summary"), dict)
+            else {}
+        )
+        source_status_payload = (
+            payload.get("source_status")
+            if isinstance(payload.get("source_status"), dict)
+            else {}
+        )
+        degraded_reasons = payload.get("degraded_reasons")
+        if not isinstance(degraded_reasons, list):
+            degraded_reasons = []
+        reason_ids = progress.get("reason_ids")
+        if not isinstance(reason_ids, list):
+            reason_ids = []
+        next_actions = progress.get("next_actions")
+        if not isinstance(next_actions, list):
+            next_actions = []
+        suppressed_claims = progress.get("suppressed_claims")
+        if not isinstance(suppressed_claims, list):
+            suppressed_claims = []
+        return {
+            "status": source_status,
+            "schema": progress.get("schema"),
+            "doctor_schema": payload.get("schema"),
+            "progress_status": progress.get("status"),
+            "confidence": progress.get("confidence"),
+            "generated_at": progress.get("generated_at"),
+            "contract_version": progress.get("contract_version"),
+            "source_status": source_status_payload.get("progress_slo_report"),
+            "reason_ids": bounded(reason_ids, max_items),
+            "next_actions": bounded(next_actions, max_items),
+            "suppressed_claims": bounded(suppressed_claims, max_items),
+            "metrics": metrics,
+            "saturation_summary": saturation,
+            "redaction_summary": redaction,
+            "source_summary": source_summary,
+            "degraded_reasons": bounded(degraded_reasons, max_items),
+            "guards": payload.get("guards"),
+        }
+
+    reason_ids = payload.get("reason_ids")
+    if not isinstance(reason_ids, list):
+        reason_ids = []
+    next_actions = payload.get("next_actions")
+    if not isinstance(next_actions, list):
+        next_actions = []
+    suppressed_claims = payload.get("suppressed_claims")
+    if not isinstance(suppressed_claims, list):
+        suppressed_claims = []
+    source_statuses = payload.get("source_statuses")
+    if not isinstance(source_statuses, list):
+        source_statuses = []
+    return {
+        "status": source_status,
+        "schema": payload.get("schema"),
+        "progress_status": payload.get("status"),
+        "confidence": payload.get("confidence"),
+        "generated_at": payload.get("generated_at"),
+        "contract_version": payload.get("contract_version"),
+        "time_window": payload.get("time_window"),
+        "reason_ids": bounded(reason_ids, max_items),
+        "next_actions": bounded(next_actions, max_items),
+        "suppressed_claims": bounded(suppressed_claims, max_items),
+        "metrics": payload.get("progress_metrics"),
+        "saturation_summary": payload.get("saturation_summary"),
+        "redaction_summary": payload.get("redaction_summary"),
+        "source_summary": {
+            "total": len(source_statuses),
+        },
+        "guards": {
+            "advisory_only": True,
+            "not_ci_success": True,
+            "not_release_claim_evidence": True,
+            "does_not_replace_beads_agent_mail_rch_validation_broker_doctor_runpacks_context_or_ci": True,
+        },
+    }
+
+
+def summarize_progress_slo_source(
+    source: SourcePayload,
+    max_items: int,
+) -> dict[str, Any]:
+    if not isinstance(source.payload, dict):
+        return {"status": source.status, "schema": source.schema}
+    summary = summarize_progress_slo_payload(
+        source.payload,
+        source_status=source.status,
+        max_items=max_items,
+    )
+    summary["source_path"] = source.path
+    return summary
+
+
+def summarize_progress_slo_doctor(
+    finding: dict[str, Any] | None,
+    max_items: int,
+) -> dict[str, Any] | None:
+    if finding is None:
+        return None
+    data = finding.get("data") if isinstance(finding.get("data"), dict) else {}
+    summary = summarize_progress_slo_payload(
+        data,
+        source_status=str(finding.get("severity") or "unknown").lower(),
+        max_items=max_items,
+    )
+    summary["severity"] = finding.get("severity")
+    summary["title"] = finding.get("title")
+    summary["detail"] = finding.get("detail")
+    return summary
+
+
 def summarize_validation_broker_payload(
     payload: dict[str, Any],
     max_items: int,
@@ -2007,6 +2150,7 @@ def summarize_doctor(source: SourcePayload, max_items: int) -> dict[str, Any]:
     build_slot_finding: dict[str, Any] | None = None
     context_intelligence_finding: dict[str, Any] | None = None
     validation_broker_finding: dict[str, Any] | None = None
+    progress_slo_finding: dict[str, Any] | None = None
     for finding in findings:
         if not isinstance(finding, dict) or finding.get("category") != "swarm":
             continue
@@ -2029,6 +2173,8 @@ def summarize_doctor(source: SourcePayload, max_items: int) -> dict[str, Any]:
             context_intelligence_finding = item
         if data_schema == VALIDATION_BROKER_DOCTOR_SCHEMA:
             validation_broker_finding = item
+        if data_schema == PROGRESS_SLO_DOCTOR_SCHEMA:
+            progress_slo_finding = item
     severity_counts = Counter(str(item.get("severity") or "unknown") for item in swarm_findings)
     summary = {
         "status": source.status,
@@ -2044,6 +2190,12 @@ def summarize_doctor(source: SourcePayload, max_items: int) -> dict[str, Any]:
             max_items,
         ),
     }
+    progress_slo = summarize_progress_slo_doctor(
+        progress_slo_finding,
+        max_items,
+    )
+    if progress_slo is not None:
+        summary["progress_slo"] = progress_slo
     validation_broker = summarize_validation_broker_doctor(
         validation_broker_finding,
         max_items,
@@ -5613,6 +5765,11 @@ def build_runpack(args: argparse.Namespace) -> dict[str, Any]:
             by_id["validation_broker"],
             args.max_items,
         )
+    if "progress_slo" in by_id:
+        runpack["progress_slo"] = summarize_progress_slo_source(
+            by_id["progress_slo"],
+            args.max_items,
+        )
     runpack["bottleneck_attribution"] = build_bottleneck_attribution(
         runpack,
         by_id,
@@ -5695,6 +5852,23 @@ def operator_next_actions(runpack: dict[str, Any]) -> list[str]:
             actions.append("Review validation-broker stale slot warnings before launching heavy validation")
         if duplicate.get("count"):
             actions.append("Use validation-broker duplicate-gate opportunities only after provenance matches")
+    progress_slo = runpack.get("progress_slo")
+    if not isinstance(progress_slo, dict):
+        progress_slo = runpack.get("doctor_swarm", {}).get("progress_slo")
+    if isinstance(progress_slo, dict):
+        progress_status = progress_slo.get("progress_status")
+        if progress_status in {
+            "coordination_degraded",
+            "build_saturated",
+            "stalled",
+            "malformed_source_degraded",
+            "insufficient_evidence_degraded",
+        }:
+            actions.append(
+                f"Review progress SLO `{progress_status}` before launching more swarm work"
+            )
+        elif progress_status == "quiet_blocked":
+            actions.append("Use progress SLO quiet-blocked evidence to inspect blocked dependencies before broadening work")
     if not actions:
         actions.append("Runpack sources are ready; proceed with the next unblocked Beads task")
     return actions
@@ -5767,6 +5941,16 @@ def render_markdown(runpack: dict[str, Any]) -> str:
             "- Validation broker: "
             f"`{validation_broker.get('source_status')}` "
             f"(stale `{stale.get('count')}`, duplicate `{duplicate.get('count')}`)"
+        )
+    progress_slo = runpack.get("progress_slo")
+    if not isinstance(progress_slo, dict):
+        progress_slo = runpack["doctor_swarm"].get("progress_slo")
+    if isinstance(progress_slo, dict):
+        lines.append(
+            "- Progress SLO: "
+            f"`{progress_slo.get('progress_status')}` "
+            f"(confidence `{progress_slo.get('confidence')}`, "
+            f"reasons `{len(progress_slo.get('reason_ids') or [])}`)"
         )
     if isinstance(runpack.get("swarm_replay_preview"), dict):
         preview = runpack["swarm_replay_preview"]
@@ -9091,6 +9275,73 @@ def run_self_test() -> int:
                         ],
                     },
                     "fixability": "not_fixable",
+                },
+                {
+                    "category": "swarm",
+                    "severity": "warn",
+                    "title": "Progress SLO posture build saturated",
+                    "detail": "status=build_saturated, confidence=0.640, reasons=PROGRESS-SLO-RCH-SATURATED",
+                    "remediation": "Back off heavy cargo validation until RCH pressure clears",
+                    "data": {
+                        "schema": PROGRESS_SLO_DOCTOR_SCHEMA,
+                        "mode": "advisory_projection",
+                        "mutation_performed": False,
+                        "source_status": {
+                            "progress_slo_report": "available",
+                            "source_of_truth": PROGRESS_SLO_SCHEMA,
+                            "doctor_authority": "environment_diagnostics_only",
+                            "path": "progress-slo.json",
+                            "issue": None,
+                        },
+                        "progress": {
+                            "schema": PROGRESS_SLO_SCHEMA,
+                            "contract_version": "1.0.0",
+                            "generated_at": generated_at,
+                            "status": "build_saturated",
+                            "confidence": 0.64,
+                            "reason_ids": ["PROGRESS-SLO-RCH-SATURATED"],
+                            "time_window": {
+                                "start_utc": "2026-05-09T08:00:00+00:00",
+                                "end_utc": generated_at,
+                                "duration_seconds": 3600,
+                                "comparison_baseline": "HEAD~1",
+                            },
+                            "next_actions": [
+                                "Back off heavy cargo validation until RCH pressure clears"
+                            ],
+                            "suppressed_claims": [],
+                        },
+                        "metrics": {
+                            "closed_beads": 1,
+                            "commits": 1,
+                            "ready_beads": 2,
+                            "rch_posture": "saturated",
+                        },
+                        "saturation_summary": {
+                            "build_saturation": "red",
+                            "recommended_operator_posture": "backoff_heavy_cargo",
+                        },
+                        "redaction_summary": {
+                            "redacted_count": 1,
+                            "omitted_count": 0,
+                            "unsafe_to_emit_count": 0,
+                            "suppressed_claims": [],
+                        },
+                        "source_summary": {
+                            "total": 10,
+                            "degraded": 1,
+                            "malformed": 0,
+                        },
+                        "degraded_reasons": [],
+                        "guards": {
+                            "advisory_only": True,
+                            "no_live_mutation": True,
+                            "not_ci_success": True,
+                            "not_release_claim_evidence": True,
+                            "does_not_replace_beads_agent_mail_rch_validation_broker_doctor_runpacks_context_or_ci": True,
+                        },
+                    },
+                    "fixability": "not_fixable",
                 }
             ],
         },
@@ -9516,6 +9767,76 @@ def run_self_test() -> int:
             },
         },
     )
+    progress_slo_path = write_json(
+        workspace / "progress-slo.json",
+        {
+            "schema": PROGRESS_SLO_SCHEMA,
+            "generated_at": generated_at,
+            "contract_version": "1.0.0",
+            "time_window": {
+                "start_utc": "2026-05-09T08:00:00+00:00",
+                "end_utc": generated_at,
+                "duration_seconds": 3600,
+                "comparison_baseline": "HEAD~1",
+            },
+            "status": "build_saturated",
+            "confidence": 0.64,
+            "reason_ids": ["PROGRESS-SLO-RCH-SATURATED"],
+            "source_statuses": [
+                {
+                    "source_id": "rch_posture",
+                    "source_class": "rch_and_validation_broker_posture",
+                    "source_kind": "fixture",
+                    "path": "rch-status.json",
+                    "availability": "available",
+                    "freshness_state": "current",
+                    "observed_at_utc": generated_at,
+                    "source_hash": "rch-hash",
+                    "authoritative_for": ["queue_depth"],
+                    "redaction_state": "redacted",
+                    "degraded_reasons": [],
+                    "suppressed_claims": [],
+                }
+            ],
+            "progress_metrics": {
+                "closed_beads": 1,
+                "open_beads": 4,
+                "in_progress_beads": 2,
+                "ready_beads": 2,
+                "dependency_blocked_beads": 1,
+                "commits": 1,
+                "pushed_commits": 1,
+                "closed_with_commit_reference_count": 1,
+                "validation_passes": 1,
+                "validation_failures": 0,
+                "agent_mail_health": "green",
+                "rch_posture": "saturated",
+                "rch_queue_depth": 12,
+                "rch_queue_saturation_threshold": 8,
+                "validation_broker_posture": "green",
+                "stale_in_progress_candidates": 0,
+                "malformed_source_records": 0,
+                "contradictory_source_records": 0,
+            },
+            "saturation_summary": {
+                "coordination_saturation": "green",
+                "build_saturation": "red",
+                "validation_saturation": "green",
+                "queue_convergence": "yellow",
+                "recommended_operator_posture": "backoff_heavy_cargo",
+            },
+            "redaction_summary": {
+                "redacted_count": 1,
+                "omitted_count": 0,
+                "unsafe_to_emit_count": 0,
+                "suppressed_claims": [],
+            },
+            "suppressed_claims": [],
+            "next_actions": [
+                "Back off heavy cargo validation until RCH pressure clears"
+            ],
+        },
+    )
 
     args = argparse.Namespace(
         doctor_json=doctor_path,
@@ -9539,6 +9860,7 @@ def run_self_test() -> int:
         rch_artifact_sync_json=rch_artifact_sync_path,
         validation_outputs=[validation_path],
         validation_broker_json=None,
+        progress_slo_json=progress_slo_path,
         capture_manifest={
             "schema": RUNPACK_CAPTURE_SCHEMA,
             "mode": "current",
@@ -9658,6 +9980,22 @@ def run_self_test() -> int:
         assert context["bundle"]["estimated_tokens"] == 2048
         assert context["cache"]["pressure_count"] == 1
         assert context["redaction_summary"]["overall_status"] == "redacted"
+        doctor_progress = runpack["doctor_swarm"]["progress_slo"]
+        assert doctor_progress["doctor_schema"] == PROGRESS_SLO_DOCTOR_SCHEMA
+        assert doctor_progress["schema"] == PROGRESS_SLO_SCHEMA
+        assert doctor_progress["progress_status"] == "build_saturated"
+        assert doctor_progress["source_status"] == "available"
+        assert doctor_progress["guards"]["advisory_only"] is True
+        assert runpack["progress_slo"]["schema"] == PROGRESS_SLO_SCHEMA
+        assert runpack["progress_slo"]["progress_status"] == "build_saturated"
+        assert any(
+            item.get("id") == "progress_slo" and item.get("status") == "ok"
+            for item in runpack["source_statuses"]
+        )
+        assert any(
+            "Review progress SLO `build_saturated`" in action
+            for action in runpack["operator_next_actions"]
+        )
         assert any(
             item["purpose"] == "Regenerate this handoff bundle"
             for item in runpack["resume_commands"]
@@ -10162,6 +10500,7 @@ def run_self_test() -> int:
         assert "Tail latency telemetry" in markdown
         assert "Bottleneck Attribution" in markdown
         assert "Context intelligence" in markdown
+        assert "Progress SLO" in markdown
         assert "Resume Commands" in markdown
         assert "Git Context" in markdown
         assert_runpack_contract(runpack)
@@ -11591,6 +11930,11 @@ def parse_args() -> argparse.Namespace:
         "--validation-broker-json",
         type=Path,
         help="optional validation-broker status or plan JSON to summarize as advisory posture",
+    )
+    parser.add_argument(
+        "--progress-slo-json",
+        type=Path,
+        help="optional pi.swarm.progress_slo.v1 JSON to summarize as advisory progress posture",
     )
     parser.add_argument(
         "--operator-runpack-json",

@@ -21,6 +21,7 @@ use crate::semantic_workspace_graph::{
 };
 use crate::session::SessionHeader;
 use crate::session_index::walk_sessions;
+use crate::swarm_progress_slo::{ProgressSloReport, ProgressSloStatus, SWARM_PROGRESS_SLO_SCHEMA};
 use crate::validation_broker::{ValidationSlotLease, ValidationSlotState, ValidationSlotStore};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -49,6 +50,7 @@ const SWARM_DOCTOR_NEXT_ACTION_SCHEMA: &str = "pi.doctor.communication_purgatory
 const SWARM_DOCTOR_OPERATIONS_DASHBOARD_SCHEMA: &str = "pi.doctor.swarm_operations_dashboard.v1";
 const SWARM_DOCTOR_CONTEXT_INTELLIGENCE_SCHEMA: &str = "pi.doctor.context_intelligence_posture.v1";
 const SWARM_DOCTOR_VALIDATION_BROKER_SCHEMA: &str = "pi.doctor.validation_broker_posture.v1";
+const SWARM_DOCTOR_PROGRESS_SLO_SCHEMA: &str = "pi.doctor.swarm_progress_slo_posture.v1";
 const SWARM_DOCTOR_RCH_AFFINITY_SCHEMA: &str = "pi.doctor.rch_warm_target_affinity.v1";
 const SWARM_RCH_AFFINITY_PLAN_ARTIFACT_SCHEMA: &str = "pi.swarm.rch_affinity_plan.v1";
 const SWARM_DOCTOR_RESERVATION_HEATMAP_SCHEMA: &str =
@@ -59,6 +61,7 @@ const SWARM_DOCTOR_RESERVATION_RECOMMENDATIONS_SCHEMA: &str =
 const SWARM_CARGO_SCRATCH_ROOT: &str = "/data/tmp/pi_agent_rust_cargo";
 const SWARM_RCH_AFFINITY_JOBS_ENV: &str = "PI_DOCTOR_RCH_AFFINITY_JOBS_JSON";
 const SWARM_VALIDATION_BROKER_STORE_ENV: &str = "PI_VALIDATION_BROKER_STORE";
+const SWARM_PROGRESS_SLO_JSON_ENV: &str = "PI_SWARM_PROGRESS_SLO_JSON";
 const SWARM_BUILD_SLOT_SOON_EXPIRING_MINUTES: i64 = 30;
 const SWARM_ACTIVE_AGENT_WINDOW_HOURS: i64 = 24;
 const SWARM_DASHBOARD_AGENT_LIMIT: usize = 12;
@@ -1133,6 +1136,7 @@ fn check_swarm(cwd: &Path, findings: &mut Vec<Finding>) {
     check_swarm_temp_dirs(findings);
     check_swarm_context_intelligence(cwd, findings);
     check_swarm_validation_broker(cwd, findings);
+    check_swarm_progress_slo(cwd, findings);
     check_swarm_operations_dashboard(cwd, findings);
 }
 
@@ -5094,6 +5098,320 @@ fn validation_broker_recommended_actions(
         actions.push("No validation-broker action required");
     }
     actions.into_iter().map(str::to_string).collect()
+}
+
+fn check_swarm_progress_slo(cwd: &Path, findings: &mut Vec<Finding>) {
+    let raw_path = first_non_empty_env(&[SWARM_PROGRESS_SLO_JSON_ENV]);
+    findings.push(build_swarm_progress_slo_finding(cwd, raw_path.as_deref()));
+}
+
+fn build_swarm_progress_slo_finding(cwd: &Path, raw_path: Option<&str>) -> Finding {
+    let Some(raw_path) = raw_path.map(str::trim).filter(|value| !value.is_empty()) else {
+        return progress_slo_source_finding(
+            Severity::Info,
+            "Progress SLO posture not configured",
+            "not_configured",
+            None,
+            Some(format!(
+                "Set {SWARM_PROGRESS_SLO_JSON_ENV} to a pi.swarm.progress_slo.v1 JSON report when projecting progress SLO posture into Doctor"
+            )),
+            &[],
+        );
+    };
+
+    let source_path = resolve_progress_slo_source_path(cwd, raw_path);
+    let source_label = stable_path_label(&source_path);
+    let raw = match std::fs::read_to_string(&source_path) {
+        Ok(raw) => raw,
+        Err(err) => {
+            return progress_slo_source_finding(
+                Severity::Warn,
+                "Progress SLO posture unavailable",
+                "unavailable",
+                Some(&source_path),
+                Some(format!(
+                    "progress SLO report source is unreadable at {source_label}: {}",
+                    redacted_doctor_text(&err.to_string())
+                )),
+                &["progress_slo_source_unavailable"],
+            );
+        }
+    };
+
+    let value = match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(value) => value,
+        Err(err) => {
+            return progress_slo_source_finding(
+                Severity::Warn,
+                "Progress SLO posture malformed",
+                "malformed",
+                Some(&source_path),
+                Some(format!(
+                    "progress SLO report source is not valid JSON at {source_label}: {}",
+                    redacted_doctor_text(&err.to_string())
+                )),
+                &["progress_slo_source_malformed"],
+            );
+        }
+    };
+
+    let observed_schema = value.get("schema").and_then(serde_json::Value::as_str);
+    if observed_schema != Some(SWARM_PROGRESS_SLO_SCHEMA) {
+        return progress_slo_source_finding(
+            Severity::Warn,
+            "Progress SLO posture malformed",
+            "malformed",
+            Some(&source_path),
+            Some(format!(
+                "progress SLO report schema mismatch at {source_label}: expected {SWARM_PROGRESS_SLO_SCHEMA}, got {}",
+                observed_schema.unwrap_or("missing")
+            )),
+            &["progress_slo_schema_mismatch"],
+        );
+    }
+
+    let report = match serde_json::from_value::<ProgressSloReport>(value) {
+        Ok(report) => report,
+        Err(err) => {
+            return progress_slo_source_finding(
+                Severity::Warn,
+                "Progress SLO posture malformed",
+                "malformed",
+                Some(&source_path),
+                Some(format!(
+                    "progress SLO report source does not match expected shape at {source_label}: {}",
+                    redacted_doctor_text(&err.to_string())
+                )),
+                &["progress_slo_shape_mismatch"],
+            );
+        }
+    };
+
+    classify_swarm_progress_slo_report(&report, Some(&source_path))
+}
+
+fn resolve_progress_slo_source_path(cwd: &Path, raw_path: &str) -> PathBuf {
+    let path = PathBuf::from(raw_path);
+    if path.is_absolute() {
+        path
+    } else {
+        cwd.join(path)
+    }
+}
+
+fn classify_swarm_progress_slo_report(
+    report: &ProgressSloReport,
+    source_path: Option<&Path>,
+) -> Finding {
+    let status = enum_json_label(report.status);
+    let severity = match report.status {
+        ProgressSloStatus::Progressing | ProgressSloStatus::ConvergedNoOpenWork => Severity::Pass,
+        ProgressSloStatus::QuietBlocked => Severity::Info,
+        ProgressSloStatus::CoordinationDegraded
+        | ProgressSloStatus::BuildSaturated
+        | ProgressSloStatus::Stalled
+        | ProgressSloStatus::MalformedSourceDegraded
+        | ProgressSloStatus::InsufficientEvidenceDegraded => Severity::Warn,
+    };
+    let title = match report.status {
+        ProgressSloStatus::Progressing => "Progress SLO posture healthy",
+        ProgressSloStatus::ConvergedNoOpenWork => "Progress SLO posture converged",
+        ProgressSloStatus::QuietBlocked => "Progress SLO posture quiet-blocked",
+        ProgressSloStatus::CoordinationDegraded => "Progress SLO posture coordination degraded",
+        ProgressSloStatus::BuildSaturated => "Progress SLO posture build saturated",
+        ProgressSloStatus::Stalled => "Progress SLO posture stalled",
+        ProgressSloStatus::MalformedSourceDegraded => "Progress SLO posture malformed",
+        ProgressSloStatus::InsufficientEvidenceDegraded => {
+            "Progress SLO posture insufficient evidence"
+        }
+    };
+    let detail = format!(
+        "status={status}, confidence={:.3}, reasons={}, closed={}, commits={}, ready={}, stale_in_progress={}, source_count={}",
+        report.confidence,
+        report.reason_ids.join(","),
+        report.progress_metrics.closed_beads,
+        report.progress_metrics.commits,
+        report.progress_metrics.ready_beads,
+        report.progress_metrics.stale_in_progress_candidates,
+        report.source_statuses.len()
+    );
+    let data = progress_slo_report_data(report, "available", source_path, &[], None);
+    let mut finding = Finding {
+        category: CheckCategory::Swarm,
+        severity,
+        title: title.to_string(),
+        detail: Some(detail),
+        remediation: None,
+        data: Some(data),
+        fixability: Fixability::NotFixable,
+    };
+    if !report.next_actions.is_empty() {
+        finding = finding.with_remediation(report.next_actions.join("; "));
+    }
+    finding
+}
+
+fn progress_slo_source_finding(
+    severity: Severity,
+    title: &str,
+    source_status: &str,
+    source_path: Option<&Path>,
+    issue: Option<String>,
+    degraded_reasons: &[&str],
+) -> Finding {
+    let data = progress_slo_source_data(
+        source_status,
+        source_path,
+        issue.as_deref(),
+        degraded_reasons,
+    );
+    Finding {
+        category: CheckCategory::Swarm,
+        severity,
+        title: title.to_string(),
+        detail: issue,
+        remediation: Some(
+            "Capture or refresh a pi.swarm.progress_slo.v1 report before treating progress SLO posture as current handoff evidence"
+                .to_string(),
+        ),
+        data: Some(data),
+        fixability: Fixability::NotFixable,
+    }
+}
+
+fn progress_slo_report_data(
+    report: &ProgressSloReport,
+    source_status: &str,
+    source_path: Option<&Path>,
+    degraded_reasons: &[&str],
+    issue: Option<&str>,
+) -> serde_json::Value {
+    let degraded_source_count = report
+        .source_statuses
+        .iter()
+        .filter(|source| {
+            !matches!(
+                source.availability,
+                crate::swarm_progress_slo::SourceAvailability::Available
+            ) || !matches!(
+                source.freshness_state,
+                crate::swarm_progress_slo::FreshnessState::Current
+            )
+        })
+        .count();
+    let malformed_source_count = report
+        .source_statuses
+        .iter()
+        .filter(|source| {
+            matches!(
+                source.availability,
+                crate::swarm_progress_slo::SourceAvailability::Malformed
+            ) || matches!(
+                source.freshness_state,
+                crate::swarm_progress_slo::FreshnessState::Malformed
+            )
+        })
+        .count();
+
+    serde_json::json!({
+        "schema": SWARM_DOCTOR_PROGRESS_SLO_SCHEMA,
+        "mode": "advisory_projection",
+        "mutation_performed": false,
+        "source_status": {
+            "progress_slo_report": source_status,
+            "source_of_truth": SWARM_PROGRESS_SLO_SCHEMA,
+            "doctor_authority": "environment_diagnostics_only",
+            "path": source_path.map(stable_path_label),
+            "issue": issue,
+        },
+        "progress": {
+            "schema": report.schema,
+            "contract_version": report.contract_version,
+            "generated_at": report.generated_at,
+            "status": enum_json_label(report.status),
+            "confidence": report.confidence,
+            "reason_ids": report.reason_ids,
+            "time_window": {
+                "start_utc": report.time_window.start_utc,
+                "end_utc": report.time_window.end_utc,
+                "duration_seconds": report.time_window.duration_seconds,
+                "comparison_baseline": report.time_window.comparison_baseline,
+            },
+            "next_actions": report.next_actions,
+            "suppressed_claims": report.suppressed_claims,
+        },
+        "metrics": serde_json::to_value(&report.progress_metrics).unwrap_or_else(|_| serde_json::json!({"status": "serialization_failed"})),
+        "saturation_summary": serde_json::to_value(&report.saturation_summary).unwrap_or_else(|_| serde_json::json!({"status": "serialization_failed"})),
+        "redaction_summary": serde_json::to_value(&report.redaction_summary).unwrap_or_else(|_| serde_json::json!({"status": "serialization_failed"})),
+        "source_summary": {
+            "total": report.source_statuses.len(),
+            "degraded": degraded_source_count,
+            "malformed": malformed_source_count,
+        },
+        "degraded_reasons": degraded_reasons,
+        "guards": {
+            "advisory_only": true,
+            "no_live_mutation": true,
+            "not_ci_success": true,
+            "not_release_claim_evidence": true,
+            "does_not_replace_beads_agent_mail_rch_validation_broker_doctor_runpacks_context_or_ci": true,
+        }
+    })
+}
+
+fn progress_slo_source_data(
+    source_status: &str,
+    source_path: Option<&Path>,
+    issue: Option<&str>,
+    degraded_reasons: &[&str],
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema": SWARM_DOCTOR_PROGRESS_SLO_SCHEMA,
+        "mode": "advisory_projection",
+        "mutation_performed": false,
+        "source_status": {
+            "progress_slo_report": source_status,
+            "source_of_truth": SWARM_PROGRESS_SLO_SCHEMA,
+            "doctor_authority": "environment_diagnostics_only",
+            "path": source_path.map(stable_path_label),
+            "issue": issue,
+        },
+        "progress": {
+            "schema": SWARM_PROGRESS_SLO_SCHEMA,
+            "status": "unavailable",
+            "confidence": 0.0,
+            "reason_ids": [],
+            "next_actions": [
+                "Capture or refresh a progress SLO report before projecting progress posture"
+            ],
+            "suppressed_claims": [
+                "progress_slo_current_posture"
+            ],
+        },
+        "metrics": {},
+        "saturation_summary": {},
+        "redaction_summary": {
+            "redacted_count": 0,
+            "omitted_count": 0,
+            "unsafe_to_emit_count": 0,
+            "suppressed_claims": [
+                "progress_slo_current_posture"
+            ],
+        },
+        "source_summary": {
+            "total": 0,
+            "degraded": 1,
+            "malformed": usize::from(source_status == "malformed"),
+        },
+        "degraded_reasons": degraded_reasons,
+        "guards": {
+            "advisory_only": true,
+            "no_live_mutation": true,
+            "not_ci_success": true,
+            "not_release_claim_evidence": true,
+            "does_not_replace_beads_agent_mail_rch_validation_broker_doctor_runpacks_context_or_ci": true,
+        }
+    })
 }
 
 fn enum_json_label<T>(value: T) -> String
@@ -9307,6 +9625,11 @@ fn check_extension(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::swarm_progress_slo::{
+        AgentMailHealth, FreshnessState, ProgressSloEvaluationInput, ProgressSloMetrics,
+        ProgressSloSourceStatus, ProgressSloTimeWindow, RchPosture, RedactionState,
+        SourceAvailability, ValidationBrokerPosture, evaluate_progress_slo,
+    };
     use std::path::{Path, PathBuf};
 
     fn write_extension_fixture(cwd: &Path, source: &str) -> PathBuf {
@@ -10181,6 +10504,183 @@ not-json
         assert_eq!(data["rch"]["pressure"], serde_json::json!("clear"));
         assert_eq!(data["agents"]["active_count"], serde_json::json!(1));
         assert_eq!(data["reservations"]["active_count"], serde_json::json!(1));
+    }
+
+    fn test_progress_slo_source(source_id: &str, source_class: &str) -> ProgressSloSourceStatus {
+        ProgressSloSourceStatus::new(
+            source_id,
+            source_class,
+            "fixture",
+            SourceAvailability::Available,
+            FreshnessState::Current,
+            RedactionState::Redacted,
+            vec![format!("{source_id}_authority")],
+        )
+        .with_path(format!("docs/evidence/{source_id}.json"))
+        .with_observed_at("2026-05-15T04:00:00Z")
+        .with_source_hash(format!("{source_id}-hash"))
+    }
+
+    fn test_progress_slo_sources() -> Vec<ProgressSloSourceStatus> {
+        vec![
+            test_progress_slo_source("beads_active_delta", "beads_active_closed_delta"),
+            test_progress_slo_source("beads_closed_delta", "beads_active_closed_delta"),
+            test_progress_slo_source("git_commit_delta", "git_commit_delta"),
+            test_progress_slo_source("rch_posture", "rch_and_validation_broker_posture"),
+            test_progress_slo_source(
+                "validation_broker_posture",
+                "rch_and_validation_broker_posture",
+            ),
+            test_progress_slo_source("agent_mail_health", "agent_mail_health"),
+            test_progress_slo_source(
+                "operator_runpack_summary",
+                "runpack_autopilot_context_summaries",
+            ),
+            test_progress_slo_source(
+                "swarm_autopilot_summary",
+                "runpack_autopilot_context_summaries",
+            ),
+            test_progress_slo_source(
+                "context_intelligence_summary",
+                "runpack_autopilot_context_summaries",
+            ),
+            test_progress_slo_source("operator_time_window", "operator_provided_time_window"),
+        ]
+    }
+
+    fn healthy_progress_slo_report() -> ProgressSloReport {
+        evaluate_progress_slo(ProgressSloEvaluationInput::new(
+            "2026-05-15T04:05:00Z",
+            ProgressSloTimeWindow::new(
+                "2026-05-15T04:00:00Z",
+                "2026-05-15T04:05:00Z",
+                300,
+                "HEAD~1",
+            ),
+            test_progress_slo_sources(),
+            ProgressSloMetrics {
+                closed_beads: 2,
+                open_beads: 3,
+                in_progress_beads: 1,
+                ready_beads: 1,
+                commits: 2,
+                pushed_commits: 2,
+                closed_with_commit_reference_count: 2,
+                validation_passes: 3,
+                agent_mail_health: AgentMailHealth::Green,
+                rch_posture: RchPosture::Green,
+                validation_broker_posture: ValidationBrokerPosture::Green,
+                ..ProgressSloMetrics::default()
+            },
+        ))
+    }
+
+    #[test]
+    fn swarm_progress_slo_doctor_reports_healthy_projection() {
+        let report = healthy_progress_slo_report();
+
+        let finding = classify_swarm_progress_slo_report(&report, None);
+
+        assert_eq!(finding.severity, Severity::Pass);
+        let data = finding_data(&finding);
+        assert_eq!(data["schema"], SWARM_DOCTOR_PROGRESS_SLO_SCHEMA);
+        assert_eq!(data["progress"]["schema"], SWARM_PROGRESS_SLO_SCHEMA);
+        assert_eq!(data["progress"]["status"], serde_json::json!("progressing"));
+        assert_eq!(
+            data["source_status"]["progress_slo_report"],
+            serde_json::json!("available")
+        );
+        assert_eq!(data["guards"]["advisory_only"], serde_json::json!(true));
+        assert_eq!(data["guards"]["no_live_mutation"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn swarm_progress_slo_doctor_reports_degraded_projection() {
+        let report = evaluate_progress_slo(ProgressSloEvaluationInput::new(
+            "2026-05-15T04:05:00Z",
+            ProgressSloTimeWindow::new(
+                "2026-05-15T04:00:00Z",
+                "2026-05-15T04:05:00Z",
+                300,
+                "HEAD~1",
+            ),
+            test_progress_slo_sources(),
+            ProgressSloMetrics {
+                open_beads: 3,
+                in_progress_beads: 1,
+                ready_beads: 1,
+                agent_mail_health: AgentMailHealth::Corrupt,
+                rch_posture: RchPosture::Green,
+                validation_broker_posture: ValidationBrokerPosture::Green,
+                ..ProgressSloMetrics::default()
+            },
+        ));
+
+        let finding = classify_swarm_progress_slo_report(&report, None);
+
+        assert_eq!(finding.severity, Severity::Warn);
+        let data = finding_data(&finding);
+        assert_eq!(
+            data["progress"]["status"],
+            serde_json::json!("coordination_degraded")
+        );
+        assert!(
+            data["progress"]["reason_ids"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("PROGRESS-SLO-AGENT-MAIL-DEGRADED"))
+        );
+        assert_eq!(
+            data["metrics"]["agent_mail_health"],
+            serde_json::json!("corrupt")
+        );
+    }
+
+    #[test]
+    fn swarm_progress_slo_doctor_degrades_when_source_is_missing() {
+        let project = tempfile::tempdir().expect("temp project");
+
+        let finding = build_swarm_progress_slo_finding(project.path(), Some("missing.json"));
+
+        assert_eq!(finding.severity, Severity::Warn);
+        let data = finding_data(&finding);
+        assert_eq!(
+            data["source_status"]["progress_slo_report"],
+            serde_json::json!("unavailable")
+        );
+        assert!(
+            data["degraded_reasons"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("progress_slo_source_unavailable"))
+        );
+        assert_eq!(
+            data["progress"]["suppressed_claims"][0],
+            serde_json::json!("progress_slo_current_posture")
+        );
+    }
+
+    #[test]
+    fn swarm_progress_slo_doctor_degrades_when_source_is_malformed() {
+        let project = tempfile::tempdir().expect("temp project");
+        let path = project.path().join("progress-slo.json");
+        std::fs::write(&path, "{ not json").expect("write malformed report");
+
+        let finding = build_swarm_progress_slo_finding(project.path(), Some("progress-slo.json"));
+
+        assert_eq!(finding.severity, Severity::Warn);
+        let data = finding_data(&finding);
+        assert_eq!(
+            data["source_status"]["progress_slo_report"],
+            serde_json::json!("malformed")
+        );
+        assert_eq!(data["source_summary"]["malformed"], serde_json::json!(1));
+        assert!(
+            data["degraded_reasons"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("progress_slo_source_malformed"))
+        );
     }
 
     fn write_context_intelligence_fixture(root: &Path) {

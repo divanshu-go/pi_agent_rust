@@ -142,7 +142,7 @@
         "label": "doctor swarm findings",
         "overall": "warn",
         "severity_counts": {
-          "warn": 2
+          "warn": 3
         },
         "signal": "doctor_swarm_overall",
         "source": "doctor_swarm",
@@ -570,7 +570,7 @@
       "status": "degraded",
       "title": "Context intelligence posture degraded"
     },
-    "finding_count": 2,
+    "finding_count": 3,
     "findings": [
       {
         "data": {
@@ -642,11 +642,127 @@
         "remediation": "Refresh stale evidence or keep suppressed evidence out of runpack claims",
         "severity": "warn",
         "title": "Context intelligence posture degraded"
+      },
+      {
+        "data": {
+          "degraded_reasons": [],
+          "guards": {
+            "advisory_only": true,
+            "does_not_replace_beads_agent_mail_rch_validation_broker_doctor_runpacks_context_or_ci": true,
+            "no_live_mutation": true,
+            "not_ci_success": true,
+            "not_release_claim_evidence": true
+          },
+          "metrics": {
+            "closed_beads": 1,
+            "commits": 1,
+            "rch_posture": "saturated",
+            "ready_beads": 2
+          },
+          "mode": "advisory_projection",
+          "mutation_performed": false,
+          "progress": {
+            "confidence": 0.64,
+            "contract_version": "1.0.0",
+            "generated_at": "2026-05-09T09:00:00+00:00",
+            "next_actions": [
+              "Back off heavy cargo validation until RCH pressure clears"
+            ],
+            "reason_ids": [
+              "PROGRESS-SLO-RCH-SATURATED"
+            ],
+            "schema": "pi.swarm.progress_slo.v1",
+            "status": "build_saturated",
+            "suppressed_claims": [],
+            "time_window": {
+              "comparison_baseline": "HEAD~1",
+              "duration_seconds": 3600,
+              "end_utc": "2026-05-09T09:00:00+00:00",
+              "start_utc": "2026-05-09T08:00:00+00:00"
+            }
+          },
+          "redaction_summary": {
+            "omitted_count": 0,
+            "redacted_count": 1,
+            "suppressed_claims": [],
+            "unsafe_to_emit_count": 0
+          },
+          "saturation_summary": {
+            "build_saturation": "red",
+            "recommended_operator_posture": "backoff_heavy_cargo"
+          },
+          "schema": "pi.doctor.swarm_progress_slo_posture.v1",
+          "source_status": {
+            "doctor_authority": "environment_diagnostics_only",
+            "issue": null,
+            "path": "progress-slo.json",
+            "progress_slo_report": "available",
+            "source_of_truth": "pi.swarm.progress_slo.v1"
+          },
+          "source_summary": {
+            "degraded": 1,
+            "malformed": 0,
+            "total": 10
+          }
+        },
+        "detail": "status=build_saturated, confidence=0.640, reasons=PROGRESS-SLO-RCH-SATURATED",
+        "remediation": "Back off heavy cargo validation until RCH pressure clears",
+        "severity": "warn",
+        "title": "Progress SLO posture build saturated"
       }
     ],
     "overall": "warn",
+    "progress_slo": {
+      "confidence": 0.64,
+      "contract_version": "1.0.0",
+      "degraded_reasons": [],
+      "detail": "status=build_saturated, confidence=0.640, reasons=PROGRESS-SLO-RCH-SATURATED",
+      "doctor_schema": "pi.doctor.swarm_progress_slo_posture.v1",
+      "generated_at": "2026-05-09T09:00:00+00:00",
+      "guards": {
+        "advisory_only": true,
+        "does_not_replace_beads_agent_mail_rch_validation_broker_doctor_runpacks_context_or_ci": true,
+        "no_live_mutation": true,
+        "not_ci_success": true,
+        "not_release_claim_evidence": true
+      },
+      "metrics": {
+        "closed_beads": 1,
+        "commits": 1,
+        "rch_posture": "saturated",
+        "ready_beads": 2
+      },
+      "next_actions": [
+        "Back off heavy cargo validation until RCH pressure clears"
+      ],
+      "progress_status": "build_saturated",
+      "reason_ids": [
+        "PROGRESS-SLO-RCH-SATURATED"
+      ],
+      "redaction_summary": {
+        "omitted_count": 0,
+        "redacted_count": 1,
+        "suppressed_claims": [],
+        "unsafe_to_emit_count": 0
+      },
+      "saturation_summary": {
+        "build_saturation": "red",
+        "recommended_operator_posture": "backoff_heavy_cargo"
+      },
+      "schema": "pi.swarm.progress_slo.v1",
+      "severity": "warn",
+      "source_status": "available",
+      "source_summary": {
+        "degraded": 1,
+        "malformed": 0,
+        "total": 10
+      },
+      "status": "warn",
+      "suppressed_claims": [],
+      "title": "Progress SLO posture build saturated"
+    },
     "severity_counts": {
-      "warn": 2
+      "warn": 3
     },
     "status": "ok",
     "summary": {
@@ -713,8 +829,73 @@
     "Close finished work with `br close <issue-id> --reason \"...\"` and `br sync --flush-only`.",
     "Final handoff must say Agent Mail was unavailable and Beads ownership was used as the coordination record.",
     "Inspect failed validation output before resuming or closing the active bead",
-    "Review degraded swarm-scale safety scorecard dimensions before release runpack signoff"
+    "Review degraded swarm-scale safety scorecard dimensions before release runpack signoff",
+    "Review progress SLO `build_saturated` before launching more swarm work"
   ],
+  "progress_slo": {
+    "confidence": 0.64,
+    "contract_version": "1.0.0",
+    "generated_at": "2026-05-09T09:00:00+00:00",
+    "guards": {
+      "advisory_only": true,
+      "does_not_replace_beads_agent_mail_rch_validation_broker_doctor_runpacks_context_or_ci": true,
+      "not_ci_success": true,
+      "not_release_claim_evidence": true
+    },
+    "metrics": {
+      "agent_mail_health": "green",
+      "closed_beads": 1,
+      "closed_with_commit_reference_count": 1,
+      "commits": 1,
+      "contradictory_source_records": 0,
+      "dependency_blocked_beads": 1,
+      "in_progress_beads": 2,
+      "malformed_source_records": 0,
+      "open_beads": 4,
+      "pushed_commits": 1,
+      "rch_posture": "saturated",
+      "rch_queue_depth": 12,
+      "rch_queue_saturation_threshold": 8,
+      "ready_beads": 2,
+      "stale_in_progress_candidates": 0,
+      "validation_broker_posture": "green",
+      "validation_failures": 0,
+      "validation_passes": 1
+    },
+    "next_actions": [
+      "Back off heavy cargo validation until RCH pressure clears"
+    ],
+    "progress_status": "build_saturated",
+    "reason_ids": [
+      "PROGRESS-SLO-RCH-SATURATED"
+    ],
+    "redaction_summary": {
+      "omitted_count": 0,
+      "redacted_count": 1,
+      "suppressed_claims": [],
+      "unsafe_to_emit_count": 0
+    },
+    "saturation_summary": {
+      "build_saturation": "red",
+      "coordination_saturation": "green",
+      "queue_convergence": "yellow",
+      "recommended_operator_posture": "backoff_heavy_cargo",
+      "validation_saturation": "green"
+    },
+    "schema": "pi.swarm.progress_slo.v1",
+    "source_path": "[WORKSPACE]/progress-slo.json",
+    "source_summary": {
+      "total": 1
+    },
+    "status": "ok",
+    "suppressed_claims": [],
+    "time_window": {
+      "comparison_baseline": "HEAD~1",
+      "duration_seconds": 3600,
+      "end_utc": "2026-05-09T09:00:00+00:00",
+      "start_utc": "2026-05-09T08:00:00+00:00"
+    }
+  },
   "purpose": "operator_handoff_not_release_performance_claim",
   "rch_admission": {
     "allow_local_fallback": false,
@@ -944,7 +1125,7 @@
       "path": "[WORKSPACE]/doctor.json",
       "schema": null,
       "sha256": "[SHA256]",
-      "size_bytes": 2782,
+      "size_bytes": 5137,
       "status": "ok"
     },
     {
@@ -1062,6 +1243,15 @@
       "schema": "pi.rch.artifact_sync_preflight.v1",
       "sha256": "[SHA256]",
       "size_bytes": 264,
+      "status": "ok"
+    },
+    {
+      "id": "progress_slo",
+      "issue": null,
+      "path": "[WORKSPACE]/progress-slo.json",
+      "schema": "pi.swarm.progress_slo.v1",
+      "sha256": "[SHA256]",
+      "size_bytes": 2002,
       "status": "ok"
     }
   ],
