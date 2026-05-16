@@ -1,0 +1,106 @@
+{
+  "schema": "pi.extension.quarantine_rehearsal_contract.v1",
+  "output_schema": "pi.extension.quarantine_rehearsal.v1",
+  "input_schema": "pi.extension.quarantine_rehearsal_input.v1",
+  "purpose": "no_network_extension_quarantine_and_rollback_rehearsal",
+  "description": "Contract for deterministic extension crash quarantine and rollback rehearsal output. The artifact can recommend quarantine, rollback, permission rejection, or pause/escalation, but it must not mutate extension files, configuration, Beads, Agent Mail, git, or network state.",
+  "allowed_statuses": [
+    "quarantine_recommended",
+    "rollback_recommended",
+    "permission_escalation_rejected",
+    "blocked"
+  ],
+  "allowed_decisions": [
+    "quarantine",
+    "rollback",
+    "reject_permission_change",
+    "pause_escalate"
+  ],
+  "reason_codes": [
+    "startup_crash_loop",
+    "runtime_crash_loop",
+    "permission_escalation_rejected",
+    "stale_provenance",
+    "missing_provenance",
+    "missing_policy",
+    "rollback_candidate_selected",
+    "rollback_candidate_untrusted",
+    "action_plan_projection"
+  ],
+  "operator_command_safety_classes": [
+    "read_only_probe",
+    "evidence_capture",
+    "beads_mutation_requires_operator",
+    "manual_config_change_requires_operator"
+  ],
+  "required_top_level_keys": [
+    "schema",
+    "generated_at",
+    "status",
+    "decision",
+    "purpose",
+    "extension",
+    "event",
+    "reason_codes",
+    "guardrails",
+    "provenance",
+    "policy",
+    "observations",
+    "rollback_selection",
+    "recommendations",
+    "operator_commands",
+    "action_plan_integration",
+    "authority_boundary"
+  ],
+  "required_true_guardrails": [
+    "dry_run_only",
+    "no_network",
+    "no_source_mutation",
+    "no_config_mutation",
+    "no_file_deletion",
+    "commands_require_operator_execution",
+    "fail_closed_on_missing_policy_or_provenance"
+  ],
+  "action_plan_projection_required_keys": [
+    "schema",
+    "status",
+    "purpose",
+    "source_plan_schema",
+    "input_pack_schema",
+    "input_pack_status",
+    "next_safest_action",
+    "operator_actions",
+    "failure_actions",
+    "source_statuses",
+    "source_classification",
+    "degraded_reasons",
+    "forbidden_actions",
+    "planner_guards",
+    "redaction_summary"
+  ],
+  "required_fixture_scenarios": [
+    "startup_crash_loop_quarantine",
+    "runtime_crash_loop_quarantine",
+    "permission_escalation_rejection",
+    "stale_provenance_fail_closed",
+    "trusted_rollback_candidate",
+    "action_plan_projection",
+    "missing_policy_fail_closed",
+    "missing_provenance_fail_closed"
+  ],
+  "authority_boundary": {
+    "does_not_replace": [
+      "extension capability policy",
+      "extension conformance tests",
+      "operator approval",
+      "Beads",
+      "Agent Mail",
+      "git",
+      "CI"
+    ],
+    "may_recommend_only": true,
+    "must_not_execute_commands": true,
+    "must_refuse_output_overwrite": true,
+    "must_not_delete_or_disable_extensions": true
+  }
+}

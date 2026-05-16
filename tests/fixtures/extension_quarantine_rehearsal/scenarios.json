@@ -1,0 +1,382 @@
+{
+  "schema": "pi.extension.quarantine_rehearsal_fixtures.v1",
+  "scenarios": [
+    {
+      "id": "startup_crash_loop_quarantine",
+      "input": {
+        "schema": "pi.extension.quarantine_rehearsal_input.v1",
+        "scenario_id": "startup_crash_loop_quarantine",
+        "extension": {
+          "id": "ext-startup-loop",
+          "version": "1.4.0",
+          "manifest_path": "tests/fixtures/extensions/ext-startup-loop/manifest.json",
+          "config_path": "tests/fixtures/extensions/config.json"
+        },
+        "event": {
+          "kind": "startup_failure",
+          "failures_24h": 7,
+          "startup_failures": 7,
+          "last_error": "before_agent_start threw ExtensionStartupError"
+        },
+        "provenance": {
+          "status": "present",
+          "evidence_paths": [
+            "docs/evidence/extensions/startup-loop.json"
+          ],
+          "generated_at": "2026-05-16T00:00:00+00:00",
+          "manifest_hash": "sha256:startup"
+        },
+        "policy": {
+          "status": "present",
+          "allowed_permissions": [
+            "filesystem.read"
+          ],
+          "quarantine_threshold": 3
+        }
+      },
+      "expected": {
+        "status": "quarantine_recommended",
+        "decision": "quarantine",
+        "reason_codes": [
+          "startup_crash_loop",
+          "action_plan_projection"
+        ],
+        "action_plan_decision": "pause_or_surface_blocker",
+        "mutating_commands_require_confirmation": true
+      }
+    },
+    {
+      "id": "runtime_crash_loop_quarantine",
+      "input": {
+        "schema": "pi.extension.quarantine_rehearsal_input.v1",
+        "scenario_id": "runtime_crash_loop_quarantine",
+        "extension": {
+          "id": "ext-runtime-loop",
+          "version": "2.0.1",
+          "manifest_path": "tests/fixtures/extensions/ext-runtime-loop/manifest.json"
+        },
+        "event": {
+          "kind": "runtime_failure",
+          "failures_24h": 5,
+          "runtime_failures": 5,
+          "last_error": "tool dispatch panic"
+        },
+        "provenance": {
+          "status": "present",
+          "evidence_paths": [
+            "docs/evidence/extensions/runtime-loop.json"
+          ],
+          "generated_at": "2026-05-16T00:00:00+00:00",
+          "manifest_hash": "sha256:runtime"
+        },
+        "policy": {
+          "status": "present",
+          "allowed_permissions": [
+            "filesystem.read"
+          ],
+          "quarantine_threshold": 3
+        },
+        "rollback_candidates": [
+          {
+            "version": "1.9.9",
+            "artifact_path": "",
+            "provenance_status": "missing",
+            "policy_status": "present",
+            "compatibility": "compatible",
+            "rank": 1
+          }
+        ]
+      },
+      "expected": {
+        "status": "quarantine_recommended",
+        "decision": "quarantine",
+        "reason_codes": [
+          "runtime_crash_loop",
+          "rollback_candidate_untrusted",
+          "action_plan_projection"
+        ],
+        "action_plan_decision": "pause_or_surface_blocker",
+        "mutating_commands_require_confirmation": true
+      }
+    },
+    {
+      "id": "permission_escalation_rejection",
+      "input": {
+        "schema": "pi.extension.quarantine_rehearsal_input.v1",
+        "scenario_id": "permission_escalation_rejection",
+        "extension": {
+          "id": "ext-permission-drift",
+          "version": "3.2.0",
+          "manifest_path": "tests/fixtures/extensions/ext-permission-drift/manifest.json"
+        },
+        "event": {
+          "kind": "permission_drift",
+          "failures_24h": 0,
+          "requested_permissions": [
+            "filesystem.read",
+            "network.fetch",
+            "process.spawn"
+          ],
+          "last_error": "manifest requested new permissions"
+        },
+        "provenance": {
+          "status": "present",
+          "evidence_paths": [
+            "docs/evidence/extensions/permission-drift.json"
+          ],
+          "generated_at": "2026-05-16T00:00:00+00:00",
+          "manifest_hash": "sha256:permission"
+        },
+        "policy": {
+          "status": "present",
+          "allowed_permissions": [
+            "filesystem.read"
+          ],
+          "quarantine_threshold": 3
+        }
+      },
+      "expected": {
+        "status": "permission_escalation_rejected",
+        "decision": "reject_permission_change",
+        "reason_codes": [
+          "permission_escalation_rejected",
+          "action_plan_projection"
+        ],
+        "action_plan_decision": "pause_or_surface_blocker",
+        "mutating_commands_require_confirmation": true
+      }
+    },
+    {
+      "id": "stale_provenance_fail_closed",
+      "input": {
+        "schema": "pi.extension.quarantine_rehearsal_input.v1",
+        "scenario_id": "stale_provenance_fail_closed",
+        "extension": {
+          "id": "ext-stale-provenance",
+          "version": "4.0.0",
+          "manifest_path": "tests/fixtures/extensions/ext-stale-provenance/manifest.json"
+        },
+        "event": {
+          "kind": "runtime_failure",
+          "failures_24h": 9,
+          "runtime_failures": 9,
+          "last_error": "extension hostcall failed"
+        },
+        "provenance": {
+          "status": "stale",
+          "evidence_paths": [
+            "docs/evidence/extensions/stale-provenance.json"
+          ],
+          "generated_at": "2026-05-10T00:00:00+00:00",
+          "manifest_hash": "sha256:stale"
+        },
+        "policy": {
+          "status": "present",
+          "allowed_permissions": [
+            "filesystem.read"
+          ],
+          "quarantine_threshold": 3
+        }
+      },
+      "expected": {
+        "status": "blocked",
+        "decision": "pause_escalate",
+        "reason_codes": [
+          "stale_provenance",
+          "action_plan_projection"
+        ],
+        "action_plan_decision": "pause_or_surface_blocker",
+        "mutating_commands_require_confirmation": true
+      }
+    },
+    {
+      "id": "trusted_rollback_candidate",
+      "input": {
+        "schema": "pi.extension.quarantine_rehearsal_input.v1",
+        "scenario_id": "trusted_rollback_candidate",
+        "extension": {
+          "id": "ext-rollback",
+          "version": "5.1.0",
+          "manifest_path": "tests/fixtures/extensions/ext-rollback/manifest.json"
+        },
+        "event": {
+          "kind": "runtime_failure",
+          "failures_24h": 4,
+          "runtime_failures": 4,
+          "last_error": "tool call regression after extension update"
+        },
+        "provenance": {
+          "status": "present",
+          "evidence_paths": [
+            "docs/evidence/extensions/rollback.json"
+          ],
+          "generated_at": "2026-05-16T00:00:00+00:00",
+          "manifest_hash": "sha256:rollback"
+        },
+        "policy": {
+          "status": "present",
+          "allowed_permissions": [
+            "filesystem.read"
+          ],
+          "quarantine_threshold": 3
+        },
+        "rollback_candidates": [
+          {
+            "version": "5.0.2",
+            "artifact_path": "docs/evidence/extensions/artifacts/ext-rollback-5.0.2.tgz",
+            "provenance_status": "present",
+            "policy_status": "present",
+            "compatibility": "compatible",
+            "rank": 1
+          },
+          {
+            "version": "4.9.0",
+            "artifact_path": "docs/evidence/extensions/artifacts/ext-rollback-4.9.0.tgz",
+            "provenance_status": "present",
+            "policy_status": "missing",
+            "compatibility": "compatible",
+            "rank": 2
+          }
+        ]
+      },
+      "expected": {
+        "status": "rollback_recommended",
+        "decision": "rollback",
+        "reason_codes": [
+          "runtime_crash_loop",
+          "rollback_candidate_selected",
+          "action_plan_projection"
+        ],
+        "selected_rollback_version": "5.0.2",
+        "action_plan_decision": "pause_or_surface_blocker",
+        "mutating_commands_require_confirmation": true
+      }
+    },
+    {
+      "id": "action_plan_projection",
+      "input": {
+        "schema": "pi.extension.quarantine_rehearsal_input.v1",
+        "scenario_id": "action_plan_projection",
+        "extension": {
+          "id": "ext-action-plan",
+          "version": "1.0.0",
+          "manifest_path": "tests/fixtures/extensions/ext-action-plan/manifest.json"
+        },
+        "event": {
+          "kind": "startup_failure",
+          "failures_24h": 3,
+          "startup_failures": 3,
+          "last_error": "activation failed"
+        },
+        "provenance": {
+          "status": "present",
+          "evidence_paths": [
+            "docs/evidence/extensions/action-plan.json"
+          ],
+          "generated_at": "2026-05-16T00:00:00+00:00",
+          "manifest_hash": "sha256:action"
+        },
+        "policy": {
+          "status": "present",
+          "allowed_permissions": [
+            "filesystem.read"
+          ],
+          "quarantine_threshold": 3
+        }
+      },
+      "expected": {
+        "status": "quarantine_recommended",
+        "decision": "quarantine",
+        "reason_codes": [
+          "startup_crash_loop",
+          "action_plan_projection"
+        ],
+        "action_plan_decision": "pause_or_surface_blocker",
+        "mutating_commands_require_confirmation": true
+      }
+    },
+    {
+      "id": "missing_policy_fail_closed",
+      "input": {
+        "schema": "pi.extension.quarantine_rehearsal_input.v1",
+        "scenario_id": "missing_policy_fail_closed",
+        "extension": {
+          "id": "ext-missing-policy",
+          "version": "1.0.0",
+          "manifest_path": "tests/fixtures/extensions/ext-missing-policy/manifest.json"
+        },
+        "event": {
+          "kind": "permission_drift",
+          "failures_24h": 0,
+          "requested_permissions": [
+            "network.fetch"
+          ],
+          "last_error": "policy unavailable"
+        },
+        "provenance": {
+          "status": "present",
+          "evidence_paths": [
+            "docs/evidence/extensions/missing-policy.json"
+          ],
+          "generated_at": "2026-05-16T00:00:00+00:00",
+          "manifest_hash": "sha256:missing-policy"
+        },
+        "policy": {
+          "status": "missing",
+          "allowed_permissions": []
+        }
+      },
+      "expected": {
+        "status": "blocked",
+        "decision": "pause_escalate",
+        "reason_codes": [
+          "missing_policy",
+          "action_plan_projection"
+        ],
+        "action_plan_decision": "pause_or_surface_blocker",
+        "mutating_commands_require_confirmation": true
+      }
+    },
+    {
+      "id": "missing_provenance_fail_closed",
+      "input": {
+        "schema": "pi.extension.quarantine_rehearsal_input.v1",
+        "scenario_id": "missing_provenance_fail_closed",
+        "extension": {
+          "id": "ext-missing-provenance",
+          "version": "1.0.0",
+          "manifest_path": "tests/fixtures/extensions/ext-missing-provenance/manifest.json"
+        },
+        "event": {
+          "kind": "startup_failure",
+          "failures_24h": 6,
+          "startup_failures": 6,
+          "last_error": "startup loop but no trusted evidence"
+        },
+        "provenance": {
+          "status": "missing",
+          "evidence_paths": [],
+          "generated_at": "",
+          "manifest_hash": ""
+        },
+        "policy": {
+          "status": "present",
+          "allowed_permissions": [
+            "filesystem.read"
+          ],
+          "quarantine_threshold": 3
+        }
+      },
+      "expected": {
+        "status": "blocked",
+        "decision": "pause_escalate",
+        "reason_codes": [
+          "missing_provenance",
+          "action_plan_projection"
+        ],
+        "action_plan_decision": "pause_or_surface_blocker",
+        "mutating_commands_require_confirmation": true
+      }
+    }
+  ]
+}
