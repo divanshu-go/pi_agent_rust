@@ -2341,6 +2341,250 @@ mod tests {
         }
     }
 
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn scheduler_fairness_replay_under_hostcall_timer_and_event_storms() {
+        const ROUNDS: usize = 160;
+        const TIMERS_PER_ROUND: usize = 4;
+        const HOSTCALLS_PER_ROUND: usize = 12;
+        const STREAMS_PER_ROUND: usize = 2;
+        const CHUNKS_PER_STREAM: usize = 3;
+        const EVENTS_PER_ROUND: usize = 2;
+        const MAX_CLASS_GAP_TICKS: u64 = 24;
+
+        let clock = DeterministicClock::new(0);
+        let mut sched = Scheduler::with_clock(clock);
+        let mut trace = Vec::new();
+        let mut class_counts = std::collections::BTreeMap::<&'static str, u64>::new();
+        let mut last_class_tick = std::collections::BTreeMap::<&'static str, u64>::new();
+        let mut max_class_gap = std::collections::BTreeMap::<&'static str, u64>::new();
+        let mut last_stream_seq = std::collections::BTreeMap::<String, u64>::new();
+        let mut stream_final_counts = std::collections::BTreeMap::<String, u64>::new();
+        let mut timer_groups = Vec::<Vec<u64>>::new();
+        let mut max_macrotask_depth = 0usize;
+        let mut max_timer_count = 0usize;
+        let mut first_violation: Option<String> = None;
+
+        for round in 0..ROUNDS {
+            let expected_timers = (0..TIMERS_PER_ROUND)
+                .map(|_| sched.set_timeout(1))
+                .collect::<Vec<_>>();
+
+            for call_idx in 0..HOSTCALLS_PER_ROUND {
+                let call_id = format!("round-{round}-call-{call_idx}");
+                let outcome = if call_idx % 5 == 0 {
+                    HostcallOutcome::Error {
+                        code: "E_REPLAY".to_string(),
+                        message: "synthetic replay error".to_string(),
+                    }
+                } else {
+                    HostcallOutcome::Success(
+                        serde_json::json!({ "round": round, "call": call_idx }),
+                    )
+                };
+                sched.enqueue_hostcall_complete(call_id, outcome);
+            }
+
+            for stream_idx in 0..STREAMS_PER_ROUND {
+                let call_id = format!("round-{round}-stream-{stream_idx}");
+                for chunk_idx in 0..CHUNKS_PER_STREAM {
+                    sched.enqueue_stream_chunk(
+                        call_id.clone(),
+                        chunk_idx as u64,
+                        serde_json::json!({
+                            "round": round,
+                            "stream": stream_idx,
+                            "chunk": chunk_idx,
+                        }),
+                        chunk_idx + 1 == CHUNKS_PER_STREAM,
+                    );
+                }
+            }
+
+            sched.enqueue_event(
+                format!("cancel-{round}"),
+                serde_json::json!({
+                    "kind": "cancel",
+                    "round": round,
+                    "target": format!("round-{round}-call-0"),
+                }),
+            );
+            sched.enqueue_event(
+                format!("inbound-{round}"),
+                serde_json::json!({ "kind": "inbound", "round": round }),
+            );
+
+            max_macrotask_depth = max_macrotask_depth.max(sched.macrotask_count());
+            max_timer_count = max_timer_count.max(sched.timer_count());
+
+            sched.clock.advance(1);
+
+            let mut round_timers = Vec::new();
+            while let Some(task) = sched.tick() {
+                max_macrotask_depth = max_macrotask_depth.max(sched.macrotask_count());
+                max_timer_count = max_timer_count.max(sched.timer_count());
+
+                let tick = u64::try_from(trace.len()).expect("trace length fits in u64");
+                let class = match &task.kind {
+                    MacrotaskKind::TimerFired { timer_id } => {
+                        round_timers.push(*timer_id);
+                        "timer"
+                    }
+                    MacrotaskKind::HostcallComplete { call_id, outcome } => match outcome {
+                        HostcallOutcome::Success(_) => "hostcall_success",
+                        HostcallOutcome::Error { .. } => "hostcall_error",
+                        HostcallOutcome::StreamChunk {
+                            sequence, is_final, ..
+                        } => {
+                            match last_stream_seq.get(call_id) {
+                                Some(previous) if *sequence != previous.saturating_add(1) => {
+                                    first_violation.get_or_insert_with(|| {
+                                        format!(
+                                            "stream {call_id} sequence jumped from {previous} to {sequence}"
+                                        )
+                                    });
+                                }
+                                None if *sequence != 0 => {
+                                    first_violation.get_or_insert_with(|| {
+                                        format!("stream {call_id} started at sequence {sequence}")
+                                    });
+                                }
+                                _ => {}
+                            }
+                            last_stream_seq.insert(call_id.clone(), *sequence);
+                            if *is_final {
+                                *stream_final_counts.entry(call_id.clone()).or_default() += 1;
+                                "stream_final"
+                            } else {
+                                "stream_chunk"
+                            }
+                        }
+                    },
+                    MacrotaskKind::InboundEvent { event_id, .. } => {
+                        if event_id.starts_with("cancel-") {
+                            "cancel_event"
+                        } else {
+                            "inbound_event"
+                        }
+                    }
+                };
+
+                *class_counts.entry(class).or_default() += 1;
+                if let Some(previous_tick) = last_class_tick.insert(class, tick) {
+                    let gap = tick.saturating_sub(previous_tick);
+                    let max_gap = max_class_gap.entry(class).or_default();
+                    *max_gap = (*max_gap).max(gap);
+                    if gap > MAX_CLASS_GAP_TICKS {
+                        first_violation.get_or_insert_with(|| {
+                            format!("class {class} starved for {gap} ticks")
+                        });
+                    }
+                }
+
+                trace.push(trace_entry(&task));
+            }
+
+            if round_timers != expected_timers {
+                first_violation.get_or_insert_with(|| {
+                    format!(
+                        "round {round} timers fired out of insertion order: expected {expected_timers:?}, got {round_timers:?}"
+                    )
+                });
+            }
+            timer_groups.push(round_timers);
+        }
+
+        let expected_total = ROUNDS
+            * (TIMERS_PER_ROUND
+                + HOSTCALLS_PER_ROUND
+                + (STREAMS_PER_ROUND * CHUNKS_PER_STREAM)
+                + EVENTS_PER_ROUND);
+        let expected_streams = ROUNDS * STREAMS_PER_ROUND;
+        assert_eq!(trace.len(), expected_total);
+        assert_eq!(first_violation, None);
+        assert!(
+            max_macrotask_depth
+                <= HOSTCALLS_PER_ROUND
+                    + STREAMS_PER_ROUND * CHUNKS_PER_STREAM
+                    + EVENTS_PER_ROUND
+                    + TIMERS_PER_ROUND,
+            "macrotask queue grew beyond one replay round: {max_macrotask_depth}"
+        );
+        assert_eq!(max_timer_count, TIMERS_PER_ROUND);
+        assert_eq!(timer_groups.len(), ROUNDS);
+        assert_eq!(stream_final_counts.len(), expected_streams);
+        assert!(
+            stream_final_counts.values().all(|count| *count == 1),
+            "each stream should complete exactly once: {stream_final_counts:?}"
+        );
+
+        for required in [
+            "timer",
+            "hostcall_success",
+            "hostcall_error",
+            "stream_chunk",
+            "stream_final",
+            "cancel_event",
+            "inbound_event",
+        ] {
+            assert!(
+                class_counts.get(required).copied().unwrap_or_default() > 0,
+                "missing replay class {required}"
+            );
+            assert!(
+                max_class_gap.get(required).copied().unwrap_or_default() <= MAX_CLASS_GAP_TICKS,
+                "class {required} exceeded fairness gap: {max_class_gap:?}"
+            );
+        }
+
+        let summary = serde_json::json!({
+            "schema": "pi.scheduler.fairness_replay.v1",
+            "rounds": ROUNDS,
+            "total_tasks": trace.len(),
+            "class_counts": class_counts,
+            "max_class_gap_ticks": max_class_gap,
+            "max_macrotask_queue_depth": max_macrotask_depth,
+            "max_timer_count": max_timer_count,
+            "equal_deadline_timer_order": "stable",
+            "stream_count": expected_streams,
+            "stream_final_count": stream_final_counts.len(),
+            "first_violation": first_violation,
+        });
+
+        assert_eq!(
+            summary,
+            serde_json::json!({
+                "schema": "pi.scheduler.fairness_replay.v1",
+                "rounds": 160,
+                "total_tasks": 3840,
+                "class_counts": {
+                    "cancel_event": 160,
+                    "hostcall_error": 480,
+                    "hostcall_success": 1440,
+                    "inbound_event": 160,
+                    "stream_chunk": 640,
+                    "stream_final": 320,
+                    "timer": 640,
+                },
+                "max_class_gap_ticks": {
+                    "cancel_event": 24,
+                    "hostcall_error": 14,
+                    "hostcall_success": 14,
+                    "inbound_event": 24,
+                    "stream_chunk": 20,
+                    "stream_final": 21,
+                    "timer": 21,
+                },
+                "max_macrotask_queue_depth": 23,
+                "max_timer_count": 4,
+                "equal_deadline_timer_order": "stable",
+                "stream_count": 320,
+                "stream_final_count": 320,
+                "first_violation": null,
+            })
+        );
+    }
+
     // ── Seq Display format ──────────────────────────────────────────
 
     #[test]
