@@ -13,8 +13,11 @@ from __future__ import annotations
 import argparse
 import contextlib
 import difflib
+import fnmatch
 import json
 import os
+import re
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -35,6 +38,23 @@ DEFAULT_STALE_CLAIM_ACTIVITY_FRESH_HOURS = 6
 DEFAULT_STALE_CLAIM_ACTIVITY_PATHS = (
     "tests/full_suite_gate/swarm_activity_events.jsonl",
     "tests/full_suite_gate/swarm_activity_ledger.jsonl",
+)
+BEAD_ID_PATTERN = re.compile(r"\bbd-[A-Za-z0-9][A-Za-z0-9.-]*\b")
+BACKTICK_PATH_PATTERN = re.compile(r"`([^`]+)`")
+BARE_REPO_PATH_PATTERN = re.compile(
+    r"\b(?:src|tests|scripts|docs|crates|examples|benches|\.beads)/"
+    r"[A-Za-z0-9_./*{}\\[\\]-]+"
+)
+REPO_PATH_SUFFIXES = (
+    ".json",
+    ".jsonl",
+    ".md",
+    ".py",
+    ".rs",
+    ".sh",
+    ".toml",
+    ".yaml",
+    ".yml",
 )
 
 DEFAULT_TIMESTAMP_PATHS = (
@@ -703,6 +723,87 @@ def collect_claim_activity(
     return latest, used_paths, warnings
 
 
+def git_output(repo_root: Path, args: list[str]) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), *args],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def collect_dirty_worktree_paths(repo_root: Path) -> tuple[str, ...]:
+    output = git_output(repo_root, ["status", "--porcelain=v1"])
+    if output is None:
+        return ()
+
+    paths: list[str] = []
+    for line in output.splitlines():
+        if len(line) < 4:
+            continue
+        path = line[3:].strip()
+        if " -> " in path:
+            path = path.rsplit(" -> ", 1)[1]
+        if path:
+            paths.append(path)
+    return tuple(sorted(set(paths)))
+
+
+def collect_recent_commit_activity(
+    repo_root: Path,
+    *,
+    now: datetime,
+    fresh_after_hours: int,
+) -> dict[str, ClaimActivityEvidence]:
+    if fresh_after_hours <= 0:
+        return {}
+    since = now - timedelta(hours=fresh_after_hours)
+    output = git_output(
+        repo_root,
+        [
+            "log",
+            f"--since={format_datetime(since)}",
+            "--format=%H%x1f%cI%x1f%B%x1e",
+            "-n",
+            "200",
+        ],
+    )
+    if output is None:
+        return {}
+
+    latest: dict[str, ClaimActivityEvidence] = {}
+    for raw_record in output.split("\x1e"):
+        record = raw_record.strip()
+        if not record:
+            continue
+        parts = record.split("\x1f", 2)
+        if len(parts) != 3:
+            continue
+        sha, raw_timestamp, message = parts
+        timestamp = parse_iso_datetime(raw_timestamp)
+        if timestamp is None:
+            continue
+        for bead_id in sorted(set(BEAD_ID_PATTERN.findall(message))):
+            evidence = ClaimActivityEvidence(
+                bead_id=bead_id,
+                timestamp=timestamp,
+                source=f"git log:{sha[:12]}",
+                agent_name=None,
+            )
+            current = latest.get(bead_id)
+            if current is None or evidence.timestamp > current.timestamp:
+                latest[bead_id] = evidence
+    return latest
+
+
 def read_beads_records(repo_root: Path) -> tuple[list[dict[str, Any]], str | None, str]:
     relative_path = ".beads/issues.jsonl"
     rows, error = load_jsonl_objects(repo_root / relative_path)
@@ -716,6 +817,140 @@ def issue_assignee(issue: dict[str, Any]) -> str | None:
     return None
 
 
+def as_string_list(value: Any) -> list[str]:
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    if isinstance(value, list):
+        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+    return []
+
+
+def looks_like_repo_path(value: str) -> bool:
+    candidate = value.strip().strip(".,;:)")
+    if not candidate or " " in candidate or candidate.startswith("-"):
+        return False
+    if "://" in candidate:
+        return False
+    if candidate.startswith(("br ", "git ", "cargo ")):
+        return False
+    return "/" in candidate or candidate.endswith(REPO_PATH_SUFFIXES)
+
+
+def normalize_repo_path(value: str) -> str | None:
+    candidate = value.strip().strip(".,;:)")
+    while candidate.startswith("./"):
+        candidate = candidate[2:]
+    if not looks_like_repo_path(candidate):
+        return None
+    return candidate
+
+
+def append_surface_path(paths: list[str], value: str) -> None:
+    normalized = normalize_repo_path(value)
+    if normalized is not None and normalized not in paths:
+        paths.append(normalized)
+
+
+def append_surface_paths_from_mapping(paths: list[str], payload: dict[str, Any]) -> None:
+    for key in (
+        "path",
+        "paths",
+        "file",
+        "files",
+        "file_path",
+        "file_paths",
+        "reservation_path",
+        "reservation_paths",
+        "touched_path",
+        "touched_paths",
+    ):
+        for value in as_string_list(payload.get(key)):
+            append_surface_path(paths, value)
+
+
+def issue_surface_paths(issue: dict[str, Any]) -> tuple[str, ...]:
+    paths: list[str] = []
+    append_surface_paths_from_mapping(paths, issue)
+
+    metadata = issue.get("metadata")
+    if isinstance(metadata, str) and metadata.strip():
+        try:
+            parsed = json.loads(metadata)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            append_surface_paths_from_mapping(paths, parsed)
+    elif isinstance(metadata, dict):
+        append_surface_paths_from_mapping(paths, metadata)
+
+    text_parts = []
+    for key in ("title", "description"):
+        value = issue.get(key)
+        if isinstance(value, str):
+            text_parts.append(value)
+    text = "\n".join(text_parts)
+    for match in BACKTICK_PATH_PATTERN.findall(text):
+        append_surface_path(paths, match)
+    for match in BARE_REPO_PATH_PATTERN.findall(text):
+        append_surface_path(paths, match)
+
+    return tuple(paths)
+
+
+def dirty_path_matches_surface(dirty_path: str, surface_path: str) -> bool:
+    dirty = dirty_path.strip().lstrip("./")
+    surface = surface_path.strip().lstrip("./")
+    if not dirty or not surface:
+        return False
+    if "*" in surface:
+        return fnmatch.fnmatchcase(dirty, surface)
+    surface_prefix = surface.rstrip("/")
+    return dirty == surface_prefix or dirty.startswith(f"{surface_prefix}/")
+
+
+def dirty_paths_for_issue(
+    issue: dict[str, Any],
+    dirty_paths: tuple[str, ...],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    surface_paths = issue_surface_paths(issue)
+    if not surface_paths or not dirty_paths:
+        return surface_paths, ()
+    matches = [
+        dirty_path
+        for dirty_path in dirty_paths
+        if any(dirty_path_matches_surface(dirty_path, surface) for surface in surface_paths)
+    ]
+    return surface_paths, tuple(sorted(set(matches)))
+
+
+def safe_reopen_checklist(
+    bead_id: str,
+    assignee: str | None,
+    surface_paths: tuple[str, ...],
+) -> list[str]:
+    owner_step = (
+        f"Check Agent Mail thread {bead_id} and ask {assignee} for status; "
+        "treat mail errors as degraded evidence, not abandonment."
+        if assignee is not None
+        else f"Check Agent Mail thread {bead_id}; no assignee is recorded in Beads."
+    )
+    status_step = (
+        "Run `git status --short -- "
+        + " ".join(surface_paths[:8])
+        + "` and inspect dirty files on the bead surface."
+        if surface_paths
+        else "Run `git status --short` and inspect whether dirty files clearly belong to the bead."
+    )
+    return [
+        f"Run `br show {bead_id}` and confirm status, assignee, dependencies, and updated_at.",
+        owner_step,
+        f"Run `git log --oneline --fixed-strings --grep={bead_id} -n 20` "
+        "and review recent commits.",
+        status_step,
+        f"Only after those checks, run `br update {bead_id} --status open` if reopening is justified.",
+    ]
+
+
 def classify_stale_claim(
     issue: dict[str, Any],
     *,
@@ -723,17 +958,22 @@ def classify_stale_claim(
     stale_after_hours: int,
     activity_fresh_after_hours: int,
     activity: ClaimActivityEvidence | None,
+    recent_commit: ClaimActivityEvidence | None,
+    dirty_worktree_paths: tuple[str, ...],
     bead_source: str,
 ) -> dict[str, Any]:
     bead_id = str(issue.get("id") or "")
     title = str(issue.get("title") or "")
     status = str(issue.get("status") or "")
     assignee = issue_assignee(issue)
+    surface_paths, dirty_matches = dirty_paths_for_issue(issue, dirty_worktree_paths)
     updated_at_raw = issue.get("updated_at")
     updated_at = parse_iso_datetime(updated_at_raw)
     bead_age_hours: float | None = None
     latest_activity_age_hours: float | None = None
     latest_activity_at: str | None = None
+    latest_commit_age_hours: float | None = None
+    latest_commit_at: str | None = None
     evidence_source = bead_source
     reasons: list[str] = []
 
@@ -747,17 +987,51 @@ def classify_stale_claim(
         latest_activity_age_hours = max(0.0, (now - activity.timestamp).total_seconds() / 3600.0)
         evidence_source = activity.source
 
+    if recent_commit is not None:
+        latest_commit_at = format_datetime(recent_commit.timestamp)
+        latest_commit_age_hours = max(0.0, (now - recent_commit.timestamp).total_seconds() / 3600.0)
+        evidence_source = recent_commit.source
+
     if updated_at is None:
         classification = "missing_evidence"
+        operator_bucket = "ambiguous"
         recommended_action = (
             f"Report-only: do not reopen or reassign {bead_id}; inspect Beads and Agent Mail "
             "for owner evidence, then update the bead manually only after confirmation."
         )
     elif bead_age_hours < stale_after_hours:
         classification = "active"
+        operator_bucket = "fresh"
         recommended_action = (
             f"No status change for {bead_id}; bead updated {bead_age_hours:.1f}h ago, "
             f"below stale threshold {stale_after_hours}h."
+        )
+    elif dirty_matches:
+        classification = "active_dirty_worktree"
+        operator_bucket = "fresh"
+        evidence_source = "git status:dirty_worktree"
+        reasons.append(
+            "dirty worktree paths touch the bead surface: "
+            + ", ".join(dirty_matches[:8])
+        )
+        recommended_action = (
+            f"No reopen for {bead_id}; dirty worktree evidence touches the bead surface, "
+            "so the claim may still be active."
+        )
+    elif (
+        recent_commit is not None
+        and latest_commit_age_hours is not None
+        and latest_commit_age_hours < activity_fresh_after_hours
+    ):
+        classification = "active_recent_commit"
+        operator_bucket = "fresh"
+        reasons.append(
+            f"recent commit evidence is {latest_commit_age_hours:.1f}h old, "
+            f"below activity freshness threshold {activity_fresh_after_hours}h"
+        )
+        recommended_action = (
+            f"No reopen for {bead_id}; recent git commit evidence from {recent_commit.source} "
+            "indicates the claim is still active."
         )
     elif (
         activity is not None
@@ -765,6 +1039,7 @@ def classify_stale_claim(
         and latest_activity_age_hours < activity_fresh_after_hours
     ):
         classification = "active_recent_coordination"
+        operator_bucket = "fresh"
         reasons.append(
             f"coordination activity is {latest_activity_age_hours:.1f}h old, "
             f"below activity freshness threshold {activity_fresh_after_hours}h"
@@ -774,20 +1049,40 @@ def classify_stale_claim(
             "indicates the claim is still active."
         )
     elif assignee is None:
-        classification = "stale_unassigned"
+        classification = "stale_candidate_unassigned"
+        operator_bucket = "stale_candidate"
         reasons.append("in_progress bead has no assignee")
         recommended_action = (
             f"Report-only: consider `br update {bead_id} --status open` only after confirming "
             "there is no owner in Agent Mail or the activity ledger; no automatic change was made."
         )
-    else:
-        classification = "stale_needs_owner_follow_up"
+    elif activity is None and recent_commit is None:
+        classification = "ambiguous_missing_coordination"
+        operator_bucket = "ambiguous"
         reasons.append(f"bead update age {bead_age_hours:.1f}h meets threshold {stale_after_hours}h")
-        if activity is None:
-            reasons.append("no optional coordination activity evidence was available")
-        else:
+        reasons.append(
+            "optional Agent Mail/activity evidence is missing or degraded; absence is not proof "
+            "the assignee is gone"
+        )
+        if not surface_paths:
+            reasons.append("no explicit bead surface paths were found for dirty-file matching")
+        recommended_action = (
+            f"Report-only: message {assignee} in thread {bead_id} and inspect Beads, Agent Mail, "
+            "recent commits, and dirty files before reopening. No automatic reopen or reassignment "
+            "was performed."
+        )
+    else:
+        classification = "stale_candidate_owner_follow_up"
+        operator_bucket = "stale_candidate"
+        reasons.append(f"bead update age {bead_age_hours:.1f}h meets threshold {stale_after_hours}h")
+        if activity is not None:
             reasons.append(
                 f"latest coordination activity age {latest_activity_age_hours:.1f}h "
+                f"meets freshness threshold {activity_fresh_after_hours}h"
+            )
+        if recent_commit is not None:
+            reasons.append(
+                f"latest commit evidence age {latest_commit_age_hours:.1f}h "
                 f"meets freshness threshold {activity_fresh_after_hours}h"
             )
         recommended_action = (
@@ -809,9 +1104,19 @@ def classify_stale_claim(
             if latest_activity_age_hours is not None
             else None
         ),
+        "latest_commit_at": latest_commit_at,
+        "latest_commit_age_hours": (
+            round(latest_commit_age_hours, 2)
+            if latest_commit_age_hours is not None
+            else None
+        ),
         "evidence_source": evidence_source,
         "classification": classification,
+        "operator_bucket": operator_bucket,
+        "surface_paths": list(surface_paths),
+        "dirty_worktree_paths": list(dirty_matches),
         "recommended_operator_action": recommended_action,
+        "safe_reopen_checklist": safe_reopen_checklist(bead_id, assignee, surface_paths),
         "reasons": reasons,
     }
 
@@ -823,12 +1128,22 @@ def build_stale_claim_report(
     stale_after_hours: int,
     activity_fresh_after_hours: int,
     activity_paths: tuple[str, ...],
+    dirty_worktree_paths: tuple[str, ...] | None = None,
+    recent_commit_activity: dict[str, ClaimActivityEvidence] | None = None,
 ) -> dict[str, Any]:
     rows, beads_error, beads_path = read_beads_records(repo_root)
     activity_by_bead, used_activity_paths, activity_warnings = collect_claim_activity(
         repo_root,
         activity_paths,
     )
+    if dirty_worktree_paths is None:
+        dirty_worktree_paths = collect_dirty_worktree_paths(repo_root)
+    if recent_commit_activity is None:
+        recent_commit_activity = collect_recent_commit_activity(
+            repo_root,
+            now=now,
+            fresh_after_hours=activity_fresh_after_hours,
+        )
     warnings = activity_warnings[:]
     if beads_error is not None:
         warnings.append(beads_error)
@@ -840,23 +1155,25 @@ def build_stale_claim_report(
             stale_after_hours=stale_after_hours,
             activity_fresh_after_hours=activity_fresh_after_hours,
             activity=activity_by_bead.get(str(issue.get("id") or "")),
+            recent_commit=recent_commit_activity.get(str(issue.get("id") or "")),
+            dirty_worktree_paths=dirty_worktree_paths,
             bead_source=beads_path,
         )
         for issue in rows
         if issue.get("status") == "in_progress"
     ]
     classifications: dict[str, int] = {}
+    buckets: dict[str, int] = {}
     for item in items:
         classification = item["classification"]
         classifications[classification] = classifications.get(classification, 0) + 1
+        bucket = item["operator_bucket"]
+        buckets[bucket] = buckets.get(bucket, 0) + 1
 
-    stale_count = sum(
-        count
-        for classification, count in classifications.items()
-        if classification.startswith("stale_")
-    )
+    stale_count = buckets.get("stale_candidate", 0)
+    ambiguous_count = buckets.get("ambiguous", 0)
     missing_evidence_count = classifications.get("missing_evidence", 0)
-    status = "needs_coordination" if stale_count or missing_evidence_count or warnings else "ready"
+    status = "needs_coordination" if stale_count or ambiguous_count or warnings else "ready"
     return {
         "schema": STALE_CLAIM_REPORT_SCHEMA,
         "status": status,
@@ -868,16 +1185,19 @@ def build_stale_claim_report(
         "source_paths": {
             "beads_ledger": beads_path,
             "activity_jsonl": used_activity_paths,
+            "dirty_worktree": "git status --porcelain=v1",
+            "recent_commits": f"git log --since={activity_fresh_after_hours}h",
         },
         "warnings": warnings,
         "summary": {
             "in_progress_count": len(items),
-            "active_count": classifications.get("active", 0)
-            + classifications.get("active_recent_coordination", 0),
+            "active_count": buckets.get("fresh", 0),
+            "ambiguous_count": ambiguous_count,
             "stale_count": stale_count,
-            "unassigned_count": classifications.get("stale_unassigned", 0),
+            "unassigned_count": classifications.get("stale_candidate_unassigned", 0),
             "missing_evidence_count": missing_evidence_count,
             "classifications": classifications,
+            "operator_buckets": buckets,
         },
         "items": items,
     }
@@ -1559,6 +1879,8 @@ def build_report(
     stale_claim_after_hours: int = DEFAULT_STALE_CLAIM_AFTER_HOURS,
     stale_claim_activity_fresh_hours: int = DEFAULT_STALE_CLAIM_ACTIVITY_FRESH_HOURS,
     stale_claim_activity_paths: tuple[str, ...] = DEFAULT_STALE_CLAIM_ACTIVITY_PATHS,
+    stale_claim_dirty_worktree_paths: tuple[str, ...] | None = None,
+    stale_claim_recent_commit_activity: dict[str, ClaimActivityEvidence] | None = None,
 ) -> dict[str, Any]:
     now = as_utc(now or datetime.now(timezone.utc))
     max_age = timedelta(days=max_age_days)
@@ -1570,6 +1892,8 @@ def build_report(
         stale_after_hours=stale_claim_after_hours,
         activity_fresh_after_hours=stale_claim_activity_fresh_hours,
         activity_paths=stale_claim_activity_paths,
+        dirty_worktree_paths=stale_claim_dirty_worktree_paths,
+        recent_commit_activity=stale_claim_recent_commit_activity,
     )
     hostcall_queue_telemetry = build_hostcall_queue_report(repo_root)
 
@@ -1640,6 +1964,7 @@ def print_text_report(report: dict[str, Any]) -> None:
         f"  {stale_claims['status']}: "
         f"{stale_claims['summary']['in_progress_count']} in_progress, "
         f"{stale_claims['summary']['stale_count']} stale, "
+        f"{stale_claims['summary']['ambiguous_count']} ambiguous, "
         f"{stale_claims['summary']['missing_evidence_count']} missing evidence"
     )
     for item in stale_claims["items"]:
@@ -1649,6 +1974,8 @@ def print_text_report(report: dict[str, Any]) -> None:
             f"last_update={item['last_update'] or 'unknown'} "
             f"source={item['evidence_source']}"
         )
+        if item["dirty_worktree_paths"]:
+            print(f"    dirty: {', '.join(item['dirty_worktree_paths'])}")
         print(f"    action: {item['recommended_operator_action']}")
     hostcall_queue = report["hostcall_queue_telemetry"]
     print("")
@@ -2255,6 +2582,7 @@ def run_self_test() -> int:
                 {
                     "id": "bd-stale",
                     "title": "Old owner",
+                    "description": "Surface: `src/old_owner.rs`",
                     "status": "in_progress",
                     "assignee": "OldAgent",
                     "updated_at": format_datetime(now - timedelta(hours=30)),
@@ -2285,17 +2613,21 @@ def run_self_test() -> int:
         )
         stale_item = stale_claim_item(report, "bd-stale")
         assert_condition(
-            stale_item["classification"] == "stale_needs_owner_follow_up",
-            "old assigned in-progress work should request owner follow-up",
+            stale_item["classification"] == "ambiguous_missing_coordination",
+            "old assigned work without mail evidence should be ambiguous",
         )
         assert_condition(
             "message OldAgent" in stale_item["recommended_operator_action"],
-            "assigned stale claim should include exact owner follow-up action",
+            "ambiguous claim should include exact owner follow-up action",
+        )
+        assert_condition(
+            stale_item["operator_bucket"] == "ambiguous",
+            "missing Agent Mail/activity evidence should be degraded, not abandonment proof",
         )
         unassigned_item = stale_claim_item(report, "bd-unassigned")
         assert_condition(
-            unassigned_item["classification"] == "stale_unassigned",
-            "old unassigned in-progress work should be reported separately",
+            unassigned_item["classification"] == "stale_candidate_unassigned",
+            "old unassigned in-progress work should be a stale candidate",
         )
         assert_condition(
             "br update bd-unassigned --status open"
@@ -2311,6 +2643,70 @@ def run_self_test() -> int:
             "do not reopen or reassign bd-missing"
             in missing_item["recommended_operator_action"],
             "missing evidence action should fail closed",
+        )
+
+        repo_root = fixture_root()
+        make_complete_fixture(repo_root, now)
+        write_beads_ledger(
+            repo_root,
+            [
+                {
+                    "id": "bd-dirty",
+                    "title": "Old owner with dirty surface",
+                    "description": "Surface: `src/agent.rs`",
+                    "status": "in_progress",
+                    "assignee": "DirtyAgent",
+                    "updated_at": format_datetime(now - timedelta(hours=30)),
+                },
+            ],
+        )
+        report = build_report(
+            repo_root,
+            now=now,
+            stale_claim_dirty_worktree_paths=("src/agent.rs", "README.md"),
+            stale_claim_recent_commit_activity={},
+        )
+        dirty_item = stale_claim_item(report, "bd-dirty")
+        assert_condition(
+            dirty_item["classification"] == "active_dirty_worktree",
+            "dirty files touching a bead surface should keep old work fresh",
+        )
+        assert_condition(
+            dirty_item["dirty_worktree_paths"] == ["src/agent.rs"],
+            "dirty-surface evidence should only include matched paths",
+        )
+
+        repo_root = fixture_root()
+        make_complete_fixture(repo_root, now)
+        write_beads_ledger(
+            repo_root,
+            [
+                {
+                    "id": "bd-commit",
+                    "title": "Old owner with recent commit",
+                    "status": "in_progress",
+                    "assignee": "CommitAgent",
+                    "updated_at": format_datetime(now - timedelta(hours=30)),
+                },
+            ],
+        )
+        report = build_report(
+            repo_root,
+            now=now,
+            stale_claim_dirty_worktree_paths=(),
+            stale_claim_recent_commit_activity={
+                "bd-commit": ClaimActivityEvidence(
+                    bead_id="bd-commit",
+                    timestamp=now - timedelta(hours=1),
+                    source="git log:abc123",
+                    agent_name=None,
+                )
+            },
+        )
+        commit_item = stale_claim_item(report, "bd-commit")
+        assert_condition(
+            commit_item["classification"] == "active_recent_commit",
+            "recent commits mentioning a bead should keep old work fresh",
         )
 
         repo_root = fixture_root()

@@ -465,14 +465,18 @@
     "schema": "pi.swarm.stale_claim_report.v1",
     "source_paths": {
       "activity_jsonl": [],
-      "beads_ledger": ".beads/issues.jsonl"
+      "beads_ledger": ".beads/issues.jsonl",
+      "dirty_worktree": "git status --porcelain=v1",
+      "recent_commits": "git log --since=6h"
     },
     "status": "ready",
     "summary": {
       "active_count": 0,
+      "ambiguous_count": 0,
       "classifications": {},
       "in_progress_count": 0,
       "missing_evidence_count": 0,
+      "operator_buckets": {},
       "stale_count": 0,
       "unassigned_count": 0
     },
