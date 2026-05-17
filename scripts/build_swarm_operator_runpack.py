@@ -99,6 +99,12 @@ ADAPTIVE_EXECUTION_CLOSEOUT_GATE_SCHEMA = (
 ADAPTIVE_EXECUTION_CLOSEOUT_GATE_CONTRACT_SCHEMA = (
     "pi.swarm.adaptive_execution.closeout_gate_contract.v1"
 )
+SIXTH_WAVE_VALIDATION_CLOSEOUT_GATE_SCHEMA = (
+    "pi.swarm.validation_hardening.closeout_gate.v1"
+)
+SIXTH_WAVE_VALIDATION_CLOSEOUT_GATE_CONTRACT_SCHEMA = (
+    "pi.swarm.validation_hardening.closeout_gate_contract.v1"
+)
 BACKPRESSURE_BUDGET_CONTRACT_SCHEMA = (
     "pi.swarm.provider_rpc_tui_backpressure_budget_contract.v1"
 )
@@ -132,6 +138,9 @@ FOURTH_WAVE_CLOSEOUT_GATE_CONTRACT_PATH = Path(
 )
 ADAPTIVE_EXECUTION_CLOSEOUT_GATE_CONTRACT_PATH = Path(
     "docs/contracts/adaptive-execution-closeout-gate-contract.json"
+)
+SIXTH_WAVE_VALIDATION_CLOSEOUT_GATE_CONTRACT_PATH = Path(
+    "docs/contracts/sixth-wave-validation-hardening-closeout-gate-contract.json"
 )
 BACKPRESSURE_BUDGET_CONTRACT_PATH = Path(
     "docs/contracts/provider-rpc-tui-backpressure-budget-contract.json"
@@ -567,6 +576,53 @@ ADAPTIVE_EXECUTION_CLOSEOUT_REQUIRED_SOURCE_BOUNDARIES = (
 ADAPTIVE_EXECUTION_CLOSEOUT_REQUIRED_QUALITY_GATES = (
     "py_compile",
     "runpack_self_test",
+    "json_contracts",
+    "git_diff_check",
+    "staged_ubs",
+    "beads_ledger_reconcile",
+)
+SIXTH_WAVE_VALIDATION_CLOSEOUT_CHILD_BEADS = (
+    "bd-63x3v.9.1",
+    "bd-63x3v.9.2",
+    "bd-63x3v.9.3",
+    "bd-63x3v.9.4",
+    "bd-63x3v.9.5",
+    "bd-63x3v.9.6",
+    "bd-63x3v.9.7",
+    "bd-63x3v.9.8",
+    "bd-63x3v.9.9",
+)
+SIXTH_WAVE_VALIDATION_CLOSEOUT_REQUIRED_CHECKS = (
+    "child_beads_closed",
+    "child_artifact_mapping",
+    "rch_workspace_shadow_detector",
+    "agent_mail_beads_soft_lock",
+    "validation_proof_replay_ledger",
+    "temp_artifact_inventory",
+    "stale_claim_heuristics",
+    "degraded_coordination_e2e",
+    "resource_budget_model",
+    "backpressure_budget_contract",
+    "operator_explanations",
+    "source_boundaries",
+    "pushed_commits",
+    "quality_gates",
+)
+SIXTH_WAVE_VALIDATION_CLOSEOUT_REQUIRED_SOURCE_BOUNDARIES = (
+    "beads_are_source_of_truth",
+    "agent_mail_is_coordination_only",
+    "read_only_gate",
+    "rch_required_for_heavy_cargo",
+    "staged_ubs_required",
+    "beads_ledger_required",
+    "no_release_or_dropin_claims",
+    "no_mail_or_rch_mutation",
+    "closeout_does_not_replace_child_artifacts",
+)
+SIXTH_WAVE_VALIDATION_CLOSEOUT_REQUIRED_QUALITY_GATES = (
+    "py_compile",
+    "runpack_self_test",
+    "claim_readiness_self_test",
     "json_contracts",
     "git_diff_check",
     "staged_ubs",
@@ -15163,6 +15219,774 @@ def write_adaptive_execution_closeout_gate_output(
     output_path.write_text(json_dumps(summary, pretty=True), encoding="utf-8")
 
 
+def sixth_wave_validation_child_artifact_map(
+    issues: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = [
+        {
+            "bead_id": "bd-63x3v.9.1",
+            "commit": "76edc24d8c5356021f67e9eede16e8ec26c961dd",
+            "code_paths": [
+                "scripts/build_swarm_operator_runpack.py",
+                "scripts/generate_maintenance_dashboard.py",
+            ],
+            "test_paths": ["scripts/build_swarm_operator_runpack.py"],
+            "docs_or_evidence_paths": [
+                "scripts/build_swarm_operator_runpack.py",
+                "scripts/generate_maintenance_dashboard.py",
+            ],
+            "validation_commands": [
+                "python3 -m py_compile scripts/build_swarm_operator_runpack.py scripts/generate_maintenance_dashboard.py",
+                "python3 scripts/build_swarm_operator_runpack.py --self-test",
+            ],
+            "claim_boundary_text": (
+                "RCH workspace-shadow detection does not mutate workers, cancel jobs, "
+                "or claim pi_agent_rust failed to compile when worker checkout scope is wrong."
+            ),
+        },
+        {
+            "bead_id": "bd-63x3v.9.2",
+            "commit": "c86034884e8187b53c65f25977c699848a5d6b5b",
+            "code_paths": ["scripts/build_swarm_operator_runpack.py"],
+            "test_paths": [
+                "tests/golden_corpus/swarm_operator_runpack/autopilot_plan_projection.json",
+                "tests/golden_corpus/swarm_operator_runpack/complete_runpack_projection.json",
+            ],
+            "docs_or_evidence_paths": [
+                "tests/golden_corpus/swarm_operator_runpack/autopilot_plan_projection.json",
+                "tests/golden_corpus/swarm_operator_runpack/complete_runpack_projection.json",
+            ],
+            "validation_commands": [
+                "python3 scripts/build_swarm_operator_runpack.py --self-test",
+            ],
+            "claim_boundary_text": (
+                "Degraded Agent Mail posture recommends Beads soft locks but does not "
+                "repair, mutate, or replace Agent Mail state."
+            ),
+        },
+        {
+            "bead_id": "bd-63x3v.9.3",
+            "commit": "5e61b18a6eba6f39d05c6325219ce34f3d12579f",
+            "code_paths": ["scripts/build_swarm_operator_runpack.py"],
+            "test_paths": [
+                "tests/golden_corpus/remote_validation_proof_ledger/examples.json",
+                "tests/golden_corpus/swarm_operator_runpack/complete_runpack_projection.json",
+            ],
+            "docs_or_evidence_paths": [
+                "docs/contracts/remote-validation-proof-ledger-contract.json",
+                "docs/swarm-operations-runbook.md",
+                "tests/golden_corpus/remote_validation_proof_ledger/examples.json",
+            ],
+            "validation_commands": [
+                "python3 scripts/build_swarm_operator_runpack.py --self-test",
+                "python3 -m json.tool docs/contracts/remote-validation-proof-ledger-contract.json",
+            ],
+            "claim_boundary_text": (
+                "Validation proof replay ledger records command authority and blockers "
+                "but does not make uncovered validation green."
+            ),
+        },
+        {
+            "bead_id": "bd-63x3v.9.4",
+            "commit": "7895a1a6f9d38015792d8ec26bd061ff8f668443",
+            "code_paths": ["scripts/build_swarm_operator_runpack.py"],
+            "test_paths": [
+                "tests/golden_corpus/swarm_operator_runpack/complete_runpack_projection.json",
+            ],
+            "docs_or_evidence_paths": [
+                "docs/contracts/swarm-operator-runpack-contract.json",
+                "docs/swarm-operations-runbook.md",
+                "tests/golden_corpus/swarm_operator_runpack/complete_runpack_projection.json",
+            ],
+            "validation_commands": [
+                "python3 scripts/build_swarm_operator_runpack.py --self-test",
+                "python3 -m json.tool docs/contracts/swarm-operator-runpack-contract.json",
+            ],
+            "claim_boundary_text": (
+                "Temp artifact inventory is read-only and does not authorize file "
+                "or directory deletion without operator approval."
+            ),
+        },
+        {
+            "bead_id": "bd-63x3v.9.5",
+            "commit": "d044c04784293ae9b351ddb45bcd85d40ff3b828",
+            "code_paths": ["scripts/report_swarm_claim_readiness.py"],
+            "test_paths": [
+                "tests/golden_corpus/swarm_claim_readiness/complete_report_projection.json",
+                "tests/golden_corpus/swarm_claim_readiness/hostcall_fallback_heavy_projection.json",
+                "tests/golden_corpus/swarm_claim_readiness/hostcall_missing_fields_projection.json",
+                "tests/golden_corpus/swarm_claim_readiness/hostcall_missing_telemetry_projection.json",
+            ],
+            "docs_or_evidence_paths": [
+                "tests/golden_corpus/swarm_claim_readiness/complete_report_projection.json",
+            ],
+            "validation_commands": [
+                "python3 scripts/report_swarm_claim_readiness.py --self-test",
+            ],
+            "claim_boundary_text": (
+                "Stale in-progress bead heuristics emit review checklists and do not "
+                "auto-reopen or steal active work."
+            ),
+        },
+        {
+            "bead_id": "bd-63x3v.9.6",
+            "commit": "776e60465fd3aafeedc664f4d001a473540c9934",
+            "code_paths": ["scripts/build_swarm_operator_runpack.py"],
+            "test_paths": ["scripts/build_swarm_operator_runpack.py"],
+            "docs_or_evidence_paths": [
+                "README.md",
+                "docs/swarm-operations-runbook.md",
+            ],
+            "validation_commands": [
+                "python3 scripts/build_swarm_operator_runpack.py --self-test",
+            ],
+            "claim_boundary_text": (
+                "Degraded-coordination E2E evidence proves handoff behavior only and "
+                "does not mark validation infrastructure healthy."
+            ),
+        },
+        {
+            "bead_id": "bd-63x3v.9.7",
+            "commit": "81a7d4dd479ac6efa85ca462078ef1d9850c0668",
+            "code_paths": ["src/doctor.rs"],
+            "test_paths": ["src/doctor.rs", "tests/doctor_swarm_temp_dir_json.rs"],
+            "docs_or_evidence_paths": ["README.md"],
+            "validation_commands": [
+                "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/<agent>/target TMPDIR=/data/tmp/pi_agent_rust_cargo/<agent>/tmp cargo test swarm_resource_preflight -- --nocapture",
+                "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/<agent>/target TMPDIR=/data/tmp/pi_agent_rust_cargo/<agent>/tmp cargo check --all-targets",
+                "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/<agent>/target TMPDIR=/data/tmp/pi_agent_rust_cargo/<agent>/tmp cargo clippy --all-targets -- -D warnings",
+            ],
+            "claim_boundary_text": (
+                "Swarm resource budget recommendations are advisory and do not create "
+                "release-facing performance or capacity claims."
+            ),
+        },
+        {
+            "bead_id": "bd-63x3v.9.8",
+            "commit": "219884dcce3a5cd622d87ca24fbcafdc593f8dc8",
+            "code_paths": ["scripts/build_swarm_operator_runpack.py"],
+            "test_paths": ["scripts/build_swarm_operator_runpack.py"],
+            "docs_or_evidence_paths": [
+                "docs/contracts/provider-rpc-tui-backpressure-budget-contract.json",
+                "docs/evidence/provider-rpc-tui-backpressure-budget-contract.json",
+            ],
+            "validation_commands": [
+                "python3 scripts/build_swarm_operator_runpack.py --run-backpressure-budget-contract --print-backpressure-budget-contract",
+                "python3 scripts/build_swarm_operator_runpack.py --self-test",
+            ],
+            "claim_boundary_text": (
+                "Provider/RPC/TUI backpressure budget contract aggregates existing "
+                "evidence and does not duplicate or replace pressure tests."
+            ),
+        },
+        {
+            "bead_id": "bd-63x3v.9.9",
+            "commit": "416af8fbd0239c9afce6bfc1e186eea8c4d1ebab",
+            "code_paths": ["scripts/report_swarm_claim_readiness.py"],
+            "test_paths": [
+                "tests/golden_corpus/swarm_claim_readiness/complete_report_projection.json",
+                "tests/golden_corpus/swarm_claim_readiness/hostcall_fallback_heavy_projection.json",
+                "tests/golden_corpus/swarm_claim_readiness/hostcall_missing_fields_projection.json",
+                "tests/golden_corpus/swarm_claim_readiness/hostcall_missing_telemetry_projection.json",
+            ],
+            "docs_or_evidence_paths": [
+                "tests/golden_corpus/swarm_claim_readiness/complete_report_projection.json",
+            ],
+            "validation_commands": [
+                "python3 scripts/report_swarm_claim_readiness.py --self-test",
+            ],
+            "claim_boundary_text": (
+                "Operator explanations summarize blockers and next safe actions but do "
+                "not make stale, missing, or degraded evidence green."
+            ),
+        },
+    ]
+    for row in rows:
+        issue = issues.get(row["bead_id"]) or {}
+        row["status"] = issue.get("status")
+        row["title"] = issue.get("title")
+        row["close_reason"] = issue.get("close_reason")
+    return rows
+
+
+def sixth_wave_validation_source_boundary_checks() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": "beads_are_source_of_truth",
+            "status": "pass",
+            "evidence": [".beads/issues.jsonl"],
+            "boundary": "Beads issue state and close reasons remain the work ledger.",
+        },
+        {
+            "id": "agent_mail_is_coordination_only",
+            "status": "pass",
+            "evidence": ["AGENTS.md"],
+            "boundary": (
+                "Agent Mail coordinates ownership but does not replace Beads, git, "
+                "source inspection, or validation evidence."
+            ),
+        },
+        {
+            "id": "read_only_gate",
+            "status": "pass",
+            "evidence": ["scripts/build_swarm_operator_runpack.py"],
+            "boundary": (
+                "The sixth-wave closeout gate summarizes existing evidence and "
+                "does not mutate runtime sources."
+            ),
+        },
+        {
+            "id": "rch_required_for_heavy_cargo",
+            "status": "pass",
+            "evidence": ["AGENTS.md"],
+            "boundary": "Heavy Cargo validation evidence must prove RCH execution.",
+        },
+        {
+            "id": "staged_ubs_required",
+            "status": "pass",
+            "evidence": ["AGENTS.md"],
+            "boundary": "Staged UBS remains mandatory before the closeout commit.",
+        },
+        {
+            "id": "beads_ledger_required",
+            "status": "pass",
+            "evidence": ["scripts/reconcile_beads_ledger.sh"],
+            "boundary": "Beads ledger reconciliation remains mandatory before closeout.",
+        },
+        {
+            "id": "no_release_or_dropin_claims",
+            "status": "pass",
+            "evidence": [
+                "docs/contracts/dropin-certification-contract.json",
+                "docs/evidence/dropin-certification-verdict.json",
+            ],
+            "boundary": (
+                "Sixth-wave validation hardening closeout evidence is advisory and "
+                "does not authorize release, benchmark, capacity, performance, or strict drop-in claims."
+            ),
+        },
+        {
+            "id": "no_mail_or_rch_mutation",
+            "status": "pass",
+            "evidence": ["AGENTS.md", "scripts/build_swarm_operator_runpack.py"],
+            "boundary": (
+                "The gate must not mutate Agent Mail storage, RCH worker state, "
+                "installed extensions, user config, git refs, or temp artifacts."
+            ),
+        },
+        {
+            "id": "closeout_does_not_replace_child_artifacts",
+            "status": "pass",
+            "evidence": ["docs/evidence/sixth-wave-validation-hardening-closeout-gate.json"],
+            "boundary": (
+                "The closeout gate summarizes child evidence and does not replace "
+                "source tests, contracts, Beads, pushed commits, RCH, UBS, or CI."
+            ),
+        },
+    ]
+
+
+def build_sixth_wave_validation_closeout_gate_summary(
+    *,
+    generated_at: str,
+    quality_gate_results: list[dict[str, Any]],
+    issue_export_path: Path | None = None,
+    git_refs: dict[str, str | None] | None = None,
+    commit_check_override: bool | None = None,
+) -> dict[str, Any]:
+    root = repo_root()
+    runpack_path = root / "scripts/build_swarm_operator_runpack.py"
+    claim_readiness_path = root / "scripts/report_swarm_claim_readiness.py"
+    dashboard_path = root / "scripts/generate_maintenance_dashboard.py"
+    doctor_path = root / "src/doctor.rs"
+    doctor_json_test_path = root / "tests/doctor_swarm_temp_dir_json.rs"
+    runbook_path = root / "docs/swarm-operations-runbook.md"
+    readme_path = root / "README.md"
+    backpressure_contract_path = root / BACKPRESSURE_BUDGET_CONTRACT_PATH
+    backpressure_evidence_path = (
+        root / "docs/evidence/provider-rpc-tui-backpressure-budget-contract.json"
+    )
+
+    issues = load_beads_issue_map(issue_export_path or (root / ".beads/issues.jsonl"))
+    child_artifacts = sixth_wave_validation_child_artifact_map(issues)
+    checklist: list[dict[str, Any]] = []
+
+    child_states = {
+        issue_id: (issues.get(issue_id) or {}).get("status")
+        for issue_id in SIXTH_WAVE_VALIDATION_CLOSEOUT_CHILD_BEADS
+    }
+    child_close_reasons = {
+        issue_id: (issues.get(issue_id) or {}).get("close_reason")
+        for issue_id in SIXTH_WAVE_VALIDATION_CLOSEOUT_CHILD_BEADS
+    }
+    missing_children = [
+        issue_id for issue_id, status in child_states.items() if status != "closed"
+    ]
+    checklist.append(
+        gate_check(
+            "child_beads_closed",
+            "All sixth-wave validation-hardening child Beads are closed before closeout.",
+            not missing_children,
+            [
+                {
+                    "path": ".beads/issues.jsonl",
+                    "child_statuses": child_states,
+                    "close_reasons": child_close_reasons,
+                }
+            ],
+            issue=f"children not closed: {', '.join(missing_children)}"
+            if missing_children
+            else None,
+        )
+    )
+
+    commits = [
+        str(row.get("commit"))
+        for row in child_artifacts
+        if isinstance(row.get("commit"), str)
+    ]
+    artifact_paths = sorted(
+        {
+            path
+            for row in child_artifacts
+            for key in ("code_paths", "test_paths", "docs_or_evidence_paths")
+            for path in row.get(key, [])
+        }
+    )
+    artifact_paths_exist = paths_exist(root, artifact_paths)
+    commits_present = (
+        commit_check_override
+        if commit_check_override is not None
+        else commits_exist(root, commits)
+    )
+    weak_child_rows = [
+        row["bead_id"]
+        for row in child_artifacts
+        if row.get("status") != "closed"
+        or not row.get("validation_commands")
+        or not str(row.get("claim_boundary_text") or "").strip()
+    ]
+    checklist.append(
+        gate_check(
+            "child_artifact_mapping",
+            "Every sixth-wave child bead maps to pushed commits, source paths, validation commands, and claim-boundary text.",
+            artifact_paths_exist and bool(commits_present) and not weak_child_rows,
+            [
+                {
+                    "child_artifact_map": child_artifacts,
+                    "artifact_paths_exist": artifact_paths_exist,
+                    "commits_present": bool(commits_present),
+                    "weak_child_rows": weak_child_rows,
+                }
+            ],
+            issue=(
+                "missing paths, commits, validation commands, or claim boundaries"
+                if not artifact_paths_exist or not commits_present or weak_child_rows
+                else None
+            ),
+        )
+    )
+
+    checklist.append(
+        gate_check(
+            "rch_workspace_shadow_detector",
+            "RCH worker workspace-shadow failures are classified before cargo results are trusted.",
+            all(
+                (
+                    file_contains(runpack_path, "worker_workspace_shadow"),
+                    file_contains(runpack_path, "workspace_shadow"),
+                    file_contains(dashboard_path, "worker_workspace_shadow"),
+                )
+            ),
+            [
+                {"path": "scripts/build_swarm_operator_runpack.py"},
+                {"path": "scripts/generate_maintenance_dashboard.py"},
+            ],
+        )
+    )
+    checklist.append(
+        gate_check(
+            "agent_mail_beads_soft_lock",
+            "Agent Mail semantic corruption surfaces Beads soft-lock fallback without blocking work.",
+            all(
+                (
+                    file_contains(runpack_path, "beads_soft_lock"),
+                    file_contains(runpack_path, "use_beads_soft_lock"),
+                    file_contains(runpack_path, "semantic_readiness"),
+                )
+            ),
+            [{"path": "scripts/build_swarm_operator_runpack.py"}],
+        )
+    )
+    checklist.append(
+        gate_check(
+            "validation_proof_replay_ledger",
+            "Cargo and script validation proofs record command, runner, coverage, result, and blocker authority.",
+            all(
+                (
+                    file_contains(runpack_path, "remote_validation_proof_ledger"),
+                    file_contains(runpack_path, "coverage_rationale"),
+                    file_contains(runbook_path, "remote_validation_proof_ledger"),
+                    file_contains(
+                        root / "docs/contracts/remote-validation-proof-ledger-contract.json",
+                        "pi.remote_validation.proof_ledger_contract.v1",
+                    ),
+                )
+            ),
+            [
+                {"path": "scripts/build_swarm_operator_runpack.py"},
+                {"path": "docs/contracts/remote-validation-proof-ledger-contract.json"},
+            ],
+        )
+    )
+    checklist.append(
+        gate_check(
+            "temp_artifact_inventory",
+            "Swarm temp artifacts are inventoried with explicit no-delete policy boundaries.",
+            all(
+                (
+                    file_contains(runpack_path, "TEMP_ARTIFACT_INVENTORY_SCHEMA"),
+                    file_contains(runpack_path, "read_only_temp_artifact_inventory_not_cleanup_executor"),
+                    file_contains(runpack_path, "deletion_policy"),
+                    file_contains(runbook_path, "temp_artifact_inventory"),
+                )
+            ),
+            [
+                {"path": "scripts/build_swarm_operator_runpack.py"},
+                {"path": "docs/swarm-operations-runbook.md"},
+            ],
+        )
+    )
+    checklist.append(
+        gate_check(
+            "stale_claim_heuristics",
+            "Stale in-progress bead reporting emits review checklists instead of automatic reopen actions.",
+            all(
+                (
+                    file_contains(claim_readiness_path, "safe_reopen_checklist"),
+                    file_contains(claim_readiness_path, "stale_claim_item"),
+                    file_contains(claim_readiness_path, "configured stale threshold"),
+                )
+            ),
+            [{"path": "scripts/report_swarm_claim_readiness.py"}],
+        )
+    )
+    checklist.append(
+        gate_check(
+            "degraded_coordination_e2e",
+            "No-mock degraded-coordination E2E evidence covers Beads soft locks, degraded validation, and no-delete output.",
+            all(
+                (
+                    file_contains(runpack_path, "DEGRADED_COORDINATION_RUNPACK_E2E_SCHEMA"),
+                    file_contains(runpack_path, "degraded_coordination_runpack_handoff"),
+                    file_contains(runpack_path, "use_beads_soft_lock"),
+                    file_contains(readme_path, "degraded-coordination handoff proof"),
+                )
+            ),
+            [
+                {"path": "scripts/build_swarm_operator_runpack.py"},
+                {"path": "README.md"},
+            ],
+        )
+    )
+    checklist.append(
+        gate_check(
+            "resource_budget_model",
+            "Doctor swarm resource preflight consumes cgroup, NUMA, local build pressure, and RCH queue posture with explanations.",
+            all(
+                (
+                    file_contains(doctor_path, "local_build_pressure"),
+                    file_contains(doctor_path, "rch_queue_posture"),
+                    file_contains(doctor_path, "SwarmBudgetExplanation"),
+                    file_contains(doctor_path, "swarm_resource_preflight_budget_model_covers_large_host_fixture"),
+                    file_contains(doctor_json_test_path, "swarm_resource_preflight"),
+                )
+            ),
+            [
+                {"path": "src/doctor.rs"},
+                {"path": "tests/doctor_swarm_temp_dir_json.rs"},
+            ],
+        )
+    )
+    checklist.append(
+        gate_check(
+            "backpressure_budget_contract",
+            "Provider, RPC, and TUI pressure evidence is normalized into one read-only budget contract.",
+            all(
+                (
+                    file_contains(runpack_path, "BACKPRESSURE_BUDGET_CONTRACT_SCHEMA"),
+                    file_contains(backpressure_contract_path, BACKPRESSURE_BUDGET_CONTRACT_SCHEMA),
+                    file_contains(backpressure_evidence_path, BACKPRESSURE_BUDGET_CONTRACT_SCHEMA),
+                )
+            ),
+            [
+                {"path": str(BACKPRESSURE_BUDGET_CONTRACT_PATH)},
+                {"path": "docs/evidence/provider-rpc-tui-backpressure-budget-contract.json"},
+            ],
+        )
+    )
+    checklist.append(
+        gate_check(
+            "operator_explanations",
+            "Validation blockers map to stable categories, explanations, affected artifacts, and next safe actions.",
+            all(
+                (
+                    file_contains(claim_readiness_path, "OPERATOR_EXPLANATIONS_SCHEMA"),
+                    file_contains(claim_readiness_path, "validation_blocker"),
+                    file_contains(claim_readiness_path, "next_safe_action"),
+                    file_contains(claim_readiness_path, "operator explanations"),
+                )
+            ),
+            [{"path": "scripts/report_swarm_claim_readiness.py"}],
+        )
+    )
+
+    source_boundaries = sixth_wave_validation_source_boundary_checks()
+    boundary_ids = {item["id"] for item in source_boundaries}
+    missing_boundaries = (
+        set(SIXTH_WAVE_VALIDATION_CLOSEOUT_REQUIRED_SOURCE_BOUNDARIES) - boundary_ids
+    )
+    checklist.append(
+        gate_check(
+            "source_boundaries",
+            "Closeout source boundaries preserve Beads, Agent Mail, RCH, UBS, ledger, child-artifact, no-delete, and release-claim authorities.",
+            not missing_boundaries,
+            source_boundaries,
+            issue=(
+                "missing source boundary checks: " + ", ".join(sorted(missing_boundaries))
+                if missing_boundaries
+                else None
+            ),
+        )
+    )
+
+    if git_refs is None:
+        head = git_value(["git", "rev-parse", "HEAD"], root)
+        origin_main = git_value(["git", "rev-parse", "origin/main"], root)
+        origin_master = git_value(["git", "rev-parse", "origin/master"], root)
+    else:
+        head = git_refs.get("head")
+        origin_main = git_refs.get("origin_main")
+        origin_master = git_refs.get("origin_master")
+    pushed = bool(head and head == origin_main == origin_master)
+    checklist.append(
+        gate_check(
+            "pushed_commits",
+            "All prerequisite child commits are pushed to origin/main and legacy origin/master before final closeout generation.",
+            pushed,
+            [
+                {
+                    "head_before_closeout_commit": head,
+                    "origin_main_before_closeout_commit": origin_main,
+                    "origin_legacy_mirror_before_closeout_commit": origin_master,
+                    "pushed_remote_refs_equal_head": pushed,
+                    "child_commits": commits,
+                }
+            ],
+            issue=None if pushed else "HEAD is not synchronized with both remotes",
+        )
+    )
+
+    quality_by_id = {item["id"]: item for item in quality_gate_results}
+    missing_quality = [
+        gate_id
+        for gate_id in SIXTH_WAVE_VALIDATION_CLOSEOUT_REQUIRED_QUALITY_GATES
+        if quality_by_id.get(gate_id, {}).get("status") != "pass"
+    ]
+    checklist.append(
+        gate_check(
+            "quality_gates",
+            "Required closeout quality gates passed for scripts, contracts, UBS, and Beads ledger.",
+            not missing_quality,
+            [
+                {
+                    "required_quality_gates": list(
+                        SIXTH_WAVE_VALIDATION_CLOSEOUT_REQUIRED_QUALITY_GATES
+                    ),
+                    "provided_quality_gates": quality_gate_results,
+                    "heavy_cargo_required_for_closeout_script": False,
+                }
+            ],
+            issue=(
+                "missing or failing quality gates: " + ", ".join(missing_quality)
+                if missing_quality
+                else None
+            ),
+        )
+    )
+
+    missing_checks = [
+        item["id"]
+        for item in checklist
+        if item.get("status") != "pass"
+    ]
+    final_gate_issue = issues.get("bd-63x3v.9.10") or {}
+    parent_issue = issues.get("bd-63x3v.9") or {}
+    status = "pass" if not missing_checks else "fail"
+    summary = {
+        "schema": SIXTH_WAVE_VALIDATION_CLOSEOUT_GATE_SCHEMA,
+        "generated_at": generated_at,
+        "status": status,
+        "purpose": "prompt_to_artifact_sixth_wave_validation_hardening_closeout_gate_not_source_of_truth",
+        "parent_epic": {
+            "id": "bd-63x3v.9",
+            "status": parent_issue.get("status"),
+            "title": parent_issue.get("title"),
+        },
+        "final_gate_bead": {
+            "id": "bd-63x3v.9.10",
+            "status": final_gate_issue.get("status"),
+            "assignee": final_gate_issue.get("assignee"),
+        },
+        "required_checks": list(SIXTH_WAVE_VALIDATION_CLOSEOUT_REQUIRED_CHECKS),
+        "child_artifact_map": child_artifacts,
+        "source_boundary_checks": source_boundaries,
+        "quality_gate_results": quality_gate_results,
+        "checklist": checklist,
+        "missing_checks": missing_checks,
+        "remaining_follow_ups": [],
+        "known_limitations": [
+            "Sixth-wave validation hardening closeout evidence is advisory operator evidence only.",
+            "RCH, Agent Mail, Beads, Doctor, runpack, and claim-readiness proofs remain their own sources of truth.",
+            "This closeout does not authorize release, benchmark, capacity, performance, or strict drop-in claims.",
+        ],
+        "claim_boundaries": {
+            "strict_dropin_or_release_claim_authorized": False,
+            "performance_or_capacity_claim_authorized": False,
+            "closeout_mutates_sources": False,
+            "closeout_mutates_agent_mail_or_rch": False,
+            "closeout_authorizes_file_deletion": False,
+            "closeout_replaces_child_artifacts": False,
+            "allowed_claim": "advisory sixth-wave validation hardening closeout evidence only",
+        },
+        "follow_up_required": bool(missing_checks),
+        "follow_up_beads": [
+            {
+                "title": f"[SIXTH-WAVE-GATE] Fix missing {check_id}",
+                "type": "task",
+                "priority": 2,
+                "source_check": check_id,
+            }
+            for check_id in missing_checks
+        ],
+        "decision": (
+            "close_final_gate_and_parent_epic"
+            if status == "pass"
+            else "file_follow_up_beads_before_closing_epic"
+        ),
+        "epic_can_close_after_this_commit": status == "pass",
+    }
+    assert_sixth_wave_validation_closeout_gate_contract(summary)
+    return summary
+
+
+def assert_sixth_wave_validation_closeout_gate_contract(summary: dict[str, Any]) -> None:
+    root = repo_root()
+    contract_path = root / SIXTH_WAVE_VALIDATION_CLOSEOUT_GATE_CONTRACT_PATH
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise AssertionError(
+            f"missing sixth-wave validation closeout gate contract: {contract_path}"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"sixth-wave validation closeout gate contract is malformed JSON: {contract_path}: {exc}"
+        ) from exc
+    assert contract.get("schema") == SIXTH_WAVE_VALIDATION_CLOSEOUT_GATE_CONTRACT_SCHEMA
+    assert contract.get("decision_gate_schema") == SIXTH_WAVE_VALIDATION_CLOSEOUT_GATE_SCHEMA
+    assert summary.get("schema") == contract["decision_gate_schema"]
+    assert summary.get("purpose") == contract.get("purpose")
+    assert summary.get("status") in set(contract.get("allowed_statuses", []))
+    assert summary.get("decision") in set(contract.get("allowed_decisions", []))
+    for key in contract.get("required_top_level_keys", []):
+        assert key in summary, f"missing top-level sixth-wave closeout-gate key: {key}"
+    checks = summary.get("checklist")
+    assert isinstance(checks, list) and checks
+    check_by_id = {
+        item.get("id"): item
+        for item in checks
+        if isinstance(item, dict)
+    }
+    missing_required = set(contract.get("required_check_ids", [])) - set(check_by_id)
+    assert not missing_required, (
+        f"sixth-wave closeout gate missing checks: {sorted(missing_required)}"
+    )
+    for check in checks:
+        assert isinstance(check, dict)
+        assert check.get("status") in set(contract.get("allowed_check_statuses", []))
+        assert check.get("requirement")
+        evidence = check.get("evidence")
+        assert isinstance(evidence, list) and evidence
+    child_map = summary.get("child_artifact_map")
+    assert isinstance(child_map, list) and child_map
+    mapped_children = {
+        row.get("bead_id")
+        for row in child_map
+        if isinstance(row, dict)
+    }
+    missing_children = set(contract.get("required_child_bead_ids", [])) - mapped_children
+    assert not missing_children, (
+        f"sixth-wave closeout gate missing child mapping: {sorted(missing_children)}"
+    )
+    for row in child_map:
+        assert isinstance(row.get("validation_commands"), list) and row.get(
+            "validation_commands"
+        )
+        assert str(row.get("claim_boundary_text") or "").strip()
+    source_boundaries = summary.get("source_boundary_checks")
+    assert isinstance(source_boundaries, list) and source_boundaries
+    boundary_ids = {
+        row.get("id")
+        for row in source_boundaries
+        if isinstance(row, dict)
+    }
+    missing_boundaries = (
+        set(contract.get("required_source_boundary_ids", [])) - boundary_ids
+    )
+    assert not missing_boundaries, (
+        f"sixth-wave closeout gate missing source boundaries: {sorted(missing_boundaries)}"
+    )
+    quality = check_by_id.get("quality_gates", {})
+    evidence = quality.get("evidence", [])
+    assert isinstance(evidence, list) and evidence
+    payload = evidence[0]
+    assert isinstance(payload, dict)
+    required_quality = set(contract.get("required_quality_gate_ids", []))
+    provided = {
+        item.get("id")
+        for item in payload.get("provided_quality_gates", [])
+        if isinstance(item, dict) and item.get("status") == "pass"
+    }
+    if summary.get("status") == "pass":
+        assert set(summary.get("missing_checks", [])) == set()
+        assert provided.issuperset(required_quality)
+        assert summary.get("epic_can_close_after_this_commit") is True
+        claim_boundaries = summary.get("claim_boundaries")
+        assert isinstance(claim_boundaries, dict)
+        assert claim_boundaries.get("strict_dropin_or_release_claim_authorized") is False
+        assert claim_boundaries.get("performance_or_capacity_claim_authorized") is False
+        assert claim_boundaries.get("closeout_mutates_sources") is False
+        assert claim_boundaries.get("closeout_mutates_agent_mail_or_rch") is False
+        assert claim_boundaries.get("closeout_authorizes_file_deletion") is False
+        assert claim_boundaries.get("closeout_replaces_child_artifacts") is False
+
+
+def write_sixth_wave_validation_closeout_gate_output(
+    args: argparse.Namespace,
+    summary: dict[str, Any],
+) -> None:
+    output_path = getattr(args, "out_sixth_wave_final_gate_json", None)
+    if output_path is None:
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        raise RunpackError(
+            f"refusing to overwrite sixth-wave validation final gate: {output_path}"
+        )
+    output_path.write_text(json_dumps(summary, pretty=True), encoding="utf-8")
+
+
 def run_self_test() -> int:
     workspace = Path(tempfile.mkdtemp(prefix="pi_swarm_runpack_"))
     generated_at = "2026-05-09T09:00:00+00:00"
@@ -18522,6 +19346,97 @@ def run_self_test() -> int:
         assert adaptive_execution_final_gate["follow_up_required"] is False
         assert not adaptive_execution_final_gate["follow_up_beads"]
         assert adaptive_execution_final_gate["child_artifact_map"]
+        sixth_wave_gate_issues = [
+            {
+                "id": "bd-63x3v.9",
+                "title": "Swarm validation hardening sixth-wave roadmap",
+                "status": "deferred",
+            },
+            {
+                "id": "bd-63x3v.9.10",
+                "title": "Add sixth-wave swarm validation hardening closeout gate",
+                "status": "in_progress",
+                "assignee": "Codex",
+            },
+        ]
+        sixth_wave_gate_issues.extend(
+            {
+                "id": issue_id,
+                "status": "closed",
+                "close_reason": f"{issue_id} self-test evidence closed",
+            }
+            for issue_id in SIXTH_WAVE_VALIDATION_CLOSEOUT_CHILD_BEADS
+        )
+        sixth_wave_gate_issues_path = (
+            workspace / "sixth-wave-validation-final-gate-issues.jsonl"
+        )
+        sixth_wave_gate_issues_path.write_text(
+            "\n".join(json_dumps(issue) for issue in sixth_wave_gate_issues) + "\n",
+            encoding="utf-8",
+        )
+        sixth_wave_final_gate_quality = [
+            {
+                "id": "py_compile",
+                "status": "pass",
+                "command": "python3 -m py_compile scripts/build_swarm_operator_runpack.py scripts/report_swarm_claim_readiness.py",
+            },
+            {
+                "id": "runpack_self_test",
+                "status": "pass",
+                "command": "python3 scripts/build_swarm_operator_runpack.py --self-test",
+            },
+            {
+                "id": "claim_readiness_self_test",
+                "status": "pass",
+                "command": "python3 scripts/report_swarm_claim_readiness.py --self-test",
+            },
+            {
+                "id": "json_contracts",
+                "status": "pass",
+                "command": (
+                    "python3 -m json.tool "
+                    "docs/contracts/sixth-wave-validation-hardening-closeout-gate-contract.json"
+                ),
+            },
+            {
+                "id": "git_diff_check",
+                "status": "pass",
+                "command": "git diff --check",
+            },
+            {
+                "id": "staged_ubs",
+                "status": "pass",
+                "command": "timeout 120s ubs --staged --only=rust .",
+            },
+            {
+                "id": "beads_ledger_reconcile",
+                "status": "pass",
+                "command": "./scripts/reconcile_beads_ledger.sh",
+            },
+        ]
+        sixth_wave_final_gate = build_sixth_wave_validation_closeout_gate_summary(
+            generated_at=generated_at,
+            quality_gate_results=sixth_wave_final_gate_quality,
+            issue_export_path=sixth_wave_gate_issues_path,
+            git_refs={
+                "head": "sixthwavevalidationfinalgatefixture",
+                "origin_main": "sixthwavevalidationfinalgatefixture",
+                "origin_master": "sixthwavevalidationfinalgatefixture",
+            },
+            commit_check_override=True,
+        )
+        assert (
+            sixth_wave_final_gate["schema"]
+            == SIXTH_WAVE_VALIDATION_CLOSEOUT_GATE_SCHEMA
+        )
+        assert sixth_wave_final_gate["status"] == "pass"
+        assert (
+            sixth_wave_final_gate["decision"]
+            == "close_final_gate_and_parent_epic"
+        )
+        assert sixth_wave_final_gate["follow_up_required"] is False
+        assert not sixth_wave_final_gate["follow_up_beads"]
+        assert sixth_wave_final_gate["child_artifact_map"]
         backpressure_budget_contract = build_backpressure_budget_contract_summary(
             generated_at=generated_at,
         )
@@ -18959,6 +19874,21 @@ def parse_args() -> argparse.Namespace:
         help="print the final fifth-wave adaptive execution closeout gate JSON",
     )
     parser.add_argument(
+        "--run-sixth-wave-final-gate",
+        action="store_true",
+        help="build the final prompt-to-artifact sixth-wave validation hardening closeout gate",
+    )
+    parser.add_argument(
+        "--out-sixth-wave-final-gate-json",
+        type=Path,
+        help="write pi.swarm.validation_hardening.closeout_gate.v1 JSON; refuses to overwrite",
+    )
+    parser.add_argument(
+        "--print-sixth-wave-final-gate",
+        action="store_true",
+        help="print the final sixth-wave validation hardening closeout gate JSON",
+    )
+    parser.add_argument(
         "--run-backpressure-budget-contract",
         action="store_true",
         help="build the read-only provider/RPC/TUI backpressure budget contract",
@@ -19046,6 +19976,10 @@ def main() -> int:
         args.out_adaptive_execution_final_gate_json
         or args.print_adaptive_execution_final_gate
     )
+    sixth_wave_final_gate_options_used = (
+        args.out_sixth_wave_final_gate_json
+        or args.print_sixth_wave_final_gate
+    )
     backpressure_budget_contract_options_used = (
         args.out_backpressure_budget_contract_json
         or args.print_backpressure_budget_contract
@@ -19056,6 +19990,7 @@ def main() -> int:
         args.run_runtime_intelligence_final_gate,
         args.run_fourth_wave_final_gate,
         args.run_adaptive_execution_final_gate,
+        args.run_sixth_wave_final_gate,
     ]
     if sum(1 for used in final_gate_modes if used) > 1:
         print("ERROR: run only one final-gate mode at a time", file=sys.stderr)
@@ -19099,6 +20034,12 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    if sixth_wave_final_gate_options_used and not args.run_sixth_wave_final_gate:
+        print(
+            "ERROR: sixth-wave final-gate options require --run-sixth-wave-final-gate",
+            file=sys.stderr,
+        )
+        return 2
     if (
         backpressure_budget_contract_options_used
         and not args.run_backpressure_budget_contract
@@ -19114,6 +20055,7 @@ def main() -> int:
         or args.run_runtime_intelligence_final_gate
         or args.run_fourth_wave_final_gate
         or args.run_adaptive_execution_final_gate
+        or args.run_sixth_wave_final_gate
     ):
         print("ERROR: --quality-gate-result requires a final-gate run mode", file=sys.stderr)
         return 2
@@ -19146,6 +20088,18 @@ def main() -> int:
             if (
                 args.print_adaptive_execution_final_gate
                 or args.out_adaptive_execution_final_gate_json is None
+            ):
+                print(json_dumps(summary, pretty=True))
+            return 0
+        if args.run_sixth_wave_final_gate:
+            summary = build_sixth_wave_validation_closeout_gate_summary(
+                generated_at=args.generated_at or utc_now_iso(),
+                quality_gate_results=parse_quality_gate_results(args.quality_gate_results),
+            )
+            write_sixth_wave_validation_closeout_gate_output(args, summary)
+            if (
+                args.print_sixth_wave_final_gate
+                or args.out_sixth_wave_final_gate_json is None
             ):
                 print(json_dumps(summary, pretty=True))
             return 0

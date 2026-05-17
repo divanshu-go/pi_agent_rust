@@ -1,0 +1,107 @@
+{
+  "schema": "pi.swarm.validation_hardening.closeout_gate_contract.v1",
+  "decision_gate_schema": "pi.swarm.validation_hardening.closeout_gate.v1",
+  "purpose": "prompt_to_artifact_sixth_wave_validation_hardening_closeout_gate_not_source_of_truth",
+  "allowed_statuses": [
+    "pass",
+    "fail"
+  ],
+  "allowed_check_statuses": [
+    "pass",
+    "fail"
+  ],
+  "allowed_decisions": [
+    "close_final_gate_and_parent_epic",
+    "file_follow_up_beads_before_closing_epic"
+  ],
+  "required_top_level_keys": [
+    "schema",
+    "generated_at",
+    "status",
+    "purpose",
+    "parent_epic",
+    "final_gate_bead",
+    "required_checks",
+    "child_artifact_map",
+    "source_boundary_checks",
+    "quality_gate_results",
+    "checklist",
+    "missing_checks",
+    "remaining_follow_ups",
+    "known_limitations",
+    "claim_boundaries",
+    "follow_up_required",
+    "follow_up_beads",
+    "decision",
+    "epic_can_close_after_this_commit"
+  ],
+  "required_child_bead_ids": [
+    "bd-63x3v.9.1",
+    "bd-63x3v.9.2",
+    "bd-63x3v.9.3",
+    "bd-63x3v.9.4",
+    "bd-63x3v.9.5",
+    "bd-63x3v.9.6",
+    "bd-63x3v.9.7",
+    "bd-63x3v.9.8",
+    "bd-63x3v.9.9"
+  ],
+  "required_check_ids": [
+    "child_beads_closed",
+    "child_artifact_mapping",
+    "rch_workspace_shadow_detector",
+    "agent_mail_beads_soft_lock",
+    "validation_proof_replay_ledger",
+    "temp_artifact_inventory",
+    "stale_claim_heuristics",
+    "degraded_coordination_e2e",
+    "resource_budget_model",
+    "backpressure_budget_contract",
+    "operator_explanations",
+    "source_boundaries",
+    "pushed_commits",
+    "quality_gates"
+  ],
+  "required_source_boundary_ids": [
+    "beads_are_source_of_truth",
+    "agent_mail_is_coordination_only",
+    "read_only_gate",
+    "rch_required_for_heavy_cargo",
+    "staged_ubs_required",
+    "beads_ledger_required",
+    "no_release_or_dropin_claims",
+    "no_mail_or_rch_mutation",
+    "closeout_does_not_replace_child_artifacts"
+  ],
+  "required_quality_gate_ids": [
+    "py_compile",
+    "runpack_self_test",
+    "claim_readiness_self_test",
+    "json_contracts",
+    "git_diff_check",
+    "staged_ubs",
+    "beads_ledger_reconcile"
+  ],
+  "requirements": [
+    {
+      "id": "child_artifact_mapping",
+      "description": "Every sixth-wave child bead maps to pushed commits, source paths, tests or fixtures, docs or evidence paths, validation commands, close reason, and claim-boundary text."
+    },
+    {
+      "id": "prompt_to_artifact_coverage",
+      "description": "The checklist covers RCH workspace-shadow detection, Agent Mail degraded Beads soft locks, validation proof replay, temp artifact inventory, stale claim heuristics, degraded-coordination E2E, resource budgets, provider/RPC/TUI backpressure budgets, operator explanations, source boundaries, pushed refs, and quality gates."
+    },
+    {
+      "id": "safe_close_behavior",
+      "description": "A passing gate may close the final gate and parent epic only after the closeout commit lands and the branch is pushed. A failing gate must emit follow-up beads instead of optimistic closeout."
+    },
+    {
+      "id": "not_source_of_truth",
+      "description": "The closeout gate is evidence over Beads, git, docs, tests, RCH, Doctor, runpack, Agent Mail health, UBS, and source artifacts. It does not replace those sources of truth."
+    },
+    {
+      "id": "claim_boundaries",
+      "description": "The closeout gate must not mutate coordination state, RCH workers, installed extensions, user config, temp artifacts, runtime throttles, or make release-facing performance, capacity, benchmark, or strict drop-in claims."
+    }
+  ]
+}
