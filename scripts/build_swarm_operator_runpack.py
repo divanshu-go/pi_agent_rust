@@ -3988,6 +3988,240 @@ def command_fingerprint(
     return f"sha256:{digest}"
 
 
+def git_changed_paths(git_state: dict[str, Any]) -> list[str]:
+    raw_lines = git_state.get("porcelain_lines")
+    paths: list[str] = []
+    if isinstance(raw_lines, list):
+        for line in raw_lines:
+            text = str(line)
+            path = text[3:] if len(text) > 3 else text
+            if " -> " in path:
+                path = path.rsplit(" -> ", 1)[1]
+            if path:
+                paths.append(path)
+    sample = git_state.get("sample")
+    if isinstance(sample, list):
+        for entry in sample:
+            if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+                path = entry["path"]
+                if " -> " in path:
+                    path = path.rsplit(" -> ", 1)[1]
+                if path:
+                    paths.append(path)
+    return unique_strings(paths)
+
+
+def command_explicit_paths(command_payload: dict[str, Any], key: str) -> list[str]:
+    values = command_payload.get(key)
+    if not isinstance(values, list):
+        coverage = command_payload.get("coverage")
+        if isinstance(coverage, dict):
+            values = coverage.get(key)
+    if not isinstance(values, list):
+        return []
+    return unique_strings([value for value in values if isinstance(value, str) and value])
+
+
+def command_matches_script(argv: list[str], script_path: str) -> bool:
+    return any(part == script_path or part.endswith(f"/{script_path}") for part in argv)
+
+
+def inferred_covered_paths(
+    *,
+    command_class: str,
+    argv: list[str],
+    changed_paths: list[str],
+) -> list[str]:
+    if command_class in {
+        "cargo_check",
+        "cargo_clippy",
+        "cargo_test",
+        "cargo_build",
+        "cargo_fmt_check",
+    }:
+        return [
+            path
+            for path in changed_paths
+            if path.endswith(".rs")
+            or path.endswith(".toml")
+            or path == "Cargo.lock"
+            or path.startswith("tests/")
+        ]
+    if command_class == "script_self_test":
+        covered_prefixes = []
+        if command_matches_script(argv, "scripts/build_swarm_operator_runpack.py"):
+            covered_prefixes.extend(
+                [
+                    "scripts/build_swarm_operator_runpack.py",
+                    "tests/golden_corpus/swarm_operator_runpack/",
+                    "tests/golden_corpus/remote_validation_proof_ledger/",
+                    "docs/contracts/remote-validation-proof-ledger-contract.json",
+                    "docs/swarm-operations-runbook.md",
+                ]
+            )
+        return [
+            path
+            for path in changed_paths
+            if any(path == prefix or path.startswith(prefix) for prefix in covered_prefixes)
+        ]
+    if command_class == "ubs_staged":
+        return [path for path in changed_paths if path.endswith(".rs")]
+    if command_class == "beads_ledger_reconcile":
+        return [
+            path
+            for path in changed_paths
+            if path.startswith(".beads/")
+            or path == "docs/evidence/dropin-parity-gap-ledger.json"
+        ]
+    return []
+
+
+def build_validation_coverage_summary(
+    *,
+    command_class: str,
+    argv: list[str],
+    command_payload: dict[str, Any],
+    git_state: dict[str, Any],
+    status: str,
+    success: bool,
+) -> dict[str, Any]:
+    changed_paths = git_changed_paths(git_state)
+    explicit_covered = command_explicit_paths(command_payload, "covered_paths")
+    covered_paths = explicit_covered or inferred_covered_paths(
+        command_class=command_class,
+        argv=argv,
+        changed_paths=changed_paths,
+    )
+    claimed_paths = command_explicit_paths(command_payload, "claimed_paths")
+    if not claimed_paths:
+        claimed_paths = changed_paths
+    uncovered_paths = [path for path in claimed_paths if path not in covered_paths]
+    coverage = command_payload.get("coverage")
+    explicit_authority = (
+        coverage.get("authoritative_for_bead")
+        if isinstance(coverage, dict)
+        else command_payload.get("authoritative_for_bead")
+    )
+    claimed_authoritative = explicit_authority is True
+
+    if status in {"blocked", "fail"}:
+        coverage_status = status
+    elif not changed_paths:
+        coverage_status = "no_changed_paths"
+    elif not claimed_paths:
+        coverage_status = "no_claimed_paths"
+    elif not covered_paths:
+        coverage_status = "uncovered"
+    elif uncovered_paths:
+        coverage_status = "partial"
+    else:
+        coverage_status = "covered"
+
+    authoritative_for_bead = bool(
+        success
+        and status == "pass"
+        and coverage_status in {"covered", "no_changed_paths", "no_claimed_paths"}
+    )
+    if claimed_authoritative and not authoritative_for_bead:
+        coverage_status = "claimed_uncovered"
+
+    if coverage_status == "covered":
+        rationale = "claimed changed paths are covered by this validation proof"
+    elif coverage_status == "no_changed_paths":
+        rationale = "worktree reported no changed paths for this proof context"
+    elif coverage_status == "no_claimed_paths":
+        rationale = "proof did not claim a file surface"
+    elif coverage_status in {"blocked", "fail"}:
+        rationale = "validation did not complete cleanly, so coverage is not authoritative"
+    elif coverage_status == "claimed_uncovered":
+        rationale = "proof explicitly claimed bead authority but did not cover every claimed path"
+    else:
+        rationale = "proof covers only part of the claimed or changed surface"
+
+    return {
+        "changed_paths": changed_paths,
+        "claimed_paths": claimed_paths,
+        "covered_paths": covered_paths,
+        "uncovered_paths": uncovered_paths,
+        "coverage_status": coverage_status,
+        "coverage_rationale": rationale,
+        "claimed_authoritative": claimed_authoritative,
+        "authoritative_for_bead": authoritative_for_bead,
+    }
+
+
+def command_argv_from_capture(command: dict[str, Any]) -> list[str]:
+    explicit = command.get("argv")
+    if isinstance(explicit, list) and all(isinstance(part, str) for part in explicit):
+        return explicit
+    rendered = proof_string(command.get("command"))
+    if not rendered:
+        return ["<unknown>"]
+    try:
+        return shlex.split(rendered)
+    except ValueError:
+        return rendered.split()
+
+
+def unwrap_validation_command(argv: list[str]) -> tuple[list[str], str]:
+    unwrapped = list(argv)
+    if len(unwrapped) >= 2 and unwrapped[0] == "timeout":
+        unwrapped = unwrapped[2:]
+    if unwrapped and unwrapped[0] == "env":
+        index = 1
+        while index < len(unwrapped) and "=" in unwrapped[index]:
+            index += 1
+        unwrapped = unwrapped[index:]
+    if len(unwrapped) >= 4 and unwrapped[:3] == ["rch", "exec", "--"]:
+        return unwrapped[3:], "rch"
+    return unwrapped, "local"
+
+
+def classify_capture_validation_command(command: dict[str, Any]) -> str | None:
+    argv = command_argv_from_capture(command)
+    inner_argv, _requested_runner = unwrap_validation_command(argv)
+    explicit = command.get("command_class")
+    if isinstance(explicit, str) and explicit in {
+        "cargo_check",
+        "cargo_clippy",
+        "cargo_test",
+        "cargo_build",
+        "cargo_fmt_check",
+        "script_self_test",
+        "ubs_staged",
+        "beads_ledger_reconcile",
+        "custom_validation",
+    }:
+        return explicit
+    if inner_argv and inner_argv[0] == "cargo":
+        return classify_remote_validation_command(inner_argv, {"command_class": "capture"})
+    if command_matches_script(inner_argv, "scripts/build_swarm_operator_runpack.py") and "--self-test" in inner_argv:
+        return "script_self_test"
+    if inner_argv and inner_argv[0] == "ubs" and "--staged" in inner_argv:
+        return "ubs_staged"
+    if command_matches_script(inner_argv, "scripts/reconcile_beads_ledger.sh"):
+        return "beads_ledger_reconcile"
+    return None
+
+
+def capture_command_issue_text(command: dict[str, Any]) -> str:
+    return " ".join(
+        str(command.get(key) or "")
+        for key in ("command", "status", "issue", "stderr_snippet", "stdout_snippet")
+    ).lower()
+
+
+def rch_drift_category_from_command(command: dict[str, Any]) -> str | None:
+    text = capture_command_issue_text(command)
+    for rule in FAILURE_ACTION_RULES:
+        if rule.get("category") != "rch":
+            continue
+        if rule_matches_failure_signal(rule, text):
+            drift_category = rule.get("drift_category_id")
+            return str(drift_category) if drift_category else None
+    return None
+
+
 def artifact_retrieval_summary(source: SourcePayload | None) -> dict[str, Any]:
     payload = source.payload if source is not None else None
     if not isinstance(payload, dict):
@@ -4258,6 +4492,37 @@ def build_remote_validation_proof_entry(
             runner_requirement,
         ),
     )
+    coverage_payload: dict[str, Any] = {}
+    for key in ("covered_paths", "claimed_paths", "authoritative_for_bead"):
+        if key in payload:
+            coverage_payload[key] = payload[key]
+        if key in proof:
+            coverage_payload[key] = proof[key]
+    if isinstance(proof.get("coverage"), dict):
+        coverage_payload["coverage"] = proof["coverage"]
+    coverage = build_validation_coverage_summary(
+        command_class=command_class,
+        argv=argv,
+        command_payload=coverage_payload,
+        git_state=git_state,
+        status=status,
+        success=success,
+    )
+    if coverage["coverage_status"] in {"partial", "uncovered"}:
+        degraded_reasons.append("partial_surface_coverage")
+    if coverage["coverage_status"] == "claimed_uncovered":
+        warnings.append(
+            remote_validation_warning(
+                "proof_claim_coverage_mismatch",
+                "error",
+                "Proof claimed bead authority but did not cover every claimed path.",
+                "remote_validation_proof",
+            )
+        )
+        degraded_reasons.append("proof_claim_coverage_mismatch")
+        clean_remote_proof = False
+        status = "fail"
+        next_actions = ["Rerun validation with a proof that covers every claimed path."]
 
     return {
         "schema": REMOTE_VALIDATION_ENTRY_SCHEMA,
@@ -4322,10 +4587,242 @@ def build_remote_validation_proof_entry(
                 "benchmark_throughput",
                 "memory_or_startup_claim",
             ],
+            "coverage": coverage,
             "degraded_reasons": sorted(set(degraded_reasons)),
             "next_actions": next_actions,
         },
     }
+
+
+def build_remote_validation_capture_proof_entry(
+    *,
+    command: dict[str, Any],
+    generated_at: datetime,
+    git_state: dict[str, Any],
+    bead_id: str | None,
+) -> dict[str, Any] | None:
+    command_class = classify_capture_validation_command(command)
+    if command_class is None:
+        return None
+
+    original_argv = command_argv_from_capture(command)
+    argv, requested_runner = unwrap_validation_command(original_argv)
+    cwd = proof_string(command.get("cwd"), str(Path.cwd()))
+    rendered = proof_string(command.get("command"), shell_join(original_argv))
+    runner_requirement = (
+        "rch_required"
+        if requested_runner == "rch" and command_class.startswith("cargo_")
+        else "no_compile"
+        if command_class in {
+            "script_self_test",
+            "ubs_staged",
+            "beads_ledger_reconcile",
+        }
+        else "local_allowed"
+    )
+    fingerprint = command_fingerprint(
+        original_argv,
+        cwd,
+        git_state.get("head") if isinstance(git_state, dict) else None,
+        command_class,
+        command.get("cargo_target_dir"),
+        command.get("tmpdir"),
+        runner_requirement,
+    )
+
+    raw_status = proof_string(command.get("status"), "unknown").lower()
+    exit_code = command.get("exit_code")
+    if not isinstance(exit_code, int):
+        exit_code = None
+    success = raw_status == "ok" and exit_code == 0
+    termination_reason = (
+        "completed"
+        if success
+        else "timed_out"
+        if raw_status == "timeout"
+        else "not_run"
+        if raw_status in {"blocked", "not_available", "skipped"}
+        else "failed"
+    )
+    issue_text = capture_command_issue_text(command)
+    unrelated_worktree_blocker = "unrelated" in issue_text and (
+        "dirty worktree" in issue_text or "worktree" in issue_text
+    )
+    rch_drift_category = rch_drift_category_from_command(command)
+
+    warnings: list[dict[str, Any]] = []
+    degraded_reasons: list[str] = []
+    if requested_runner == "rch":
+        degraded_reasons.append("remote_execution_not_observed")
+    if unrelated_worktree_blocker:
+        warnings.append(
+            remote_validation_warning(
+                "unrelated_worktree_blocker",
+                "error",
+                "Validation was blocked by unrelated dirty worktree state.",
+                "capture_manifest",
+            )
+        )
+        degraded_reasons.append("unrelated_worktree_blocker")
+    if rch_drift_category:
+        warnings.append(
+            remote_validation_warning(
+                rch_drift_category,
+                "error",
+                RCH_DRIFT_CATEGORY_METADATA.get(rch_drift_category, {}).get(
+                    "remediation",
+                    "RCH drift blocked validation before authoritative proof.",
+                ),
+                "capture_manifest",
+            )
+        )
+        degraded_reasons.append(rch_drift_category)
+
+    if success:
+        status = "pass"
+        next_actions: list[str] = []
+    elif unrelated_worktree_blocker or rch_drift_category or raw_status in {
+        "blocked",
+        "not_available",
+        "skipped",
+    }:
+        status = "blocked"
+        next_actions = ["Resolve the blocker and rerun the validation command."]
+    else:
+        status = "fail"
+        next_actions = ["Inspect the failed validation command output before closeout."]
+
+    coverage = build_validation_coverage_summary(
+        command_class=command_class,
+        argv=argv,
+        command_payload=command,
+        git_state=git_state,
+        status=status,
+        success=success,
+    )
+    if coverage["coverage_status"] in {"partial", "uncovered"}:
+        degraded_reasons.append("partial_surface_coverage")
+    if coverage["coverage_status"] == "claimed_uncovered":
+        warnings.append(
+            remote_validation_warning(
+                "proof_claim_coverage_mismatch",
+                "error",
+                "Proof claimed bead authority but did not cover every claimed path.",
+                "capture_manifest",
+            )
+        )
+        degraded_reasons.append("proof_claim_coverage_mismatch")
+        status = "fail"
+        next_actions = ["Rerun validation with a proof that covers every claimed path."]
+
+    resolved_runner = (
+        "local"
+        if requested_runner == "local" and raw_status not in {"blocked", "not_available", "skipped"}
+        else "not_run"
+    )
+    started_at = proof_string(command.get("started_at"), utc_z(generated_at))
+    ended_at = proof_string(command.get("ended_at"), started_at)
+    return {
+        "schema": REMOTE_VALIDATION_ENTRY_SCHEMA,
+        "entry_id": f"rvpe-{hashlib.sha256(fingerprint.encode('utf-8')).hexdigest()[:16]}",
+        "bead_id": proof_string(command.get("bead_id"), bead_id or "operator-runpack"),
+        "command_class": command_class,
+        "command": {
+            "argv": original_argv,
+            "rendered": rendered,
+            "cwd": cwd,
+            "capture_id": command.get("id"),
+            "command_fingerprint": fingerprint,
+            "feature_flags": proof_list(command.get("feature_flags")),
+            "env_allowlist": ["CARGO_TARGET_DIR", "TMPDIR"],
+        },
+        "runner": {
+            "requested_runner": requested_runner,
+            "resolved_runner": resolved_runner,
+            "runner_requirement": runner_requirement,
+            "remote_execution": False,
+            "local_fallback": "none",
+            "fallback_reason": proof_string(command.get("issue")),
+            "rch_job_id": command.get("rch_job_id"),
+            "worker_id": command.get("worker_id"),
+            "worker_host": command.get("worker_host"),
+            "queue_state": proof_string(command.get("queue_state")),
+            "worker_state": proof_string(command.get("worker_state"), raw_status),
+            "command_rewrite": proof_dict(command.get("command_rewrite")),
+            "status_excerpt": proof_string(command.get("issue"), raw_status),
+        },
+        "timing": {
+            "started_at_utc": started_at,
+            "ended_at_utc": ended_at,
+            "duration_ms": command.get("duration_ms") if isinstance(command.get("duration_ms"), int) else 0,
+            "heartbeat_at_utc": proof_string(command.get("heartbeat_at"), ended_at),
+            "stale_progress_detected": command.get("stale_progress_detected") is True,
+        },
+        "exit": {
+            "exit_code": exit_code,
+            "success": success,
+            "termination_reason": termination_reason,
+            "stderr_excerpt": proof_string(command.get("stderr_snippet")),
+            "stdout_excerpt": proof_string(command.get("stdout_snippet")),
+        },
+        "paths": {
+            "cargo_target_dir": command.get("cargo_target_dir"),
+            "tmpdir": command.get("tmpdir"),
+            "remote_target_dir": command.get("remote_target_dir"),
+            "remote_tmpdir": command.get("remote_tmpdir"),
+            "artifact_paths": proof_list(command.get("artifact_paths")),
+        },
+        "artifact_retrieval": {
+            "status": "not_applicable",
+            "retrieved_paths": [],
+            "missing_paths": [],
+            "warning_details": [],
+            "retrieval_exit_code": None,
+            "retrieval_elapsed_ms": None,
+        },
+        "warnings": warnings,
+        "evidence_classification": {
+            "status": status,
+            "clean_remote_proof": False,
+            "operator_evidence_only": True,
+            "suppressed_claims": [
+                "release_performance",
+                "strict_dropin",
+                "benchmark_throughput",
+                "memory_or_startup_claim",
+            ],
+            "coverage": coverage,
+            "degraded_reasons": sorted(set(degraded_reasons)),
+            "next_actions": next_actions,
+        },
+    }
+
+
+def build_remote_validation_capture_proof_entries(
+    *,
+    capture_summary: dict[str, Any] | None,
+    generated_at: datetime,
+    git_state: dict[str, Any],
+    bead_id: str | None,
+) -> list[dict[str, Any]]:
+    if not isinstance(capture_summary, dict):
+        return []
+    commands = capture_summary.get("commands")
+    if not isinstance(commands, list):
+        return []
+    entries: list[dict[str, Any]] = []
+    for command in commands:
+        if not isinstance(command, dict):
+            continue
+        entry = build_remote_validation_capture_proof_entry(
+            command=command,
+            generated_at=generated_at,
+            git_state=git_state,
+            bead_id=bead_id,
+        )
+        if entry is not None:
+            entries.append(entry)
+    return entries
 
 
 def build_remote_validation_proof_ledger(
@@ -4334,6 +4831,7 @@ def build_remote_validation_proof_ledger(
     generated_at: datetime,
     git_state: dict[str, Any],
     bead_id: str | None,
+    capture_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     cargo_source = by_id["cargo_admission"]
     artifact_source = by_id.get("rch_artifact_sync")
@@ -4346,8 +4844,35 @@ def build_remote_validation_proof_ledger(
             bead_id=bead_id,
         )
     ]
+    entries.extend(
+        build_remote_validation_capture_proof_entries(
+            capture_summary=capture_summary,
+            generated_at=generated_at,
+            git_state=git_state,
+            bead_id=bead_id,
+        )
+    )
     classifications = [
         entry["evidence_classification"]["status"] for entry in entries
+    ]
+    clean_remote_proof_count = sum(
+        1
+        for entry in entries
+        if entry.get("evidence_classification", {}).get("clean_remote_proof") is True
+    )
+    authoritative_count = sum(
+        1
+        for entry in entries
+        if entry.get("evidence_classification", {})
+        .get("coverage", {})
+        .get("authoritative_for_bead")
+        is True
+    )
+    coverage_statuses = [
+        entry.get("evidence_classification", {})
+        .get("coverage", {})
+        .get("coverage_status")
+        for entry in entries
     ]
     redacted_warning_count = sum(
         1
@@ -4366,7 +4891,7 @@ def build_remote_validation_proof_ledger(
         "git": {
             "head": git_state.get("head") if isinstance(git_state, dict) else None,
             "branch": git_state.get("branch") if isinstance(git_state, dict) else None,
-            "dirty_paths": git_state.get("porcelain_lines", []) if isinstance(git_state, dict) else [],
+            "dirty_paths": git_changed_paths(git_state) if isinstance(git_state, dict) else [],
         },
         "worktree": {
             "cwd": str(Path.cwd()),
@@ -4374,10 +4899,17 @@ def build_remote_validation_proof_ledger(
         },
         "entries": entries,
         "summary": {
-            "clean_remote_proof_entries": classifications.count("pass"),
+            "clean_remote_proof_entries": clean_remote_proof_count,
+            "passing_entries": classifications.count("pass"),
             "degraded_entries": classifications.count("degraded"),
             "blocked_entries": classifications.count("blocked"),
             "failed_entries": classifications.count("fail"),
+            "authoritative_for_bead_entries": authoritative_count,
+            "partial_or_uncovered_entries": sum(
+                1
+                for status in coverage_statuses
+                if status in {"partial", "uncovered", "claimed_uncovered"}
+            ),
         },
         "redaction_summary": {
             "redacted_count": redacted_warning_count,
@@ -7405,6 +7937,7 @@ def build_runpack(args: argparse.Namespace) -> dict[str, Any]:
         generated_at=generated_at,
         git_state=git_summary,
         bead_id=getattr(args, "active_bead_id", None),
+        capture_summary=capture_summary,
     )
     beads_summary = summarize_beads(
         by_id["beads"],
@@ -14101,6 +14634,152 @@ def run_self_test() -> int:
             warning["warning_id"] == "artifact_retrieval_warning"
             for warning in retrieval_warning_entry["warnings"]
         )
+        validation_git_path = write_json(
+            workspace / "git-status-validation-proof.json",
+            {
+                "schema": GIT_CONTEXT_SCHEMA,
+                "generated_at": generated_at,
+                "branch": "main",
+                "head": "validationfixture",
+                "upstream": {
+                    "name": "origin/main",
+                    "ahead": 0,
+                    "behind": 0,
+                    "status": "ok",
+                },
+                "porcelain_lines": [" M scripts/build_swarm_operator_runpack.py"],
+                "recent_commits": ["validationfixture bd-validation proof"],
+                "recent_remote_commits": ["remotevalidationfixture origin/main"],
+            },
+        )
+        validation_replay_manifest = {
+            **args.capture_manifest,
+            "commands": [
+                {
+                    "id": "runpack_self_test",
+                    "command": "python3 scripts/build_swarm_operator_runpack.py --self-test",
+                    "cwd": str(workspace),
+                    "status": "ok",
+                    "exit_code": 0,
+                    "issue": None,
+                    "started_at": "2026-05-09T10:00:00Z",
+                    "ended_at": "2026-05-09T10:00:02Z",
+                    "duration_ms": 2000,
+                },
+                {
+                    "id": "clean_worktree_clippy",
+                    "command": "rch exec -- cargo clippy --all-targets -- -D warnings",
+                    "cwd": str(workspace),
+                    "status": "failed",
+                    "exit_code": 2,
+                    "issue": "unrelated dirty worktree: src/extensions.rs reserved by another agent",
+                    "started_at": "2026-05-09T10:01:00Z",
+                    "ended_at": "2026-05-09T10:01:01Z",
+                    "duration_ms": 1000,
+                },
+                {
+                    "id": "rch_workspace_shadow",
+                    "command": "rch exec -- cargo check --all-targets",
+                    "cwd": str(workspace),
+                    "status": "failed",
+                    "exit_code": 101,
+                    "issue": (
+                        "error: failed to load manifest for workspace member "
+                        "`/data/projects/crates/fwc` referenced by workspace at "
+                        "`/data/projects/Cargo.toml`; caused by failed to read "
+                        "`/data/toon_rust/Cargo.toml`"
+                    ),
+                    "started_at": "2026-05-09T10:02:00Z",
+                    "ended_at": "2026-05-09T10:02:05Z",
+                    "duration_ms": 5000,
+                },
+                {
+                    "id": "claimed_mismatch",
+                    "command": "python3 scripts/build_swarm_operator_runpack.py --self-test",
+                    "cwd": str(workspace),
+                    "status": "ok",
+                    "exit_code": 0,
+                    "issue": None,
+                    "covered_paths": ["scripts/build_swarm_operator_runpack.py"],
+                    "claimed_paths": [
+                        "scripts/build_swarm_operator_runpack.py",
+                        "src/extensions.rs",
+                    ],
+                    "coverage": {"authoritative_for_bead": True},
+                    "started_at": "2026-05-09T10:03:00Z",
+                    "ended_at": "2026-05-09T10:03:02Z",
+                    "duration_ms": 2000,
+                },
+            ],
+        }
+        validation_replay_runpack = build_runpack(
+            argparse.Namespace(
+                **{
+                    **vars(args),
+                    "git_status_file": validation_git_path,
+                    "capture_manifest": validation_replay_manifest,
+                    "out_json": None,
+                    "out_md": None,
+                }
+            )
+        )
+        validation_entries = {
+            entry["command"].get("capture_id"): entry
+            for entry in validation_replay_runpack["remote_validation_proof_ledger"][
+                "entries"
+            ]
+            if entry["command"].get("capture_id")
+        }
+        script_entry = validation_entries["runpack_self_test"]
+        assert script_entry["command_class"] == "script_self_test"
+        assert script_entry["evidence_classification"]["status"] == "pass"
+        assert (
+            script_entry["evidence_classification"]["coverage"]["coverage_status"]
+            == "covered"
+        )
+        assert (
+            script_entry["evidence_classification"]["coverage"][
+                "authoritative_for_bead"
+            ]
+            is True
+        )
+        unrelated_entry = validation_entries["clean_worktree_clippy"]
+        assert unrelated_entry["command_class"] == "cargo_clippy"
+        assert unrelated_entry["evidence_classification"]["status"] == "blocked"
+        assert "unrelated_worktree_blocker" in unrelated_entry[
+            "evidence_classification"
+        ]["degraded_reasons"]
+        assert any(
+            warning["warning_id"] == "unrelated_worktree_blocker"
+            for warning in unrelated_entry["warnings"]
+        )
+        shadow_entry = validation_entries["rch_workspace_shadow"]
+        assert shadow_entry["command_class"] == "cargo_check"
+        assert shadow_entry["evidence_classification"]["status"] == "blocked"
+        assert "worker_workspace_shadow" in shadow_entry["evidence_classification"][
+            "degraded_reasons"
+        ]
+        assert any(
+            warning["warning_id"] == "worker_workspace_shadow"
+            for warning in shadow_entry["warnings"]
+        )
+        mismatch_entry = validation_entries["claimed_mismatch"]
+        assert mismatch_entry["evidence_classification"]["status"] == "fail"
+        assert (
+            mismatch_entry["evidence_classification"]["coverage"]["coverage_status"]
+            == "claimed_uncovered"
+        )
+        assert any(
+            warning["warning_id"] == "proof_claim_coverage_mismatch"
+            for warning in mismatch_entry["warnings"]
+        )
+        validation_summary = validation_replay_runpack[
+            "remote_validation_proof_ledger"
+        ]["summary"]
+        assert validation_summary["passing_entries"] >= 1
+        assert validation_summary["authoritative_for_bead_entries"] >= 1
+        assert validation_summary["blocked_entries"] >= 2
+        assert validation_summary["failed_entries"] >= 1
         scorecard = runpack["swarm_scale_safety_scorecard"]
         assert scorecard["schema"] == SAFETY_SCORECARD_SCHEMA
         assert scorecard["overall_status"] == "degraded"

@@ -137,7 +137,9 @@ Beads, Agent Mail, or claim-integrity gates.
 Each proof entry must identify the command, command class, runner requirement,
 resolved runner, RCH worker/job, remote/local fallback state, start/end
 timestamps, exit status, `CARGO_TARGET_DIR`, `TMPDIR`, remote target/tmp paths,
-artifact retrieval status, warnings, and the final evidence classification.
+artifact retrieval status, changed and covered paths, warnings, and the final
+evidence classification. Cargo, script self-test, staged UBS, and Beads ledger
+reconciliation commands are normalized into the same ledger shape.
 
 Interpretation rules:
 
@@ -150,6 +152,12 @@ Interpretation rules:
   into a skipped green gate.
 - Artifact retrieval warnings must stay visible in handoff. A remote command can
   exit 0 while artifact retrieval is degraded; that is not clean remote proof.
+- `authoritative_for_bead=true` requires a passing proof whose covered paths
+  include every claimed changed path. A proof that explicitly claims authority
+  but leaves a claimed path uncovered must fail closed with
+  `proof_claim_coverage_mismatch`.
+- Unrelated worktree blockers and RCH worker workspace-shadow failures must be
+  represented as blocked proof entries, not as source regressions.
 
 When the proof ledger is embedded in an operator runpack, inspect these fields
 before closing any RCH-required bead:
@@ -163,6 +171,8 @@ jq '.remote_validation_proof_ledger.entries[] | {
   remote: .runner.remote_execution,
   local_fallback: .runner.local_fallback,
   artifacts: .artifact_retrieval.status,
+  coverage: .evidence_classification.coverage.coverage_status,
+  authoritative: .evidence_classification.coverage.authoritative_for_bead,
   clean: .evidence_classification.clean_remote_proof,
   status: .evidence_classification.status,
   warnings: [.warnings[].warning_id]

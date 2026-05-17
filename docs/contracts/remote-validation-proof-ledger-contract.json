@@ -7,7 +7,7 @@
   "bead_id": "bd-e5le6.1",
   "parent_bead_id": "bd-e5le6",
   "purpose": "operator_remote_validation_evidence_not_release_performance_claim",
-  "summary": "Defines the machine-readable ledger shape for proving whether a validation command actually ran remotely through RCH, whether local fallback was refused or observed, and whether build artifact retrieval completed cleanly. The ledger is operator evidence for bead closeout and runpack handoff; it is not release performance evidence and does not replace RCH, cargo_headroom.sh, CI, UBS, Beads, Agent Mail, or claim-integrity gates.",
+  "summary": "Defines the machine-readable ledger shape for proving whether cargo, script, UBS, or Beads-ledger validation ran, which changed paths the proof covered, whether RCH execution or local fallback was observed, and whether build artifact retrieval completed cleanly. The ledger is operator evidence for bead closeout and runpack handoff; it is not release performance evidence and does not replace RCH, cargo_headroom.sh, CI, UBS, Beads, Agent Mail, or claim-integrity gates.",
   "non_goals": [
     "replace_rch_scheduler_or_worker_logs",
     "replace_cargo_headroom_admission",
@@ -188,7 +188,10 @@
       "local_fallback_refused",
       "queue_backoff",
       "artifact_retrieval_warning",
-      "stale_progress"
+      "stale_progress",
+      "unrelated_worktree_blocker",
+      "worker_workspace_shadow",
+      "proof_claim_coverage_mismatch"
     ]
   },
   "evidence_classification_contract": {
@@ -197,6 +200,7 @@
       "clean_remote_proof",
       "operator_evidence_only",
       "suppressed_claims",
+      "coverage",
       "degraded_reasons",
       "next_actions"
     ],
@@ -212,7 +216,30 @@
       "benchmark_throughput",
       "memory_or_startup_claim"
     ],
-    "classification_policy": "clean_remote_proof=true is allowed only when command exit succeeded, RCH remote execution is proven, no local fallback occurred, artifact retrieval is clean or not_applicable, and no error-severity warning is present."
+    "classification_policy": "clean_remote_proof=true is allowed only when command exit succeeded, RCH remote execution is proven, no local fallback occurred, artifact retrieval is clean or not_applicable, and no error-severity warning is present. authoritative_for_bead=true is stricter: the proof must pass and cover every claimed changed path."
+  },
+  "coverage_contract": {
+    "required_fields": [
+      "changed_paths",
+      "claimed_paths",
+      "covered_paths",
+      "uncovered_paths",
+      "coverage_status",
+      "coverage_rationale",
+      "claimed_authoritative",
+      "authoritative_for_bead"
+    ],
+    "allowed_coverage_status": [
+      "covered",
+      "partial",
+      "uncovered",
+      "blocked",
+      "fail",
+      "claimed_uncovered",
+      "no_changed_paths",
+      "no_claimed_paths"
+    ],
+    "fail_closed_policy": "If a proof explicitly claims authoritative bead coverage but any claimed path is not covered, the entry must classify as fail with warning_id=proof_claim_coverage_mismatch."
   },
   "golden_examples": {
     "path": "tests/golden_corpus/remote_validation_proof_ledger/examples.json",

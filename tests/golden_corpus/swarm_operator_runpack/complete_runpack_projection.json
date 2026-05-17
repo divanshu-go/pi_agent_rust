@@ -1003,6 +1003,26 @@
         "entry_id": "rvpe-3a546a5f40287059",
         "evidence_classification": {
           "clean_remote_proof": false,
+          "coverage": {
+            "authoritative_for_bead": false,
+            "changed_paths": [
+              "src/doctor.rs",
+              "scripts/new-tool.py"
+            ],
+            "claimed_authoritative": false,
+            "claimed_paths": [
+              "src/doctor.rs",
+              "scripts/new-tool.py"
+            ],
+            "coverage_rationale": "validation did not complete cleanly, so coverage is not authoritative",
+            "coverage_status": "blocked",
+            "covered_paths": [
+              "src/doctor.rs"
+            ],
+            "uncovered_paths": [
+              "scripts/new-tool.py"
+            ]
+          },
           "degraded_reasons": [
             "local_fallback_refused",
             "queue_backoff",
@@ -1078,10 +1098,13 @@
     "generated_at_utc": "2026-05-09T09:00:00Z",
     "git": {
       "branch": "main",
-      "dirty_paths": [],
+      "dirty_paths": [
+        "src/doctor.rs",
+        "scripts/new-tool.py"
+      ],
       "head": "abc123fixture"
     },
-    "ledger_id": "rvpl-6420e86ac008d731",
+    "ledger_id": "rvpl-0adebefc11879754",
     "producer": {
       "name": "scripts/build_swarm_operator_runpack.py",
       "version": "1.0.0"
@@ -1092,10 +1115,13 @@
     },
     "schema": "pi.remote_validation.proof_ledger.v1",
     "summary": {
+      "authoritative_for_bead_entries": 0,
       "blocked_entries": 1,
       "clean_remote_proof_entries": 0,
       "degraded_entries": 0,
-      "failed_entries": 0
+      "failed_entries": 0,
+      "partial_or_uncovered_entries": 0,
+      "passing_entries": 0
     },
     "worktree": {
       "cwd": "/data/projects/pi_agent_rust",

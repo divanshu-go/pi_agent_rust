@@ -108,6 +108,16 @@
                 "benchmark_throughput",
                 "memory_or_startup_claim"
               ],
+              "coverage": {
+                "changed_paths": [],
+                "claimed_paths": [],
+                "covered_paths": [],
+                "uncovered_paths": [],
+                "coverage_status": "no_changed_paths",
+                "coverage_rationale": "worktree reported no changed paths for this proof context",
+                "claimed_authoritative": false,
+                "authoritative_for_bead": true
+              },
               "degraded_reasons": [],
               "next_actions": []
             }
@@ -240,6 +250,16 @@
                 "benchmark_throughput",
                 "memory_or_startup_claim"
               ],
+              "coverage": {
+                "changed_paths": [],
+                "claimed_paths": [],
+                "covered_paths": [],
+                "uncovered_paths": [],
+                "coverage_status": "blocked",
+                "coverage_rationale": "validation did not complete cleanly, so coverage is not authoritative",
+                "claimed_authoritative": false,
+                "authoritative_for_bead": false
+              },
               "degraded_reasons": [
                 "local_fallback_refused"
               ],
@@ -374,6 +394,16 @@
                 "benchmark_throughput",
                 "memory_or_startup_claim"
               ],
+              "coverage": {
+                "changed_paths": [],
+                "claimed_paths": [],
+                "covered_paths": [],
+                "uncovered_paths": [],
+                "coverage_status": "blocked",
+                "coverage_rationale": "validation did not complete cleanly, so coverage is not authoritative",
+                "claimed_authoritative": false,
+                "authoritative_for_bead": false
+              },
               "degraded_reasons": [
                 "queue_backoff"
               ],
@@ -513,6 +543,16 @@
                 "benchmark_throughput",
                 "memory_or_startup_claim"
               ],
+              "coverage": {
+                "changed_paths": [],
+                "claimed_paths": [],
+                "covered_paths": [],
+                "uncovered_paths": [],
+                "coverage_status": "no_changed_paths",
+                "coverage_rationale": "worktree reported no changed paths for this proof context",
+                "claimed_authoritative": false,
+                "authoritative_for_bead": false
+              },
               "degraded_reasons": [
                 "artifact_retrieval_warning"
               ],
