@@ -2034,9 +2034,60 @@ def capture_summary_from_args(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def infer_agent_mail_semantic_readiness(commands: list[dict[str, Any]]) -> dict[str, Any]:
+    for command in commands:
+        issue = command.get("issue")
+        if not isinstance(issue, str):
+            continue
+        lowered = issue.lower()
+        if "schema missing" in lowered or "missing required" in lowered:
+            return {
+                "semantic_readiness_status": "fail",
+                "semantic_readiness_detail": issue,
+            }
+    return {
+        "semantic_readiness_status": None,
+        "semantic_readiness_detail": None,
+    }
+
+
+def agent_mail_transport_status(commands: list[dict[str, Any]]) -> str:
+    if not commands:
+        return "not_captured"
+    if any(command.get("exit_code") is not None for command in commands):
+        return "reachable"
+    return "unknown"
+
+
+def beads_fallback_ownership_evidence(
+    beads_summary: dict[str, Any],
+    max_items: int,
+) -> dict[str, Any]:
+    active_ownership = (
+        beads_summary.get("active_ownership")
+        if isinstance(beads_summary.get("active_ownership"), list)
+        else []
+    )
+    status_counts = (
+        beads_summary.get("status_counts")
+        if isinstance(beads_summary.get("status_counts"), dict)
+        else {}
+    )
+    return {
+        "source": "beads",
+        "source_command": "br list --status=in_progress --json",
+        "soft_lock_field": "assignee",
+        "timestamp_field": "updated_at",
+        "active_count": beads_summary.get("active_count"),
+        "in_progress_count": status_counts.get("in_progress", 0),
+        "active_ownership": bounded(active_ownership, max_items),
+    }
+
+
 def summarize_agent_mail_read_state(
     capture_summary: dict[str, Any],
     doctor_summary: dict[str, Any],
+    beads_summary: dict[str, Any],
     max_items: int,
 ) -> dict[str, Any]:
     commands = [
@@ -2056,6 +2107,8 @@ def summarize_agent_mail_read_state(
     summary = {
         "status": status,
         "capture_mode": capture_summary.get("mode"),
+        "transport_status": agent_mail_transport_status(commands),
+        **infer_agent_mail_semantic_readiness(commands),
         "doctor_finding_count": len(doctor_summary.get("agent_mail_findings") or []),
         "build_slots_observed": doctor_summary.get("agent_mail_build_slots") is not None,
         "commands": bounded(
@@ -2077,6 +2130,10 @@ def summarize_agent_mail_read_state(
                 "soft_lock": "beads",
                 "registration_required_before_coding": False,
                 "fallback_action": "use_beads_soft_lock",
+                "fallback_ownership_evidence": beads_fallback_ownership_evidence(
+                    beads_summary,
+                    max_items,
+                ),
                 "no_mail_closeout_steps": build_no_mail_closeout_steps(),
             }
         )
@@ -3662,6 +3719,18 @@ def summarize_beads(
     issues = parse_issue_list(source.payload)
     status_counts = Counter(str(issue.get("status") or "unknown") for issue in issues)
     active = [issue for issue in issues if issue.get("status") in {"open", "in_progress"}]
+    active_ownership = [
+        normalized_bead_candidate(issue)
+        for issue in issues
+        if issue.get("status") == "in_progress"
+    ]
+    active_ownership.sort(
+        key=lambda issue: (
+            str(issue.get("updated_at") or ""),
+            str(issue.get("id") or ""),
+        ),
+        reverse=True,
+    )
     open_candidates = sort_bead_candidates(
         [issue for issue in issues if issue.get("status") == "open"]
     )
@@ -3691,6 +3760,7 @@ def summarize_beads(
         "total_issues": len(issues),
         "status_counts": dict(sorted(status_counts.items())),
         "active_count": len(active),
+        "active_ownership": bounded(active_ownership, max_items),
         "open_candidate_count": len(open_candidates),
         "open_candidates": bounded(open_candidates, max_items),
         "deferred_planning_count": len(deferred_planning),
@@ -5006,6 +5076,7 @@ def summarize_agent_mail_autopilot(
     status_source: SourcePayload,
     reservations_source: SourcePayload,
     capture_summary: dict[str, Any],
+    beads_summary: dict[str, Any],
     max_items: int,
 ) -> dict[str, Any]:
     commands = [
@@ -5047,6 +5118,7 @@ def summarize_agent_mail_autopilot(
     summary = {
         "status": status,
         "capture_mode": capture_summary.get("mode"),
+        "transport_status": agent_mail_transport_status(commands),
         "read_status": read_status,
         "reservation_status": reservation_status,
         "reservation_count": len(reservations),
@@ -5059,6 +5131,11 @@ def summarize_agent_mail_autopilot(
             max_items,
         ),
         "fallback_action": "use_beads_soft_lock" if status != "ok" else None,
+        "fallback_ownership_evidence": (
+            beads_fallback_ownership_evidence(beads_summary, max_items)
+            if status != "ok"
+            else None
+        ),
         "no_mail_closeout_steps": no_mail_closeout_steps,
         "commands": commands,
         "redaction_summary": redaction.to_json(),
@@ -5198,6 +5275,7 @@ def build_autopilot_input_pack(args: argparse.Namespace) -> dict[str, Any]:
         by_id["agent_mail_status"],
         by_id["agent_mail_reservations"],
         capture_summary,
+        beads_summary,
         args.max_items,
     )
     budget_drift = build_budget_drift_report(
@@ -6070,13 +6148,16 @@ def build_autopilot_plan(
     if agent_mail.get("status") != "ok":
         evidence_paths = [
             "normalized_inputs.agent_mail.status",
+            "normalized_inputs.agent_mail.transport_status",
             "normalized_inputs.agent_mail.read_status",
             "normalized_inputs.agent_mail.reservation_status",
             "normalized_inputs.agent_mail.unavailable_operations",
             "normalized_inputs.beads.active_count",
+            "normalized_inputs.agent_mail.fallback_ownership_evidence.active_ownership",
         ]
         rationale_parts = [
             f"Agent Mail status={agent_mail.get('status')}",
+            f"transport={agent_mail.get('transport_status')}",
             f"fallback={agent_mail.get('fallback_action')}",
         ]
         if agent_mail.get("recovery_mode") is not None:
@@ -6090,6 +6171,17 @@ def build_autopilot_plan(
         rationale_parts.append(
             "unavailable_operations="
             f"{','.join(agent_mail.get('unavailable_operations') or [])}"
+        )
+        fallback_ownership = (
+            agent_mail.get("fallback_ownership_evidence")
+            if isinstance(agent_mail.get("fallback_ownership_evidence"), dict)
+            else {}
+        )
+        rationale_parts.append(
+            "active_beads="
+            f"{fallback_ownership.get('active_count')}; "
+            "in_progress="
+            f"{fallback_ownership.get('in_progress_count')}"
         )
         actions.append(
             autopilot_plan_action(
@@ -7314,6 +7406,12 @@ def build_runpack(args: argparse.Namespace) -> dict[str, Any]:
         git_state=git_summary,
         bead_id=getattr(args, "active_bead_id", None),
     )
+    beads_summary = summarize_beads(
+        by_id["beads"],
+        generated_at=generated_at,
+        stale_after_hours=args.stale_after_hours,
+        max_items=args.max_items,
+    )
     runpack = {
         "schema": RUNPACK_SCHEMA,
         "generated_at": generated_at.isoformat(),
@@ -7322,12 +7420,7 @@ def build_runpack(args: argparse.Namespace) -> dict[str, Any]:
         "capture": capture_summary,
         "source_statuses": [source.to_status() for source in sources],
         "doctor_swarm": doctor_summary,
-        "beads": summarize_beads(
-            by_id["beads"],
-            generated_at=generated_at,
-            stale_after_hours=args.stale_after_hours,
-            max_items=args.max_items,
-        ),
+        "beads": beads_summary,
         "agent_mail": {
             "doctor_findings": doctor_summary.get("agent_mail_findings", []),
             "build_slots": doctor_summary.get("agent_mail_build_slots"),
@@ -7336,6 +7429,7 @@ def build_runpack(args: argparse.Namespace) -> dict[str, Any]:
         "agent_mail_read_state": summarize_agent_mail_read_state(
             capture_summary,
             doctor_summary,
+            beads_summary,
             args.max_items,
         ),
         "rch_admission": summarize_cargo_admission(by_id["cargo_admission"]),
@@ -7443,6 +7537,23 @@ def operator_next_actions(runpack: dict[str, Any]) -> list[str]:
     mail_state = runpack.get("agent_mail_read_state", {})
     if mail_state.get("status") in {"degraded", "not_available"}:
         actions.append("Treat Agent Mail read state as unavailable and fall back to Beads ownership evidence")
+        fallback_ownership = (
+            mail_state.get("fallback_ownership_evidence")
+            if isinstance(mail_state.get("fallback_ownership_evidence"), dict)
+            else {}
+        )
+        active_ownership = (
+            fallback_ownership.get("active_ownership")
+            if isinstance(fallback_ownership.get("active_ownership"), list)
+            else []
+        )
+        if active_ownership:
+            owner = active_ownership[0]
+            actions.append(
+                "Use Beads active ownership from "
+                f"`{fallback_ownership.get('source_command')}` as the soft-lock source "
+                f"({owner.get('id')} assigned to {owner.get('assignee')}, updated {owner.get('updated_at')})"
+            )
         recovery_preview_action = mail_state.get("recovery_preview_action")
         recovery_action = mail_state.get("recovery_action")
         if recovery_preview_action:
@@ -7572,6 +7683,17 @@ def render_markdown(runpack: dict[str, Any]) -> str:
     lines.append(f"- Git dirty: `{runpack['git_state'].get('dirty')}`")
     lines.append(f"- Agent Mail read state: `{runpack['agent_mail_read_state'].get('status')}`")
     mail_state = runpack.get("agent_mail_read_state", {})
+    fallback_ownership = (
+        mail_state.get("fallback_ownership_evidence")
+        if isinstance(mail_state.get("fallback_ownership_evidence"), dict)
+        else {}
+    )
+    if fallback_ownership:
+        lines.append(
+            "- Beads soft-lock source: "
+            f"`{fallback_ownership.get('source_command')}` "
+            f"({fallback_ownership.get('in_progress_count')} in-progress owners)"
+        )
     if isinstance(mail_state, dict) and mail_state.get("recovery_mode"):
         lines.append(
             "- Agent Mail recovery: "
@@ -13443,9 +13565,20 @@ def run_self_test() -> int:
         assert runpack["git_state"]["branch"] == "main"
         assert runpack["git_state"]["upstream"]["ahead"] == 1
         assert runpack["agent_mail_read_state"]["status"] == "degraded"
+        assert runpack["agent_mail_read_state"]["transport_status"] == "reachable"
+        assert runpack["agent_mail_read_state"]["semantic_readiness_status"] == "fail"
+        assert runpack["agent_mail_read_state"]["semantic_readiness_detail"] == AGENT_MAIL_SCHEMA_CORRUPT_DETAIL
         assert runpack["agent_mail_read_state"]["soft_lock"] == "beads"
         assert runpack["agent_mail_read_state"]["fallback_action"] == "use_beads_soft_lock"
         assert runpack["agent_mail_read_state"]["registration_required_before_coding"] is False
+        assert runpack["beads"]["active_ownership"][0]["id"] == "bd-stale"
+        assert runpack["beads"]["active_ownership"][0]["assignee"] == "GreenStone"
+        assert runpack["beads"]["active_ownership"][0]["updated_at"] == "2026-05-08T00:00:00+00:00"
+        fallback_ownership = runpack["agent_mail_read_state"]["fallback_ownership_evidence"]
+        assert fallback_ownership["source"] == "beads"
+        assert fallback_ownership["source_command"] == "br list --status=in_progress --json"
+        assert fallback_ownership["active_ownership"][0]["id"] == "bd-stale"
+        assert fallback_ownership["active_ownership"][0]["assignee"] == "GreenStone"
         no_mail_steps = runpack["agent_mail_read_state"]["no_mail_closeout_steps"]
         assert any("registration/inbox/reservation" in step for step in no_mail_steps)
         assert any("do not require Agent Mail reservations before coding" in step for step in no_mail_steps)
@@ -13453,6 +13586,7 @@ def run_self_test() -> int:
         assert any("Final handoff" in step and "Beads ownership" in step for step in no_mail_steps)
         operator_actions = runpack["operator_next_actions"]
         assert any("Treat Agent Mail read state as unavailable" in action for action in operator_actions)
+        assert any("Use Beads active ownership" in action and "GreenStone" in action for action in operator_actions)
         assert any("do not require Agent Mail reservations before coding" in action for action in operator_actions)
         assert any("br close" in action and "br sync --flush-only" in action for action in operator_actions)
         assert not any(
@@ -14169,8 +14303,12 @@ def run_self_test() -> int:
         assert input_pack["schema"] == AUTOPILOT_INPUT_PACK_SCHEMA
         assert input_pack["status"] == "degraded"
         assert input_pack["normalized_inputs"]["agent_mail"]["status"] == "degraded"
+        assert input_pack["normalized_inputs"]["agent_mail"]["transport_status"] == "reachable"
+        assert input_pack["normalized_inputs"]["agent_mail"]["semantic_readiness_status"] == "fail"
+        assert input_pack["normalized_inputs"]["agent_mail"]["semantic_readiness_detail"] == AGENT_MAIL_SCHEMA_CORRUPT_DETAIL
         assert input_pack["normalized_inputs"]["agent_mail"]["fallback_action"] == "use_beads_soft_lock"
         assert input_pack["normalized_inputs"]["agent_mail"]["soft_lock"] == "beads"
+        assert input_pack["normalized_inputs"]["agent_mail"]["fallback_ownership_evidence"]["active_ownership"][0]["assignee"] == "GreenStone"
         assert input_pack["normalized_inputs"]["budget_drift"]["status"] == "deny_new_work"
         assert input_pack["normalized_inputs"]["budget_drift"]["schema"] == BUDGET_DRIFT_SCHEMA
         assert input_pack["normalized_inputs"]["operator_runpack"]["status"] == "ok"

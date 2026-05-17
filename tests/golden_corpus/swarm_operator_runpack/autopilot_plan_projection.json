@@ -109,10 +109,12 @@
       "confidence": "high",
       "evidence_paths": [
         "normalized_inputs.agent_mail.status",
+        "normalized_inputs.agent_mail.transport_status",
         "normalized_inputs.agent_mail.read_status",
         "normalized_inputs.agent_mail.reservation_status",
         "normalized_inputs.agent_mail.unavailable_operations",
         "normalized_inputs.beads.active_count",
+        "normalized_inputs.agent_mail.fallback_ownership_evidence.active_ownership",
         "normalized_inputs.agent_mail.recovery_action",
         "normalized_inputs.agent_mail.recovery_preview_action"
       ],
@@ -135,7 +137,7 @@
         "Announce/reserve through Agent Mail only after health recovers."
       ],
       "rank": 3,
-      "rationale": "Agent Mail status=degraded; fallback=use_beads_soft_lock; recovery_mode=corrupt; recovery_preview=am doctor repair --dry-run; unavailable_operations=fetch_inbox,send_message,acknowledge_message,file_reservation_paths",
+      "rationale": "Agent Mail status=degraded; transport=reachable; fallback=use_beads_soft_lock; recovery_mode=corrupt; recovery_preview=am doctor repair --dry-run; unavailable_operations=fetch_inbox,send_message,acknowledge_message,file_reservation_paths; active_beads=2; in_progress=1",
       "severity": "high",
       "title": "Use Beads assignment as the coordination lock"
     },

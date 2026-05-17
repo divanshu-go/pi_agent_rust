@@ -62,6 +62,25 @@
     ],
     "doctor_finding_count": 1,
     "fallback_action": "use_beads_soft_lock",
+    "fallback_ownership_evidence": {
+      "active_count": 2,
+      "active_ownership": [
+        {
+          "assignee": "GreenStone",
+          "id": "bd-stale",
+          "labels": [],
+          "priority": 99,
+          "status": "in_progress",
+          "title": "Stale fixture",
+          "updated_at": "2026-05-08T00:00:00+00:00"
+        }
+      ],
+      "in_progress_count": 1,
+      "soft_lock_field": "assignee",
+      "source": "beads",
+      "source_command": "br list --status=in_progress --json",
+      "timestamp_field": "updated_at"
+    },
     "no_mail_closeout_steps": [
       "Attempt Agent Mail registration/inbox/reservation and capture the exact health error.",
       "Use the Beads assignee/status as the soft lock; do not require Agent Mail reservations before coding while Mail is unavailable.",
@@ -69,11 +88,25 @@
       "Final handoff must say Agent Mail was unavailable and Beads ownership was used as the coordination record."
     ],
     "registration_required_before_coding": false,
+    "semantic_readiness_detail": "sqlite schema missing required health_check tables: projects, agents, messages, message_recipients",
+    "semantic_readiness_status": "fail",
     "soft_lock": "beads",
-    "status": "degraded"
+    "status": "degraded",
+    "transport_status": "reachable"
   },
   "beads": {
     "active_count": 2,
+    "active_ownership": [
+      {
+        "assignee": "GreenStone",
+        "id": "bd-stale",
+        "labels": [],
+        "priority": 99,
+        "status": "in_progress",
+        "title": "Stale fixture",
+        "updated_at": "2026-05-08T00:00:00+00:00"
+      }
+    ],
     "deferred_planning": [],
     "deferred_planning_count": 0,
     "open_candidate_count": 1,
@@ -826,6 +859,7 @@
     "Use activity-digest saturation evidence to narrow or redirect the swarm",
     "Account for dirty files before using the runpack as handoff evidence",
     "Treat Agent Mail read state as unavailable and fall back to Beads ownership evidence",
+    "Use Beads active ownership from `br list --status=in_progress --json` as the soft-lock source (bd-stale assigned to GreenStone, updated 2026-05-08T00:00:00+00:00)",
     "Attempt Agent Mail registration/inbox/reservation and capture the exact health error.",
     "Use the Beads assignee/status as the soft lock; do not require Agent Mail reservations before coding while Mail is unavailable.",
     "Close finished work with `br close <issue-id> --reason \"...\"` and `br sync --flush-only`.",
