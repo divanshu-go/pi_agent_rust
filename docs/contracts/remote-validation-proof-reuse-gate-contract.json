@@ -1,0 +1,78 @@
+{
+  "schema": "pi.validation.proof_reuse_gate_contract.v1",
+  "gate_schema": "pi.validation.proof_reuse_gate.v1",
+  "context_schema": "pi.validation.proof_reuse_context.v1",
+  "contract_version": "1.0.0",
+  "bead_id": "bd-63x3v.10.2",
+  "purpose": "operator_validation_proof_reuse_gate_not_validation_skipper",
+  "summary": "Defines the read-only gate that decides whether an existing remote validation proof can cover the exact current command, git head, staged-path, runner, and target/tmp context. The gate never skips validation by itself; production admission must explicitly consume the decision and still fail closed on any invalidation.",
+  "allowed_statuses": [
+    "pass",
+    "blocked"
+  ],
+  "allowed_decisions": [
+    "reuse_existing_remote_proof",
+    "rerun_validation"
+  ],
+  "required_top_level_keys": [
+    "schema",
+    "generated_at",
+    "status",
+    "purpose",
+    "source_ledger_id",
+    "source_ledger_schema",
+    "context_schema",
+    "reuse_allowed",
+    "decision",
+    "selected_entry_id",
+    "source_proof_ids",
+    "candidate_count",
+    "candidate_decisions",
+    "invalidation_reasons",
+    "current_context",
+    "claim_boundaries",
+    "next_actions"
+  ],
+  "required_candidate_keys": [
+    "entry_id",
+    "bead_id",
+    "command_fingerprint",
+    "clean_remote_proof",
+    "authoritative_for_bead",
+    "covered_paths",
+    "invalidation_reasons",
+    "reuse_allowed"
+  ],
+  "required_invalidation_reason_ids": [
+    "source_proof_not_passing",
+    "missing_clean_remote_proof",
+    "missing_rch_provenance",
+    "local_fallback_observed",
+    "runner_requirement_mismatch",
+    "stale_git_head",
+    "command_fingerprint_mismatch",
+    "dirty_worktree_mismatch",
+    "staged_paths_not_covered",
+    "coverage_not_authoritative",
+    "toolchain_or_lockfile_changed",
+    "cargo_target_dir_mismatch",
+    "tmpdir_mismatch",
+    "missing_current_command_fingerprint",
+    "missing_current_git_head",
+    "no_source_proofs"
+  ],
+  "required_claim_boundary_true_keys": [
+    "read_only",
+    "does_not_skip_validation_by_itself",
+    "does_not_mutate_rch_or_agent_mail",
+    "does_not_authorize_release_performance_claims",
+    "requires_fresh_remote_proof"
+  ],
+  "reuse_policy": {
+    "minimum_source_proof": "A reusable proof must have status=pass, clean_remote_proof=true, resolved_runner=rch_remote, remote_execution=true, local_fallback=none, authoritative_for_bead=true, and matching runner_requirement.",
+    "context_match": "The current git head, staged or changed paths, command fingerprint, CARGO_TARGET_DIR, and TMPDIR must match the source proof context.",
+    "coverage_policy": "Every current changed path must be included in the source proof covered_paths.",
+    "toolchain_policy": "Any current change to Cargo.lock or rust-toolchain.toml invalidates reuse and requires a fresh RCH validation run.",
+    "claim_boundary": "This gate is operator evidence only. It does not mutate RCH, Agent Mail, git, Beads, source files, or production validation admission."
+  }
+}

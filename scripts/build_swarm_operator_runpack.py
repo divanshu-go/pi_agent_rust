@@ -54,8 +54,16 @@ RPC_SWARM_E2E_SCHEMA = "pi.rpc.concurrent_swarm_e2e.v1"
 RCH_ARTIFACT_SYNC_SCHEMA = "pi.rch.artifact_sync_preflight.v1"
 REMOTE_VALIDATION_LEDGER_SCHEMA = "pi.remote_validation.proof_ledger.v1"
 REMOTE_VALIDATION_ENTRY_SCHEMA = "pi.remote_validation.proof_entry.v1"
+REMOTE_VALIDATION_PROOF_REUSE_GATE_SCHEMA = "pi.validation.proof_reuse_gate.v1"
+REMOTE_VALIDATION_PROOF_REUSE_CONTEXT_SCHEMA = "pi.validation.proof_reuse_context.v1"
+REMOTE_VALIDATION_PROOF_REUSE_GATE_CONTRACT_SCHEMA = (
+    "pi.validation.proof_reuse_gate_contract.v1"
+)
 REMOTE_VALIDATION_CONTRACT_PATH = Path(
     "docs/contracts/remote-validation-proof-ledger-contract.json"
+)
+REMOTE_VALIDATION_PROOF_REUSE_GATE_CONTRACT_PATH = Path(
+    "docs/contracts/remote-validation-proof-reuse-gate-contract.json"
 )
 GIT_CONTEXT_SCHEMA = "pi.swarm.git_context.v1"
 RUNPACK_CAPTURE_SCHEMA = "pi.swarm.operator_runpack_capture.v1"
@@ -5057,6 +5065,294 @@ def build_remote_validation_proof_ledger(
             "strict_dropin_claims_allowed": False,
         },
     }
+
+
+def proof_reuse_context_changed_paths(context: dict[str, Any]) -> list[str]:
+    for key in ("changed_paths", "staged_paths", "claimed_paths"):
+        values = context.get(key)
+        if isinstance(values, list):
+            return unique_strings(
+                [value for value in values if isinstance(value, str) and value]
+            )
+    git = context.get("git")
+    return git_changed_paths(git if isinstance(git, dict) else {})
+
+
+def proof_reuse_context_fingerprint(context: dict[str, Any]) -> str | None:
+    command = context.get("command")
+    if isinstance(command, dict):
+        for key in ("command_fingerprint", "fingerprint"):
+            value = command.get(key)
+            if isinstance(value, str) and value:
+                return value
+    value = context.get("command_fingerprint")
+    return value if isinstance(value, str) and value else None
+
+
+def proof_reuse_context_git_head(context: dict[str, Any]) -> str | None:
+    git = context.get("git")
+    if isinstance(git, dict):
+        value = git.get("head")
+        if isinstance(value, str) and value:
+            return value
+    value = context.get("git_head")
+    return value if isinstance(value, str) and value else None
+
+
+def proof_reuse_context_env(context: dict[str, Any]) -> dict[str, Any]:
+    env = context.get("env")
+    if isinstance(env, dict):
+        return env
+    env_fingerprint = context.get("env_fingerprint")
+    if isinstance(env_fingerprint, dict):
+        return env_fingerprint
+    return {}
+
+
+def proof_reuse_entry_invalidation_reasons(
+    entry: dict[str, Any],
+    *,
+    ledger: dict[str, Any],
+    context: dict[str, Any],
+) -> list[str]:
+    reasons: list[str] = []
+    classification = proof_dict(entry.get("evidence_classification"))
+    coverage = proof_dict(classification.get("coverage"))
+    runner = proof_dict(entry.get("runner"))
+    paths = proof_dict(entry.get("paths"))
+    command = proof_dict(entry.get("command"))
+    context_env = proof_reuse_context_env(context)
+    current_paths = proof_reuse_context_changed_paths(context)
+    covered_paths = unique_strings(
+        [
+            value
+            for value in proof_list(coverage.get("covered_paths"))
+            if isinstance(value, str)
+        ]
+    )
+    ledger_git = proof_dict(ledger.get("git"))
+    ledger_dirty_paths = unique_strings(
+        [
+            value
+            for value in proof_list(ledger_git.get("dirty_paths"))
+            if isinstance(value, str)
+        ]
+    )
+    current_git_head = proof_reuse_context_git_head(context)
+    current_fingerprint = proof_reuse_context_fingerprint(context)
+    required_runner = proof_string(context.get("runner_requirement"), "rch_required")
+
+    if classification.get("status") != "pass":
+        reasons.append("source_proof_not_passing")
+    if classification.get("clean_remote_proof") is not True:
+        reasons.append("missing_clean_remote_proof")
+    if (
+        runner.get("resolved_runner") != "rch_remote"
+        or runner.get("remote_execution") is not True
+    ):
+        reasons.append("missing_rch_provenance")
+    if runner.get("local_fallback") not in {None, "none"}:
+        reasons.append("local_fallback_observed")
+    if runner.get("runner_requirement") != required_runner:
+        reasons.append("runner_requirement_mismatch")
+    if current_git_head and ledger_git.get("head") != current_git_head:
+        reasons.append("stale_git_head")
+    if current_fingerprint and command.get("command_fingerprint") != current_fingerprint:
+        reasons.append("command_fingerprint_mismatch")
+    if sorted(ledger_dirty_paths) != sorted(current_paths):
+        reasons.append("dirty_worktree_mismatch")
+    uncovered_paths = [path for path in current_paths if path not in covered_paths]
+    if uncovered_paths:
+        reasons.append("staged_paths_not_covered")
+    if coverage.get("authoritative_for_bead") is not True:
+        reasons.append("coverage_not_authoritative")
+    if any(path in {"Cargo.lock", "rust-toolchain.toml"} for path in current_paths):
+        reasons.append("toolchain_or_lockfile_changed")
+    if (
+        context_env.get("cargo_target_dir")
+        and paths.get("cargo_target_dir") != context_env.get("cargo_target_dir")
+    ):
+        reasons.append("cargo_target_dir_mismatch")
+    if context_env.get("tmpdir") and paths.get("tmpdir") != context_env.get("tmpdir"):
+        reasons.append("tmpdir_mismatch")
+    if not current_fingerprint:
+        reasons.append("missing_current_command_fingerprint")
+    if not current_git_head:
+        reasons.append("missing_current_git_head")
+    return sorted(set(reasons))
+
+
+def build_remote_validation_proof_reuse_gate(
+    *,
+    generated_at: str,
+    proof_ledger: dict[str, Any],
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    entries = [
+        entry
+        for entry in proof_ledger.get("entries", [])
+        if isinstance(entry, dict)
+    ]
+    current_paths = proof_reuse_context_changed_paths(context)
+    candidate_decisions: list[dict[str, Any]] = []
+    for entry in entries:
+        invalidation_reasons = proof_reuse_entry_invalidation_reasons(
+            entry,
+            ledger=proof_ledger,
+            context=context,
+        )
+        classification = proof_dict(entry.get("evidence_classification"))
+        coverage = proof_dict(classification.get("coverage"))
+        candidate_decisions.append(
+            {
+                "entry_id": entry.get("entry_id"),
+                "bead_id": entry.get("bead_id"),
+                "command_fingerprint": proof_dict(entry.get("command")).get(
+                    "command_fingerprint"
+                ),
+                "clean_remote_proof": classification.get("clean_remote_proof") is True,
+                "authoritative_for_bead": coverage.get("authoritative_for_bead") is True,
+                "covered_paths": proof_list(coverage.get("covered_paths")),
+                "invalidation_reasons": invalidation_reasons,
+                "reuse_allowed": not invalidation_reasons,
+            }
+        )
+
+    reusable = [
+        candidate for candidate in candidate_decisions if candidate["reuse_allowed"]
+    ]
+    selected = reusable[0] if reusable else None
+    invalidation_reasons = sorted(
+        {
+            reason
+            for candidate in candidate_decisions
+            for reason in candidate["invalidation_reasons"]
+        }
+    )
+    if not entries:
+        invalidation_reasons.append("no_source_proofs")
+    reuse_allowed = selected is not None
+    summary = {
+        "schema": REMOTE_VALIDATION_PROOF_REUSE_GATE_SCHEMA,
+        "generated_at": generated_at,
+        "status": "pass" if reuse_allowed else "blocked",
+        "purpose": "operator_validation_proof_reuse_gate_not_validation_skipper",
+        "source_ledger_id": proof_ledger.get("ledger_id"),
+        "source_ledger_schema": proof_ledger.get("schema"),
+        "context_schema": context.get("schema"),
+        "reuse_allowed": reuse_allowed,
+        "decision": "reuse_existing_remote_proof" if reuse_allowed else "rerun_validation",
+        "selected_entry_id": selected.get("entry_id") if selected else None,
+        "source_proof_ids": [
+            candidate.get("entry_id")
+            for candidate in candidate_decisions
+            if candidate.get("entry_id")
+        ],
+        "candidate_count": len(candidate_decisions),
+        "candidate_decisions": candidate_decisions,
+        "invalidation_reasons": [] if reuse_allowed else invalidation_reasons,
+        "current_context": {
+            "git_head": proof_reuse_context_git_head(context),
+            "changed_paths": current_paths,
+            "command_fingerprint": proof_reuse_context_fingerprint(context),
+            "runner_requirement": proof_string(context.get("runner_requirement"), "rch_required"),
+            "env_fingerprint": proof_reuse_context_env(context),
+        },
+        "claim_boundaries": {
+            "read_only": True,
+            "does_not_skip_validation_by_itself": True,
+            "does_not_mutate_rch_or_agent_mail": True,
+            "does_not_authorize_release_performance_claims": True,
+            "requires_fresh_remote_proof": True,
+        },
+        "next_actions": (
+            ["Reuse selected proof only for the exact covered command and changed-path context."]
+            if reuse_allowed
+            else ["Rerun validation through RCH; existing proof cannot cover this context."]
+        ),
+    }
+    assert_remote_validation_proof_reuse_gate_contract(summary)
+    return summary
+
+
+def assert_remote_validation_proof_reuse_gate_contract(summary: dict[str, Any]) -> None:
+    root = repo_root()
+    contract_path = root / REMOTE_VALIDATION_PROOF_REUSE_GATE_CONTRACT_PATH
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise AssertionError(f"missing proof reuse gate contract: {contract_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"proof reuse gate contract is malformed JSON: {contract_path}: {exc}"
+        ) from exc
+    assert contract.get("schema") == REMOTE_VALIDATION_PROOF_REUSE_GATE_CONTRACT_SCHEMA
+    assert contract.get("gate_schema") == REMOTE_VALIDATION_PROOF_REUSE_GATE_SCHEMA
+    assert summary.get("schema") == contract["gate_schema"]
+    assert summary.get("purpose") == contract.get("purpose")
+    assert summary.get("status") in set(contract.get("allowed_statuses", []))
+    assert summary.get("decision") in set(contract.get("allowed_decisions", []))
+    for key in contract.get("required_top_level_keys", []):
+        assert key in summary, f"proof reuse gate missing top-level key: {key}"
+    boundaries = summary.get("claim_boundaries")
+    assert isinstance(boundaries, dict)
+    for key in contract.get("required_claim_boundary_true_keys", []):
+        assert boundaries.get(key) is True, f"proof reuse boundary is not true: {key}"
+    candidates = summary.get("candidate_decisions")
+    assert isinstance(candidates, list)
+    for candidate in candidates:
+        assert isinstance(candidate, dict)
+        for key in contract.get("required_candidate_keys", []):
+            assert key in candidate, f"proof reuse candidate missing key: {key}"
+        assert isinstance(candidate.get("invalidation_reasons"), list)
+        assert isinstance(candidate.get("reuse_allowed"), bool)
+    if summary.get("reuse_allowed") is True:
+        assert summary.get("status") == "pass"
+        assert summary.get("selected_entry_id")
+        assert summary.get("invalidation_reasons") == []
+    else:
+        assert summary.get("status") == "blocked"
+        assert summary.get("decision") == "rerun_validation"
+        assert summary.get("invalidation_reasons")
+
+
+def write_remote_validation_proof_reuse_gate_output(
+    args: argparse.Namespace,
+    summary: dict[str, Any],
+) -> None:
+    output_path = getattr(args, "out_proof_reuse_gate_json", None)
+    if output_path is None:
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        raise RunpackError(f"refusing to overwrite proof reuse gate: {output_path}")
+    output_path.write_text(json_dumps(summary, pretty=True), encoding="utf-8")
+
+
+def build_remote_validation_proof_reuse_gate_from_args(
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    ledger_source = load_json_source(
+        "proof_ledger",
+        getattr(args, "proof_ledger_json", None),
+        expected_schema=REMOTE_VALIDATION_LEDGER_SCHEMA,
+    )
+    if ledger_source.payload is None:
+        raise RunpackError("--proof-ledger-json is required for --run-proof-reuse-gate")
+    context_source = load_json_source(
+        "proof_reuse_context",
+        getattr(args, "proof_reuse_context_json", None),
+        expected_schema=REMOTE_VALIDATION_PROOF_REUSE_CONTEXT_SCHEMA,
+    )
+    if context_source.payload is None:
+        raise RunpackError(
+            "--proof-reuse-context-json is required for --run-proof-reuse-gate"
+        )
+    return build_remote_validation_proof_reuse_gate(
+        generated_at=args.generated_at or utc_now_iso(),
+        proof_ledger=ledger_source.payload,
+        context=context_source.payload,
+    )
 
 
 def temp_artifact_text(value: Any) -> str:
@@ -17147,6 +17443,124 @@ def run_self_test() -> int:
         assert remote_pass_runpack["remote_validation_proof_ledger"]["summary"][
             "clean_remote_proof_entries"
         ] == 1
+        proof_reuse_ledger = json.loads(
+            json_dumps(remote_pass_runpack["remote_validation_proof_ledger"])
+        )
+        proof_reuse_entry = json.loads(json_dumps(remote_pass_entry))
+        proof_reuse_changed_paths = ["scripts/build_swarm_operator_runpack.py"]
+        proof_reuse_ledger["git"]["dirty_paths"] = proof_reuse_changed_paths
+        proof_reuse_entry["evidence_classification"]["coverage"][
+            "covered_paths"
+        ] = proof_reuse_changed_paths
+        proof_reuse_entry["evidence_classification"]["coverage"][
+            "coverage_status"
+        ] = "covered"
+        proof_reuse_entry["evidence_classification"]["coverage"][
+            "authoritative_for_bead"
+        ] = True
+        proof_reuse_ledger["entries"] = [proof_reuse_entry]
+        reusable_context = {
+            "schema": REMOTE_VALIDATION_PROOF_REUSE_CONTEXT_SCHEMA,
+            "git": {"head": proof_reuse_ledger["git"]["head"]},
+            "staged_paths": proof_reuse_changed_paths,
+            "command": {
+                "command_fingerprint": proof_reuse_entry["command"][
+                    "command_fingerprint"
+                ],
+            },
+            "runner_requirement": "rch_required",
+            "env": {
+                "cargo_target_dir": proof_reuse_entry["paths"]["cargo_target_dir"],
+                "tmpdir": proof_reuse_entry["paths"]["tmpdir"],
+            },
+        }
+        reusable_gate = build_remote_validation_proof_reuse_gate(
+            generated_at=generated_at,
+            proof_ledger=proof_reuse_ledger,
+            context=reusable_context,
+        )
+        assert reusable_gate["schema"] == REMOTE_VALIDATION_PROOF_REUSE_GATE_SCHEMA
+        assert reusable_gate["reuse_allowed"] is True
+        assert reusable_gate["status"] == "pass"
+        assert reusable_gate["decision"] == "reuse_existing_remote_proof"
+        assert reusable_gate["selected_entry_id"] == proof_reuse_entry["entry_id"]
+        assert reusable_gate["invalidation_reasons"] == []
+        assert (
+            reusable_gate["claim_boundaries"]["does_not_skip_validation_by_itself"]
+            is True
+        )
+        reuse_gate_output_args = argparse.Namespace(
+            out_proof_reuse_gate_json=workspace / "proof-reuse-gate.json"
+        )
+        write_remote_validation_proof_reuse_gate_output(
+            reuse_gate_output_args,
+            reusable_gate,
+        )
+        assert reuse_gate_output_args.out_proof_reuse_gate_json.exists()
+
+        stale_head_context = json.loads(json_dumps(reusable_context))
+        stale_head_context["git"]["head"] = "different-head"
+        stale_head_gate = build_remote_validation_proof_reuse_gate(
+            generated_at=generated_at,
+            proof_ledger=proof_reuse_ledger,
+            context=stale_head_context,
+        )
+        assert stale_head_gate["reuse_allowed"] is False
+        assert "stale_git_head" in stale_head_gate["invalidation_reasons"]
+
+        uncovered_context = json.loads(json_dumps(reusable_context))
+        uncovered_context["staged_paths"] = list(uncovered_context["staged_paths"]) + [
+            "src/not-covered.rs",
+        ]
+        uncovered_gate = build_remote_validation_proof_reuse_gate(
+            generated_at=generated_at,
+            proof_ledger=proof_reuse_ledger,
+            context=uncovered_context,
+        )
+        assert uncovered_gate["reuse_allowed"] is False
+        assert "dirty_worktree_mismatch" in uncovered_gate["invalidation_reasons"]
+        assert "staged_paths_not_covered" in uncovered_gate["invalidation_reasons"]
+
+        non_authoritative_ledger = json.loads(json_dumps(proof_reuse_ledger))
+        non_authoritative_ledger["entries"][0]["evidence_classification"]["coverage"][
+            "authoritative_for_bead"
+        ] = False
+        non_authoritative_gate = build_remote_validation_proof_reuse_gate(
+            generated_at=generated_at,
+            proof_ledger=non_authoritative_ledger,
+            context=reusable_context,
+        )
+        assert non_authoritative_gate["reuse_allowed"] is False
+        assert (
+            "coverage_not_authoritative"
+            in non_authoritative_gate["invalidation_reasons"]
+        )
+
+        fingerprint_context = json.loads(json_dumps(reusable_context))
+        fingerprint_context["command"]["command_fingerprint"] = "different-command"
+        fingerprint_gate = build_remote_validation_proof_reuse_gate(
+            generated_at=generated_at,
+            proof_ledger=proof_reuse_ledger,
+            context=fingerprint_context,
+        )
+        assert fingerprint_gate["reuse_allowed"] is False
+        assert (
+            "command_fingerprint_mismatch"
+            in fingerprint_gate["invalidation_reasons"]
+        )
+
+        lockfile_context = json.loads(json_dumps(reusable_context))
+        lockfile_context["staged_paths"] = ["Cargo.lock"]
+        lockfile_gate = build_remote_validation_proof_reuse_gate(
+            generated_at=generated_at,
+            proof_ledger=proof_reuse_ledger,
+            context=lockfile_context,
+        )
+        assert lockfile_gate["reuse_allowed"] is False
+        assert (
+            "toolchain_or_lockfile_changed"
+            in lockfile_gate["invalidation_reasons"]
+        )
 
         stale_progress_payload = json.loads(
             remote_pass_cargo_path.read_text(encoding="utf-8")
@@ -17284,6 +17698,15 @@ def run_self_test() -> int:
             "observed local fallback should emit local_fallback_observed warning",
             observed_local_entry,
         )
+        observed_local_gate = build_remote_validation_proof_reuse_gate(
+            generated_at=generated_at,
+            proof_ledger=observed_local_runpack["remote_validation_proof_ledger"],
+            context=reusable_context,
+        )
+        assert observed_local_gate["reuse_allowed"] is False
+        assert "missing_clean_remote_proof" in observed_local_gate["invalidation_reasons"]
+        assert "missing_rch_provenance" in observed_local_gate["invalidation_reasons"]
+        assert "local_fallback_observed" in observed_local_gate["invalidation_reasons"]
         local_refusal_cargo_path = write_json(
             workspace / "cargo-local-fallback-refusal.json",
             {
@@ -19904,6 +20327,31 @@ def parse_args() -> argparse.Namespace:
         help="print the provider/RPC/TUI backpressure budget contract JSON",
     )
     parser.add_argument(
+        "--run-proof-reuse-gate",
+        action="store_true",
+        help="build the fail-closed remote validation proof reuse gate",
+    )
+    parser.add_argument(
+        "--proof-ledger-json",
+        type=Path,
+        help="pi.remote_validation.proof_ledger.v1 JSON to evaluate for reuse",
+    )
+    parser.add_argument(
+        "--proof-reuse-context-json",
+        type=Path,
+        help="pi.validation.proof_reuse_context.v1 JSON describing the current validation context",
+    )
+    parser.add_argument(
+        "--out-proof-reuse-gate-json",
+        type=Path,
+        help="write pi.validation.proof_reuse_gate.v1 JSON; refuses to overwrite",
+    )
+    parser.add_argument(
+        "--print-proof-reuse-gate",
+        action="store_true",
+        help="print the proof reuse gate JSON",
+    )
+    parser.add_argument(
         "--quality-gate-result",
         dest="quality_gate_results",
         action="append",
@@ -19984,6 +20432,12 @@ def main() -> int:
         args.out_backpressure_budget_contract_json
         or args.print_backpressure_budget_contract
     )
+    proof_reuse_gate_options_used = (
+        args.proof_ledger_json
+        or args.proof_reuse_context_json
+        or args.out_proof_reuse_gate_json
+        or args.print_proof_reuse_gate
+    )
     final_gate_modes = [
         args.run_autopilot_final_gate,
         args.run_context_intelligence_final_gate,
@@ -19998,6 +20452,14 @@ def main() -> int:
     if args.run_backpressure_budget_contract and any(final_gate_modes):
         print(
             "ERROR: backpressure budget contract cannot be combined with a final-gate mode",
+            file=sys.stderr,
+        )
+        return 2
+    if args.run_proof_reuse_gate and (
+        args.run_backpressure_budget_contract or any(final_gate_modes)
+    ):
+        print(
+            "ERROR: proof reuse gate cannot be combined with final-gate or backpressure modes",
             file=sys.stderr,
         )
         return 2
@@ -20049,6 +20511,12 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    if proof_reuse_gate_options_used and not args.run_proof_reuse_gate:
+        print(
+            "ERROR: proof reuse gate options require --run-proof-reuse-gate",
+            file=sys.stderr,
+        )
+        return 2
     if args.quality_gate_results and not (
         args.run_autopilot_final_gate
         or args.run_context_intelligence_final_gate
@@ -20077,6 +20545,12 @@ def main() -> int:
                 args.print_backpressure_budget_contract
                 or args.out_backpressure_budget_contract_json is None
             ):
+                print(json_dumps(summary, pretty=True))
+            return 0
+        if args.run_proof_reuse_gate:
+            summary = build_remote_validation_proof_reuse_gate_from_args(args)
+            write_remote_validation_proof_reuse_gate_output(args, summary)
+            if args.print_proof_reuse_gate or args.out_proof_reuse_gate_json is None:
                 print(json_dumps(summary, pretty=True))
             return 0
         if args.run_adaptive_execution_final_gate:
@@ -20254,6 +20728,7 @@ def main() -> int:
         and not args.out_fourth_wave_final_gate_json
         and not args.out_adaptive_execution_final_gate_json
         and not args.out_backpressure_budget_contract_json
+        and not args.out_proof_reuse_gate_json
         and not args.print_autopilot_input_pack
         and not args.print_autopilot_plan
         and not args.print_action_plan
@@ -20263,6 +20738,7 @@ def main() -> int:
         and not args.print_fourth_wave_final_gate
         and not args.print_adaptive_execution_final_gate
         and not args.print_backpressure_budget_contract
+        and not args.print_proof_reuse_gate
     ):
         print(json_dumps(runpack, pretty=True))
     return 0

@@ -184,6 +184,34 @@ Golden examples live in
 clean remote pass, local-fallback refusal, queue backoff, and artifact retrieval
 warning.
 
+### Remote Validation Proof Reuse Gate
+
+The proof reuse gate is governed by
+`docs/contracts/remote-validation-proof-reuse-gate-contract.json` and emits
+`pi.validation.proof_reuse_gate.v1`. It is a read-only admission aid for
+deciding whether an existing remote validation proof can cover the exact current
+command, git head, staged paths, runner requirement, `CARGO_TARGET_DIR`, and
+`TMPDIR` context.
+
+Use it only as a fail-closed preflight:
+
+```bash
+python3 scripts/build_swarm_operator_runpack.py \
+  --run-proof-reuse-gate \
+  --proof-ledger-json runpack-proof-ledger.json \
+  --proof-reuse-context-json current-proof-context.json \
+  --print-proof-reuse-gate
+```
+
+`reuse_allowed=true` means the selected proof matched every required context
+field and covered every current changed path. `reuse_allowed=false` means rerun
+validation through RCH. Any stale git head, dirty-worktree mismatch, staged-path
+coverage gap, missing RCH provenance, command fingerprint mismatch, target/tmp
+drift, or current `Cargo.lock` / `rust-toolchain.toml` change invalidates reuse.
+
+The gate never skips validation by itself and does not mutate Beads, git, Agent
+Mail, RCH workers, source files, or temp artifacts.
+
 ## Temp Artifact Inventory
 
 Swarm runpacks include `temp_artifact_inventory` with schema
