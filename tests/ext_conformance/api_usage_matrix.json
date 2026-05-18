@@ -444,9 +444,9 @@
     {
       "module": "ws",
       "extensions_using": 4,
-      "shim_status": "missing",
+      "shim_status": "stub",
       "criticality": "P2",
-      "notes": "WebSocket library"
+      "notes": "WebSocket client/server event facade; no real network I/O"
     },
     {
       "module": "chokidar",
@@ -463,9 +463,9 @@
     {
       "module": "better-sqlite3",
       "extensions_using": 3,
-      "shim_status": "missing",
+      "shim_status": "stub",
       "criticality": "P3",
-      "notes": "Requires native binary - not feasible in QuickJS"
+      "notes": "No-op Database/Statement facade; native persistence unavailable"
     },
     {
       "module": "diff",
@@ -477,8 +477,9 @@
     {
       "module": "glob",
       "extensions_using": 3,
-      "shim_status": "stub",
-      "criticality": "P2"
+      "shim_status": "partial",
+      "criticality": "P2",
+      "notes": "glob/globSync subset over the PiJS virtual filesystem"
     },
     {
       "module": "dotenv",
@@ -490,23 +491,23 @@
     {
       "module": "open",
       "extensions_using": 3,
-      "shim_status": "missing",
+      "shim_status": "stub",
       "criticality": "P2",
-      "notes": "Opens URLs/files in default application"
+      "notes": "No-op opener returns a child-process-shaped handle"
     },
     {
       "module": "commander",
       "extensions_using": 3,
-      "shim_status": "missing",
+      "shim_status": "stub",
       "criticality": "P3",
-      "notes": "CLI argument parsing - not needed in extension context"
+      "notes": "Chainable Command/Option/Argument facade; no real CLI process integration"
     },
     {
       "module": "chalk",
       "extensions_using": 2,
-      "shim_status": "missing",
+      "shim_status": "stub",
       "criticality": "P3",
-      "notes": "ANSI color library"
+      "notes": "ANSI styling stripped; chainable color facade"
     },
     {
       "module": "node-pty",
@@ -524,9 +525,9 @@
     {
       "module": "axios",
       "extensions_using": 2,
-      "shim_status": "missing",
+      "shim_status": "stub",
       "criticality": "P2",
-      "notes": "HTTP client"
+      "notes": "Promise HTTP client facade returns synthetic responses; no network I/O"
     },
     {
       "module": "express",
@@ -618,20 +619,23 @@
     "total_virtual_modules": 62,
     "shim_completeness": {
       "real": 18,
-      "partial": 20,
-      "stub": 20,
+      "partial": 21,
+      "stub": 25,
       "external": 5,
       "error_throw": 2,
-      "missing_from_corpus": 0
+      "missing_from_corpus": 2
     },
-    "missing_modules_used_by_corpus": [],
+    "missing_modules_used_by_corpus": [
+      "express (2 ext)",
+      "ora (2 ext)"
+    ],
     "top_gaps_by_impact": [
       "child_process.fork (72 calls, error throw)",
       "process.getuid/getgid (16 calls, stubbed identity)",
       "fs.watch (9 calls, stub - path-checking no-op, no real file watching)",
       "node:net (7 ext, stubbed sockets)",
-      "ws npm package (4 ext, missing)",
-      "glob npm package (3 ext, stub only)"
+      "ws npm package (4 ext, stubbed no-network facade)",
+      "glob npm package (3 ext, partial VFS glob subset)"
     ]
   }
 }

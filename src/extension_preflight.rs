@@ -394,9 +394,8 @@ pub fn known_module_support(specifier: &str) -> Option<ModuleSupport> {
         "glob" => Some(ModuleSupport::Partial),
 
         // Known npm packages with stubs
-        "chokidar" | "jsdom" | "turndown" | "beautiful-mermaid" | "node-pty" | "ws" | "axios" => {
-            Some(ModuleSupport::Stub)
-        }
+        "chokidar" | "jsdom" | "turndown" | "beautiful-mermaid" | "node-pty" | "ws" | "axios"
+        | "open" | "commander" | "chalk" | "better-sqlite3" => Some(ModuleSupport::Stub),
 
         // @modelcontextprotocol
         "@modelcontextprotocol" => Some(ModuleSupport::Stub),
@@ -2994,6 +2993,24 @@ mod tests {
     #[test]
     fn known_modules_glob_partial() {
         assert_eq!(known_module_support("glob"), Some(ModuleSupport::Partial));
+    }
+
+    #[test]
+    fn known_modules_npm_virtual_stubs() {
+        for specifier in [
+            "ws",
+            "axios",
+            "open",
+            "commander",
+            "chalk",
+            "better-sqlite3",
+        ] {
+            assert_eq!(
+                known_module_support(specifier),
+                Some(ModuleSupport::Stub),
+                "{specifier} should match the registered npm virtual module support level"
+            );
+        }
     }
 
     #[test]

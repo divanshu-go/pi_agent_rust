@@ -82,19 +82,19 @@ Generated: 2026-02-07 | Corpus: 1,167 files across 230 extensions
 |---------|-----|------|-------------|
 | `@sinclair/typebox` | 80 | Real | P0 |
 | `@modelcontextprotocol/sdk` | 7 | Stub | P1 |
-| `ws` | 4 | **Missing** | P2 |
+| `ws` | 4 | Stub | P2 |
 | `chokidar` | 3 | Stub | P2 |
 | `jsdom` | 3 | Stub | P2 |
-| `better-sqlite3` | 3 | **Missing** | P3 |
+| `better-sqlite3` | 3 | Stub | P3 |
 | `diff` | 3 | Partial | P2 |
-| `glob` | 3 | Stub | P2 |
+| `glob` | 3 | Partial | P2 |
 | `dotenv` | 3 | Partial | P2 |
-| `open` | 3 | **Missing** | P2 |
-| `commander` | 3 | **Missing** | P3 |
-| `chalk` | 2 | **Missing** | P3 |
+| `open` | 3 | Stub | P2 |
+| `commander` | 3 | Stub | P3 |
+| `chalk` | 2 | Stub | P3 |
 | `node-pty` | 2 | Stub | P3 |
 | `@anthropic-ai/sdk` | 2 | Stub | P2 |
-| `axios` | 2 | **Missing** | P2 |
+| `axios` | 2 | Stub | P2 |
 
 ## Bun API Usage
 
@@ -107,11 +107,11 @@ Minimal. Only 5 extensions (all T3) use Bun-specific APIs.
 | Status | Count | Description |
 |--------|-------|-------------|
 | Real | 18 | Full functional implementation |
-| Partial | 12 | Mix of real + stubs |
-| Stub | 20 | Returns default/empty values |
+| Partial | 21 | Mix of real + stubs |
+| Stub | 25 | Returns default/empty values |
 | External | 5 | Delegated to external JS shim file |
 | Error throw | 2 | Throws "not available in PiJS" |
-| Missing | 9 | Not shimmed, used by corpus |
+| Missing | 2 | Remaining unregistered npm packages used by corpus |
 
 **Total virtual modules**: 62
 
@@ -128,9 +128,9 @@ All P0 modules (path, fs, os, child_process) have real implementations.
 - `fs.watch` (9 calls) - stub, no real file watching
 - `fs.createReadStream` / `fs.createWriteStream` - stubs
 - `fs.readlink` (7 calls) - stub
-- `glob` npm package - stub only
-- `ws` npm package - missing entirely
-- `axios` npm package - missing (could use fetch)
+- `glob` npm package - partial VFS-backed glob/globSync subset
+- `ws` npm package - stubbed WebSocket facade, no real network I/O
+- `axios` npm package - stubbed HTTP client facade, no real network I/O
 
 ### P3 Gaps (low priority)
 - `child_process.fork` (72 calls) - throws error, not feasible in QuickJS

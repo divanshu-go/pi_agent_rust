@@ -367,6 +367,37 @@ fn test_api_usage_matrix_jsonwebtoken_shim_contract() {
 }
 
 #[test]
+fn test_api_usage_matrix_npm_virtual_module_contract() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let matrix_path = repo_root.join("tests/ext_conformance/api_usage_matrix.json");
+    let bytes = fs::read(&matrix_path).expect("read api_usage_matrix.json");
+    let matrix: ApiUsageMatrix =
+        serde_json::from_slice(&bytes).expect("parse api_usage_matrix.json");
+
+    for (module, status) in [
+        ("ws", "stub"),
+        ("axios", "stub"),
+        ("open", "stub"),
+        ("commander", "stub"),
+        ("chalk", "stub"),
+        ("better-sqlite3", "stub"),
+        ("glob", "partial"),
+    ] {
+        let actual = matrix
+            .npm_packages
+            .iter()
+            .find(|entry| entry.module == module)
+            .map(|entry| entry.shim_status.as_str());
+
+        assert_eq!(
+            actual,
+            Some(status),
+            "{module} should match the registered PiJS npm virtual module support level"
+        );
+    }
+}
+
+#[test]
 fn test_api_usage_matrix_readline_shim_contract() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let matrix_path = repo_root.join("tests/ext_conformance/api_usage_matrix.json");
