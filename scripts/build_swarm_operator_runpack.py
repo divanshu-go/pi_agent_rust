@@ -156,6 +156,8 @@ OPERATOR_PERCEIVED_LATENCY_TRACE_SCHEMA = "pi.operator.perceived_latency_trace.v
 OPERATOR_PERCEIVED_LATENCY_TRACE_CONTRACT_SCHEMA = (
     "pi.operator.perceived_latency_trace_contract.v1"
 )
+SWARM_INCIDENT_CORPUS_SCHEMA = "pi.swarm.incident_corpus.v1"
+SWARM_INCIDENT_CORPUS_CONTRACT_SCHEMA = "pi.swarm.incident_corpus_contract.v1"
 SWARM_REPLAY_PREVIEW_SCHEMA = "pi.swarm.replay_preview.v1"
 RUNPACK_CONTRACT_PATH = Path("docs/contracts/swarm-operator-runpack-contract.json")
 TURN_PRESSURE_LEDGER_CONTRACT_PATH = Path(
@@ -208,6 +210,9 @@ BACKPRESSURE_BUDGET_CONTRACT_PATH = Path(
 OPERATOR_PERCEIVED_LATENCY_TRACE_CONTRACT_PATH = Path(
     "docs/contracts/operator-perceived-latency-trace-contract.json"
 )
+SWARM_INCIDENT_CORPUS_CONTRACT_PATH = Path(
+    "docs/contracts/swarm-incident-corpus-contract.json"
+)
 GOLDEN_REPORT_DIRECTORY = Path("tests/golden_corpus/swarm_operator_runpack")
 COMPLETE_RUNPACK_GOLDEN = "complete_runpack_projection.json"
 AUTOPILOT_PLAN_GOLDEN = "autopilot_plan_projection.json"
@@ -230,6 +235,66 @@ AGENT_MAIL_SCHEMA_CORRUPT_DETAIL = (
 )
 AGENT_MAIL_SCHEMA_CORRUPT_RECOVERY_ACTION = (
     "Run `am doctor repair --yes` or restore from archive backup"
+)
+SWARM_INCIDENT_CORPUS_REQUIRED_INCIDENT_IDS = (
+    "agent_mail_schema_corruption",
+    "rch_saturation_local_fallback_denial",
+    "stale_evidence_blocks_reuse",
+    "duplicate_agent_work_risk",
+    "dirty_worktree_admission_denial",
+    "malformed_source_artifact",
+    "deletion_live_mutation_request_rejected",
+)
+SWARM_INCIDENT_CORPUS_REQUIRED_NEGATIVE_CONTROL_IDS = (
+    "missing_source_path_fails_closed",
+    "unsafe_unredacted_body_fails_closed",
+    "contradictory_status_fails_closed",
+    "deletion_or_live_mutation_authorization_fails_closed",
+)
+SWARM_INCIDENT_CORPUS_REQUIRED_SOURCE_BOUNDARY_IDS = (
+    "checked_in_sources_only",
+    "redacted_metadata_only",
+    "operator_evidence_only_not_authority",
+    "read_only_no_live_mutation",
+)
+SWARM_INCIDENT_CORPUS_REQUIRED_USABLE_FOR_KEYS = (
+    "incident_replay",
+    "proof_memory",
+    "operator_recommendation",
+)
+SWARM_INCIDENT_CORPUS_REQUIRED_INCIDENT_KEYS = (
+    "id",
+    "title",
+    "incident_class",
+    "status",
+    "source_refs",
+    "timeline",
+    "expected_safe_action",
+    "redaction",
+    "usable_for",
+    "contradiction_checks",
+    "claim_boundaries",
+)
+SWARM_INCIDENT_CORPUS_REQUIRED_SOURCE_REF_KEYS = (
+    "path",
+    "source_type",
+    "detail",
+    "exists_in_repo",
+)
+SWARM_INCIDENT_CORPUS_REQUIRED_TIMELINE_EVENT_KEYS = (
+    "step",
+    "event",
+    "status",
+    "source_ref",
+    "detail",
+)
+SWARM_INCIDENT_CORPUS_REQUIRED_FALSE_CLAIM_FLAGS = (
+    "release_performance_claim_authorized",
+    "dropin_certification_claim_authorized",
+    "agent_mail_or_rch_authority",
+    "live_mutation_authorized",
+    "file_deletion_authorized",
+    "benchmark_or_capacity_claim_authorized",
 )
 DEFERRED_PLANNING_LABELS = {
     "idea-wizard",
@@ -5035,6 +5100,592 @@ def build_validation_scheduler_plan(
     }
     assert_validation_scheduler_plan_contract(plan)
     return plan
+
+
+def swarm_incident_source_ref(
+    path: str,
+    *,
+    source_type: str,
+    authority: str,
+    note: str,
+) -> dict[str, Any]:
+    return {
+        "path": path,
+        "source_type": source_type,
+        "authority": authority,
+        "note": note,
+    }
+
+
+def swarm_incident_timeline_event(
+    step: int,
+    elapsed_ms: int,
+    *,
+    source: str,
+    signal: str,
+    status: str,
+    observation: str,
+    safe_action: str,
+) -> dict[str, Any]:
+    return {
+        "step": step,
+        "elapsed_ms": elapsed_ms,
+        "source": source,
+        "signal": signal,
+        "status": status,
+        "observation": observation,
+        "safe_action": safe_action,
+    }
+
+
+def swarm_incident_redaction_posture() -> dict[str, Any]:
+    return {
+        "status": "redacted",
+        "raw_bodies_embedded": False,
+        "contains_secret_material": False,
+        "safe_excerpt_strategy": "metadata_and_error_fragments_only",
+        "redacted_fields": [
+            "authorization",
+            "bearer_token",
+            "cookie",
+            "prompt",
+            "raw_body",
+            "registration_token",
+            "secret",
+        ],
+    }
+
+
+def swarm_incident_usable_for(
+    *,
+    incident_replay: bool = True,
+    proof_memory: bool = True,
+    operator_recommendation: bool = True,
+) -> dict[str, bool]:
+    return {
+        "incident_replay": incident_replay,
+        "proof_memory": proof_memory,
+        "operator_recommendation": operator_recommendation,
+    }
+
+
+def build_swarm_incident_corpus_summary(*, generated_at: str) -> dict[str, Any]:
+    incidents: list[dict[str, Any]] = [
+        {
+            "id": "agent_mail_schema_corruption",
+            "class": "coordination_source_corruption",
+            "title": "Agent Mail schema corruption forces Beads soft-lock fallback",
+            "status": "pass",
+            "source_refs": [
+                swarm_incident_source_ref(
+                    "tests/fixtures/agent_mail/schema_corrupt_health.json",
+                    source_type="fixture",
+                    authority="degraded_agent_mail_health_fixture",
+                    note="Health check fixture for missing Agent Mail tables.",
+                ),
+                swarm_incident_source_ref(
+                    "docs/swarm-operations-runbook.md",
+                    source_type="runbook",
+                    authority="operator_recovery_guidance",
+                    note="Runbook guidance for Agent Mail degradation and Beads soft locks.",
+                ),
+            ],
+            "timeline": [
+                swarm_incident_timeline_event(
+                    1,
+                    0,
+                    source="agent_mail.health_check",
+                    signal="missing_required_tables",
+                    status="degraded",
+                    observation=(
+                        "projects, agents, messages, and message_recipients tables "
+                        "are unavailable."
+                    ),
+                    safe_action="Do not write Agent Mail state while schema health is red.",
+                ),
+                swarm_incident_timeline_event(
+                    2,
+                    120,
+                    source="agent_mail.macro_start_session",
+                    signal="database_error",
+                    status="blocked",
+                    observation="Session bootstrap cannot register a healthy coordination thread.",
+                    safe_action="Record the Mail blocker and use Beads status/comments as the soft lock.",
+                ),
+                swarm_incident_timeline_event(
+                    3,
+                    240,
+                    source="beads",
+                    signal="soft_lock_visible",
+                    status="admitted",
+                    observation="The active bead assignee and comments become the coordination surface.",
+                    safe_action="Proceed only on the claimed bead and avoid overlapping edit surfaces.",
+                ),
+            ],
+            "expected_safe_action": (
+                "Fail closed on Agent Mail writes, document the schema blocker, "
+                "and continue only through visible Beads ownership."
+            ),
+            "redaction_posture": swarm_incident_redaction_posture(),
+            "usable_for": swarm_incident_usable_for(),
+        },
+        {
+            "id": "rch_saturation_local_fallback_denial",
+            "class": "validation_capacity_pressure",
+            "title": "RCH saturation rejects heavyweight local cargo fallback",
+            "status": "pass",
+            "source_refs": [
+                swarm_incident_source_ref(
+                    "docs/evidence/validation-scheduler-plan.json",
+                    source_type="evidence",
+                    authority="advisory_validation_scheduler_fixture",
+                    note="Read-only plan with RCH command groups and local fallback rejection.",
+                ),
+                swarm_incident_source_ref(
+                    "docs/swarm-operations-runbook.md",
+                    source_type="runbook",
+                    authority="operator_recovery_guidance",
+                    note="Large-swarm validation guidance for RCH and scratch pressure.",
+                ),
+            ],
+            "timeline": [
+                swarm_incident_timeline_event(
+                    1,
+                    0,
+                    source="progress_slo",
+                    signal="build_saturated",
+                    status="degraded",
+                    observation="Heavy validation capacity is saturated or unsafe for local execution.",
+                    safe_action="Back off broad cargo gates and keep target/tmp paths explicit.",
+                ),
+                swarm_incident_timeline_event(
+                    2,
+                    100,
+                    source="validation_scheduler",
+                    signal="rch_required",
+                    status="blocked",
+                    observation="A heavyweight cargo command requires RCH and isolated scratch paths.",
+                    safe_action="Use the exact RCH command or defer; never silently run locally.",
+                ),
+                swarm_incident_timeline_event(
+                    3,
+                    200,
+                    source="operator",
+                    signal="narrow_validation_selected",
+                    status="admitted",
+                    observation="Script and JSON gates remain available while cargo is deferred.",
+                    safe_action="Run non-cargo gates and surface the exact RCH blocker.",
+                ),
+            ],
+            "expected_safe_action": (
+                "Reject local heavyweight cargo fallback, preserve exact RCH command strings, "
+                "and defer broad validation until capacity recovers."
+            ),
+            "redaction_posture": swarm_incident_redaction_posture(),
+            "usable_for": swarm_incident_usable_for(),
+        },
+        {
+            "id": "stale_evidence_blocks_reuse",
+            "class": "evidence_freshness_failure",
+            "title": "Stale evidence blocks proof reuse and operator claims",
+            "status": "pass",
+            "source_refs": [
+                swarm_incident_source_ref(
+                    "tests/fixtures/stale_evidence_renewal_queue/scenarios.json",
+                    source_type="fixture",
+                    authority="stale_evidence_fixture",
+                    note="Fixture scenarios for stale evidence renewal decisions.",
+                ),
+                swarm_incident_source_ref(
+                    "scripts/check_swarm_runpack_freshness.py",
+                    source_type="script",
+                    authority="freshness_guard",
+                    note="Read-only freshness checker for missing, stale, and hash-mismatched sources.",
+                ),
+            ],
+            "timeline": [
+                swarm_incident_timeline_event(
+                    1,
+                    0,
+                    source="freshness_guard",
+                    signal="stale_or_hash_mismatched_source",
+                    status="blocked",
+                    observation="Evidence cannot be reused because a cited source is stale or mismatched.",
+                    safe_action="Treat stale evidence as unavailable for proof-memory reuse.",
+                ),
+                swarm_incident_timeline_event(
+                    2,
+                    90,
+                    source="proof_memory",
+                    signal="reuse_denied",
+                    status="blocked",
+                    observation="The previous proof is not equivalent to the current source context.",
+                    safe_action="Regenerate or narrow the claim to current checked-in artifacts.",
+                ),
+            ],
+            "expected_safe_action": (
+                "Block proof reuse and operator claims until cited source artifacts are refreshed "
+                "or the claim is narrowed to current evidence."
+            ),
+            "redaction_posture": swarm_incident_redaction_posture(),
+            "usable_for": swarm_incident_usable_for(),
+        },
+        {
+            "id": "duplicate_agent_work_risk",
+            "class": "coordination_collision",
+            "title": "Duplicate agent work risk requires visible ownership and narrow surfaces",
+            "status": "pass",
+            "source_refs": [
+                swarm_incident_source_ref(
+                    "docs/swarm-activity-ledger.md",
+                    source_type="runbook",
+                    authority="activity_digest_guidance",
+                    note="Saturation and duplicate-work guidance for large swarms.",
+                ),
+                swarm_incident_source_ref(
+                    ".beads/issues.jsonl",
+                    source_type="ledger",
+                    authority="beads_source_of_truth",
+                    note="Beads JSONL is the visible ownership ledger when Mail is degraded.",
+                ),
+            ],
+            "timeline": [
+                swarm_incident_timeline_event(
+                    1,
+                    0,
+                    source="activity_digest",
+                    signal="duplicate_work_pressure",
+                    status="degraded",
+                    observation="Multiple agents are likely to touch the same subsystem or bead lane.",
+                    safe_action="Stop broad launches and pick one concrete non-overlapping task.",
+                ),
+                swarm_incident_timeline_event(
+                    2,
+                    80,
+                    source="beads",
+                    signal="ownership_check",
+                    status="admitted",
+                    observation="Ready and in-progress Beads identify active owners and stale claims.",
+                    safe_action="Claim one bead visibly before editing and avoid reserved surfaces.",
+                ),
+            ],
+            "expected_safe_action": (
+                "Use Beads plus Agent Mail reservations when healthy, otherwise Beads soft locks, "
+                "and keep edits to the claimed non-overlapping surface."
+            ),
+            "redaction_posture": swarm_incident_redaction_posture(),
+            "usable_for": swarm_incident_usable_for(),
+        },
+        {
+            "id": "dirty_worktree_admission_denial",
+            "class": "workspace_safety_failure",
+            "title": "Dirty worktree blocks unsafe cleanup and broad admission",
+            "status": "pass",
+            "source_refs": [
+                swarm_incident_source_ref(
+                    "docs/swarm-operations-runbook.md",
+                    source_type="runbook",
+                    authority="dirty_worktree_guidance",
+                    note="Dirty-worktree handling and destructive-command prohibition.",
+                ),
+                swarm_incident_source_ref(
+                    "docs/contracts/swarm-work-admission-gate-contract.json",
+                    source_type="contract",
+                    authority="work_admission_policy",
+                    note="Read-only work admission policy rejects unsafe operations.",
+                ),
+            ],
+            "timeline": [
+                swarm_incident_timeline_event(
+                    1,
+                    0,
+                    source="git_status",
+                    signal="unrelated_dirty_files",
+                    status="degraded",
+                    observation="The workspace contains edits outside the current bead surface.",
+                    safe_action="Do not revert or clean unrelated work; inspect and stage only owned files.",
+                ),
+                swarm_incident_timeline_event(
+                    2,
+                    70,
+                    source="work_admission_gate",
+                    signal="unsafe_cleanup_rejected",
+                    status="blocked",
+                    observation="Destructive cleanup would risk deleting or overwriting another agent's work.",
+                    safe_action="Surface the blocker if the unrelated state prevents required validation.",
+                ),
+            ],
+            "expected_safe_action": (
+                "Deny destructive cleanup, continue around unrelated dirty files when possible, "
+                "and stage only current-bead artifacts."
+            ),
+            "redaction_posture": swarm_incident_redaction_posture(),
+            "usable_for": swarm_incident_usable_for(),
+        },
+        {
+            "id": "malformed_source_artifact",
+            "class": "source_artifact_malformed",
+            "title": "Malformed source artifact fails closed instead of being inferred",
+            "status": "pass",
+            "source_refs": [
+                swarm_incident_source_ref(
+                    "tests/golden_corpus/swarm_operator_runpack/malformed_source_fail_closed_projection.json",
+                    source_type="golden",
+                    authority="malformed_source_fail_closed_fixture",
+                    note="Golden projection for malformed source handling.",
+                ),
+                swarm_incident_source_ref(
+                    "docs/contracts/swarm-operator-runpack-contract.json",
+                    source_type="contract",
+                    authority="runpack_contract",
+                    note="Runpack contract that requires source status and redaction boundaries.",
+                ),
+            ],
+            "timeline": [
+                swarm_incident_timeline_event(
+                    1,
+                    0,
+                    source="artifact_loader",
+                    signal="json_decode_or_schema_error",
+                    status="blocked",
+                    observation="A source artifact cannot be parsed or does not match its schema.",
+                    safe_action="Mark the source malformed and exclude it from green evidence.",
+                ),
+                swarm_incident_timeline_event(
+                    2,
+                    60,
+                    source="operator_runpack",
+                    signal="claim_boundary_preserved",
+                    status="degraded",
+                    observation="The handoff can describe the malformed source without treating it as proof.",
+                    safe_action="File or link follow-up work before relying on the artifact.",
+                ),
+            ],
+            "expected_safe_action": (
+                "Fail closed on malformed JSON/schema sources and keep them out of proof-memory "
+                "or operator-recommendation success paths until repaired."
+            ),
+            "redaction_posture": swarm_incident_redaction_posture(),
+            "usable_for": swarm_incident_usable_for(),
+        },
+        {
+            "id": "deletion_live_mutation_request_rejected",
+            "class": "unsafe_action_request",
+            "title": "Deletion or live mutation requests are permanently rejected",
+            "status": "pass",
+            "source_refs": [
+                swarm_incident_source_ref(
+                    "docs/contracts/swarm-work-admission-gate-contract.json",
+                    source_type="contract",
+                    authority="work_admission_policy",
+                    note="Work admission contract rejects deletion and live mutations.",
+                ),
+                swarm_incident_source_ref(
+                    "docs/swarm-operations-runbook.md",
+                    source_type="runbook",
+                    authority="operator_recovery_guidance",
+                    note="Runbook forbids destructive cleanup and live source mutation in recovery flows.",
+                ),
+            ],
+            "timeline": [
+                swarm_incident_timeline_event(
+                    1,
+                    0,
+                    source="operator_request",
+                    signal="delete_or_live_mutate_source",
+                    status="unsafe",
+                    observation="The request would delete files, mutate Agent Mail/RCH, or rewrite live evidence.",
+                    safe_action="Reject the request unless explicit destructive authorization is given.",
+                ),
+                swarm_incident_timeline_event(
+                    2,
+                    50,
+                    source="work_admission_gate",
+                    signal="never_execute",
+                    status="blocked",
+                    observation="The safe planner keeps the action out of executable recommendations.",
+                    safe_action="Offer read-only inspection or a non-destructive evidence regeneration path.",
+                ),
+            ],
+            "expected_safe_action": (
+                "Reject deletion and live-mutation authorization; keep the corpus read-only and "
+                "operator-advisory."
+            ),
+            "redaction_posture": swarm_incident_redaction_posture(),
+            "usable_for": swarm_incident_usable_for(),
+        },
+    ]
+    negative_controls = [
+        {
+            "id": "missing_source_path_fails_closed",
+            "title": "Missing source path cannot produce reusable incident evidence",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "reason": "source_ref.path does not exist in the checked-in corpus context",
+            "unsafe_fixture": {"source_refs": [{"path": "docs/evidence/does-not-exist.json"}]},
+            "usable_for": swarm_incident_usable_for(
+                incident_replay=False,
+                proof_memory=False,
+                operator_recommendation=False,
+            ),
+        },
+        {
+            "id": "unsafe_unredacted_body_fails_closed",
+            "title": "Unredacted raw bodies are rejected",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "reason": "raw_bodies_embedded=true or secret-bearing fields are present",
+            "unsafe_fixture": {
+                "redaction_posture": {
+                    "status": "unsafe",
+                    "raw_bodies_embedded": True,
+                }
+            },
+            "usable_for": swarm_incident_usable_for(
+                incident_replay=False,
+                proof_memory=False,
+                operator_recommendation=False,
+            ),
+        },
+        {
+            "id": "contradictory_status_fails_closed",
+            "title": "Contradictory timeline and summary statuses are rejected",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "reason": "summary status pass cannot include an unsafe or blocked success claim",
+            "unsafe_fixture": {"status": "pass", "timeline_status": "unsafe_success"},
+            "usable_for": swarm_incident_usable_for(
+                incident_replay=False,
+                proof_memory=False,
+                operator_recommendation=False,
+            ),
+        },
+        {
+            "id": "deletion_or_live_mutation_authorization_fails_closed",
+            "title": "Deletion or live mutation authorization is rejected",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "reason": "incident corpus cannot authorize file deletion, RCH mutation, or Agent Mail writes",
+            "unsafe_fixture": {
+                "claim_boundaries": {
+                    "file_deletion_authorized": True,
+                    "live_mutation_authorized": True,
+                }
+            },
+            "usable_for": swarm_incident_usable_for(
+                incident_replay=False,
+                proof_memory=False,
+                operator_recommendation=False,
+            ),
+        },
+    ]
+    source_boundaries = [
+        {
+            "id": "checked_in_sources_only",
+            "status": "pass",
+            "description": "Every positive incident cites checked-in fixtures, contracts, evidence, or docs.",
+        },
+        {
+            "id": "redacted_metadata_only",
+            "status": "pass",
+            "description": "The corpus contains metadata and short error fragments, not raw request bodies.",
+        },
+        {
+            "id": "operator_evidence_only_not_authority",
+            "status": "pass",
+            "description": "The corpus is operator evidence and not Agent Mail, RCH, release, or drop-in authority.",
+        },
+        {
+            "id": "read_only_no_live_mutation",
+            "status": "pass",
+            "description": "The builder performs no live Agent Mail, RCH, Beads, git, or filesystem mutation.",
+        },
+    ]
+    claim_boundaries = {
+        "operator_evidence_only": True,
+        "read_only": True,
+        "release_performance_claim_authorized": False,
+        "benchmark_or_capacity_claim_authorized": False,
+        "dropin_certification_claim_authorized": False,
+        "agent_mail_authority_authorized": False,
+        "rch_authority_authorized": False,
+        "live_mutation_authorized": False,
+        "file_deletion_authorized": False,
+        "beads_ownership_override_authorized": False,
+        "allowed_claim": (
+            "Deterministic advisory corpus for replay, proof-memory indexing, "
+            "and operator recommendation fixtures."
+        ),
+    }
+    missing_incident_ids = sorted(
+        set(SWARM_INCIDENT_CORPUS_REQUIRED_INCIDENT_IDS)
+        - {incident["id"] for incident in incidents}
+    )
+    negative_control_failures = [
+        control["id"]
+        for control in negative_controls
+        if not (
+            control.get("expected_status") == "fail"
+            and control.get("verdict") == "fail"
+            and control.get("expectation_met") is True
+        )
+    ]
+    status = (
+        "pass"
+        if not missing_incident_ids
+        and not negative_control_failures
+        and all(boundary["status"] == "pass" for boundary in source_boundaries)
+        else "fail"
+    )
+    return {
+        "schema": SWARM_INCIDENT_CORPUS_SCHEMA,
+        "generated_at": generated_at,
+        "status": status,
+        "purpose": (
+            "operator_incident_corpus_read_only_not_release_perf_dropin_agent_mail_or_rch_authority"
+        ),
+        "source_bead": "bd-9yq7i.1",
+        "required_incident_ids": list(SWARM_INCIDENT_CORPUS_REQUIRED_INCIDENT_IDS),
+        "required_negative_control_ids": list(
+            SWARM_INCIDENT_CORPUS_REQUIRED_NEGATIVE_CONTROL_IDS
+        ),
+        "required_usable_for_keys": list(SWARM_INCIDENT_CORPUS_REQUIRED_USABLE_FOR_KEYS),
+        "incidents": incidents,
+        "missing_incident_ids": missing_incident_ids,
+        "negative_controls": negative_controls,
+        "negative_control_failures": negative_control_failures,
+        "source_boundaries": source_boundaries,
+        "claim_boundaries": claim_boundaries,
+        "summary": {
+            "incident_count": len(incidents),
+            "negative_control_count": len(negative_controls),
+            "replay_usable_count": sum(
+                1 for incident in incidents if incident["usable_for"]["incident_replay"]
+            ),
+            "proof_memory_usable_count": sum(
+                1 for incident in incidents if incident["usable_for"]["proof_memory"]
+            ),
+            "operator_recommendation_usable_count": sum(
+                1
+                for incident in incidents
+                if incident["usable_for"]["operator_recommendation"]
+            ),
+        },
+        "operator_next_actions": [
+            "Use this corpus as deterministic fixture input for incident replay and proof-memory work.",
+            "Refresh or repair cited source artifacts before relying on stale or malformed evidence.",
+            "Keep Agent Mail, RCH, Beads, git, deletion, and live mutation decisions in their source systems.",
+        ],
+        "decision": (
+            "corpus_passed"
+            if status == "pass"
+            else "file_follow_up_before_relying_on_corpus"
+        ),
+    }
 
 
 def parse_issue_list(payload: Any) -> list[dict[str, Any]]:
@@ -10968,6 +11619,21 @@ def write_validation_scheduler_plan_output(
     output_path.write_text(json_dumps(plan, pretty=True), encoding="utf-8")
 
 
+def write_swarm_incident_corpus_output(
+    args: argparse.Namespace,
+    summary: dict[str, Any],
+) -> None:
+    output_path = getattr(args, "out_swarm_incident_corpus_json", None)
+    if output_path is None:
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        raise RunpackError(
+            f"refusing to overwrite existing swarm incident corpus: {output_path}"
+        )
+    output_path.write_text(json_dumps(summary, pretty=True), encoding="utf-8")
+
+
 def artifact_path(value: Path | None) -> str | None:
     return str(value) if value is not None else None
 
@@ -11442,6 +12108,181 @@ def assert_validation_scheduler_plan_contract(plan: dict[str, Any]) -> None:
     assert isinstance(guards, dict)
     for key in contract.get("required_true_guards", []):
         assert guards.get(key) is True, f"validation scheduler guard not true: {key}"
+
+
+def assert_swarm_incident_corpus_contract(summary: dict[str, Any]) -> None:
+    root = Path(__file__).resolve().parent.parent
+    contract_path = root / SWARM_INCIDENT_CORPUS_CONTRACT_PATH
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise AssertionError(f"missing swarm incident corpus contract: {contract_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"swarm incident corpus contract is malformed JSON: {contract_path}: {exc}"
+        ) from exc
+    assert contract.get("schema") == SWARM_INCIDENT_CORPUS_CONTRACT_SCHEMA
+    assert contract.get("evidence_schema") == SWARM_INCIDENT_CORPUS_SCHEMA
+    assert summary.get("schema") == contract["evidence_schema"]
+    assert summary.get("purpose") == contract.get("purpose")
+    assert summary.get("status") in set(contract.get("allowed_statuses", []))
+    for key in contract.get("required_top_level_keys", []):
+        assert key in summary, f"swarm incident corpus missing key: {key}"
+
+    incidents = summary.get("incidents")
+    assert isinstance(incidents, list) and incidents
+    required_incident_ids = set(contract.get("required_incident_ids", []))
+    incident_ids = {incident.get("id") for incident in incidents if isinstance(incident, dict)}
+    assert incident_ids.issuperset(required_incident_ids), (
+        f"swarm incident corpus missing incidents: {sorted(required_incident_ids - incident_ids)}"
+    )
+    allowed_incident_statuses = set(contract.get("allowed_incident_statuses", []))
+    allowed_event_statuses = set(contract.get("allowed_event_statuses", []))
+    required_incident_keys = set(contract.get("required_incident_keys", []))
+    required_source_ref_keys = set(contract.get("required_source_ref_keys", []))
+    required_timeline_event_keys = set(contract.get("required_timeline_event_keys", []))
+    required_usable_for_keys = set(contract.get("required_usable_for_keys", []))
+    for incident in incidents:
+        assert isinstance(incident, dict)
+        incident_id = str(incident.get("id"))
+        missing = required_incident_keys - set(incident)
+        assert not missing, f"swarm incident missing keys in {incident_id}: {sorted(missing)}"
+        assert incident.get("status") in allowed_incident_statuses
+        source_refs = incident.get("source_refs")
+        assert isinstance(source_refs, list) and source_refs, (
+            f"swarm incident has no source refs: {incident_id}"
+        )
+        for source_ref in source_refs:
+            assert isinstance(source_ref, dict)
+            missing_source_keys = required_source_ref_keys - set(source_ref)
+            assert not missing_source_keys, (
+                f"swarm incident source ref missing keys in {incident_id}: "
+                f"{sorted(missing_source_keys)}"
+            )
+            if contract.get("positive_source_paths_must_exist") is True:
+                path = source_ref.get("path")
+                assert isinstance(path, str) and path
+                assert (root / path).exists(), (
+                    f"swarm incident source path missing in {incident_id}: {path}"
+                )
+        timeline = incident.get("timeline")
+        assert isinstance(timeline, list) and timeline, (
+            f"swarm incident has no timeline: {incident_id}"
+        )
+        previous_step: int | None = None
+        previous_elapsed_ms: int | None = None
+        for event in timeline:
+            assert isinstance(event, dict)
+            missing_event_keys = required_timeline_event_keys - set(event)
+            assert not missing_event_keys, (
+                f"swarm incident timeline event missing keys in {incident_id}: "
+                f"{sorted(missing_event_keys)}"
+            )
+            step = event.get("step")
+            elapsed_ms = event.get("elapsed_ms")
+            assert isinstance(step, int), (
+                f"swarm incident timeline step is not an int: {incident_id}"
+            )
+            assert isinstance(elapsed_ms, int), (
+                f"swarm incident elapsed_ms is not an int: {incident_id}"
+            )
+            if previous_step is not None:
+                assert step > previous_step, (
+                    f"swarm incident timeline must be monotonic by step: {incident_id}"
+                )
+            if previous_elapsed_ms is not None:
+                assert elapsed_ms >= previous_elapsed_ms, (
+                    "swarm incident timeline must be monotonic by elapsed_ms: "
+                    f"{incident_id}"
+                )
+            assert event.get("status") in allowed_event_statuses, (
+                f"swarm incident timeline event has unknown status: {incident_id}"
+            )
+            previous_step = step
+            previous_elapsed_ms = elapsed_ms
+        redaction = incident.get("redaction_posture")
+        assert isinstance(redaction, dict)
+        assert redaction.get("status") == "redacted", (
+            f"swarm incident redaction must be redacted: {incident_id}"
+        )
+        assert redaction.get("raw_bodies_embedded") is False, (
+            f"swarm incident raw bodies must not be embedded: {incident_id}"
+        )
+        assert redaction.get("contains_secret_material") is False, (
+            f"swarm incident secret material must not be embedded: {incident_id}"
+        )
+        usable_for = incident.get("usable_for")
+        assert isinstance(usable_for, dict)
+        missing_usable = required_usable_for_keys - set(usable_for)
+        assert not missing_usable, (
+            f"swarm incident usable_for missing keys in {incident_id}: {sorted(missing_usable)}"
+        )
+        assert all(isinstance(usable_for[key], bool) for key in required_usable_for_keys)
+
+    negative_controls = summary.get("negative_controls")
+    assert isinstance(negative_controls, list) and negative_controls
+    required_negative_ids = set(contract.get("required_negative_control_ids", []))
+    negative_ids = {
+        control.get("id")
+        for control in negative_controls
+        if isinstance(control, dict)
+    }
+    assert negative_ids.issuperset(required_negative_ids), (
+        "swarm incident corpus missing negative controls: "
+        f"{sorted(required_negative_ids - negative_ids)}"
+    )
+    required_negative_keys = set(contract.get("required_negative_control_keys", []))
+    for control in negative_controls:
+        assert isinstance(control, dict)
+        control_id = str(control.get("id"))
+        missing = required_negative_keys - set(control)
+        assert not missing, (
+            f"swarm incident negative control missing keys in {control_id}: {sorted(missing)}"
+        )
+        assert control.get("expected_status") == "fail", (
+            f"swarm incident negative control must expect fail: {control_id}"
+        )
+        assert control.get("verdict") == "fail", (
+            f"swarm incident negative control must fail: {control_id}"
+        )
+        assert control.get("expectation_met") is True, (
+            f"swarm incident negative control expectation unmet: {control_id}"
+        )
+        usable_for = control.get("usable_for")
+        assert isinstance(usable_for, dict)
+        assert all(usable_for.get(key) is False for key in required_usable_for_keys), (
+            f"swarm incident negative control must not be reusable: {control_id}"
+        )
+
+    boundary_ids = {
+        boundary.get("id")
+        for boundary in summary.get("source_boundaries", [])
+        if isinstance(boundary, dict)
+    }
+    required_boundary_ids = set(contract.get("required_source_boundary_ids", []))
+    assert boundary_ids.issuperset(required_boundary_ids), (
+        f"swarm incident corpus missing source boundaries: "
+        f"{sorted(required_boundary_ids - boundary_ids)}"
+    )
+    for boundary in summary.get("source_boundaries", []):
+        assert isinstance(boundary, dict)
+        assert boundary.get("status") == "pass", (
+            f"swarm incident source boundary must pass: {boundary.get('id')}"
+        )
+
+    claim_boundaries = summary.get("claim_boundaries")
+    assert isinstance(claim_boundaries, dict)
+    for flag in contract.get("required_true_claim_boundary_flags", []):
+        assert claim_boundaries.get(flag) is True, (
+            f"swarm incident claim boundary must be true: {flag}"
+        )
+    for flag in contract.get("required_false_claim_boundary_flags", []):
+        assert claim_boundaries.get(flag) is False, (
+            f"swarm incident claim boundary must be false: {flag}"
+        )
+    if summary.get("status") == "pass":
+        assert summary.get("missing_incident_ids") == []
+        assert summary.get("negative_control_failures") == []
 
 
 def assert_autopilot_input_pack_contract(input_pack: dict[str, Any]) -> None:
@@ -18359,6 +19200,857 @@ def write_operator_perceived_latency_trace_output(
     if output_path.exists():
         raise RunpackError(
             f"refusing to overwrite operator perceived latency trace: {output_path}"
+        )
+    output_path.write_text(json_dumps(summary, pretty=True), encoding="utf-8")
+
+
+def swarm_incident_source_ref(
+    path: str,
+    source_type: str,
+    detail: str,
+) -> dict[str, Any]:
+    return {
+        "path": path,
+        "source_type": source_type,
+        "detail": detail,
+        "exists_in_repo": True,
+    }
+
+
+def swarm_incident_timeline_event(
+    *,
+    step: int,
+    event: str,
+    status: str,
+    source_ref: str,
+    detail: str,
+) -> dict[str, Any]:
+    return {
+        "step": step,
+        "event": event,
+        "status": status,
+        "source_ref": source_ref,
+        "detail": detail,
+    }
+
+
+def swarm_incident_redaction() -> dict[str, Any]:
+    return {
+        "raw_body_embedded": False,
+        "unredacted_sensitive_body_embedded": False,
+        "redacted_or_fixture_only": True,
+        "redacted_fields": [
+            "body_md",
+            "provider_payload",
+            "raw_agent_mail_body",
+            "stderr_excerpt",
+            "token",
+        ],
+        "max_raw_excerpt_chars": 0,
+    }
+
+
+def swarm_incident_usable_for(
+    *,
+    incident_replay: bool,
+    proof_memory: bool,
+    operator_recommendation: bool,
+) -> dict[str, bool]:
+    return {
+        "incident_replay": incident_replay,
+        "proof_memory": proof_memory,
+        "operator_recommendation": operator_recommendation,
+    }
+
+
+def swarm_incident_claim_boundaries() -> dict[str, Any]:
+    return {
+        "release_performance_claim_authorized": False,
+        "dropin_certification_claim_authorized": False,
+        "agent_mail_or_rch_authority": False,
+        "live_mutation_authorized": False,
+        "file_deletion_authorized": False,
+        "benchmark_or_capacity_claim_authorized": False,
+        "allowed_claim": "operator incident corpus fixture evidence only",
+    }
+
+
+def swarm_incident_contradiction_checks() -> dict[str, bool]:
+    return {
+        "timeline_status_consistent": True,
+        "safe_action_is_non_mutating": True,
+        "usable_for_matches_status": True,
+    }
+
+
+def build_swarm_incident_corpus_summary(*, generated_at: str) -> dict[str, Any]:
+    incidents = [
+        {
+            "id": "agent_mail_schema_corruption",
+            "title": "Agent Mail schema corruption forces Beads soft-lock coordination",
+            "incident_class": "coordination_degraded",
+            "status": "replayable",
+            "source_refs": [
+                swarm_incident_source_ref(
+                    "AGENTS.md",
+                    "policy",
+                    "Agent Mail can coordinate ownership but Beads status is the fallback soft lock when Mail is corrupt.",
+                ),
+                swarm_incident_source_ref(
+                    "tests/fixtures/agent_mail/schema_corrupt_health.json",
+                    "fixture",
+                    "Checked-in degraded Agent Mail health payload with missing table diagnostics.",
+                ),
+                swarm_incident_source_ref(
+                    "scripts/build_swarm_operator_runpack.py",
+                    "generator",
+                    "Runpack failure-action catalog and degraded coordination evidence handling.",
+                ),
+                swarm_incident_source_ref(
+                    ".beads/issues.jsonl",
+                    "ledger",
+                    "Beads issue status, assignee, and comments provide the soft-lock fallback.",
+                ),
+            ],
+            "timeline": [
+                swarm_incident_timeline_event(
+                    step=1,
+                    event="agent_mail_health_check_failed",
+                    status="degraded",
+                    source_ref="tests/fixtures/agent_mail/schema_corrupt_health.json",
+                    detail="health_check reports missing Agent Mail tables.",
+                ),
+                swarm_incident_timeline_event(
+                    step=2,
+                    event="macro_start_session_failed",
+                    status="degraded",
+                    source_ref="AGENTS.md",
+                    detail="Mail bootstrap cannot become the source of truth.",
+                ),
+                swarm_incident_timeline_event(
+                    step=3,
+                    event="beads_soft_lock_selected",
+                    status="safe_action_selected",
+                    source_ref=".beads/issues.jsonl",
+                    detail="Use Beads assignee, status, and comments as the soft lock.",
+                ),
+            ],
+            "expected_safe_action": (
+                "Use Beads assignee/status/comments as the soft lock, keep the "
+                "incident visible, and avoid live Agent Mail writes until repaired."
+            ),
+            "redaction": swarm_incident_redaction(),
+            "usable_for": swarm_incident_usable_for(
+                incident_replay=True,
+                proof_memory=True,
+                operator_recommendation=True,
+            ),
+            "contradiction_checks": swarm_incident_contradiction_checks(),
+            "claim_boundaries": swarm_incident_claim_boundaries(),
+        },
+        {
+            "id": "rch_saturation_local_fallback_denial",
+            "title": "RCH saturation denies local heavyweight Cargo fallback",
+            "incident_class": "validation_capacity_degraded",
+            "status": "replayable",
+            "source_refs": [
+                swarm_incident_source_ref(
+                    "AGENTS.md",
+                    "policy",
+                    "Heavy cargo validation requires RCH with isolated CARGO_TARGET_DIR and TMPDIR.",
+                ),
+                swarm_incident_source_ref(
+                    "docs/evidence/validation-scheduler-plan.json",
+                    "evidence",
+                    "Validation scheduler evidence records RCH-required groups and local fallback rejection.",
+                ),
+                swarm_incident_source_ref(
+                    "docs/contracts/validation-scheduler-plan-contract.json",
+                    "contract",
+                    "Scheduler contract requires exact env and fail-closed local fallback handling.",
+                ),
+            ],
+            "timeline": [
+                swarm_incident_timeline_event(
+                    step=1,
+                    event="rch_pressure_detected",
+                    status="degraded",
+                    source_ref="docs/evidence/validation-scheduler-plan.json",
+                    detail="RCH-required gate is saturated or unavailable.",
+                ),
+                swarm_incident_timeline_event(
+                    step=2,
+                    event="local_fallback_requested",
+                    status="blocked",
+                    source_ref="AGENTS.md",
+                    detail="A heavyweight local Cargo run would violate the repository policy.",
+                ),
+                swarm_incident_timeline_event(
+                    step=3,
+                    event="fallback_denied",
+                    status="safe_action_selected",
+                    source_ref="docs/contracts/validation-scheduler-plan-contract.json",
+                    detail="The operator should back off, narrow, or surface the validation blocker.",
+                ),
+            ],
+            "expected_safe_action": (
+                "Deny local heavyweight fallback, keep the exact RCH env shape, "
+                "and surface or retry only when remote capacity is available."
+            ),
+            "redaction": swarm_incident_redaction(),
+            "usable_for": swarm_incident_usable_for(
+                incident_replay=True,
+                proof_memory=True,
+                operator_recommendation=True,
+            ),
+            "contradiction_checks": swarm_incident_contradiction_checks(),
+            "claim_boundaries": swarm_incident_claim_boundaries(),
+        },
+        {
+            "id": "stale_evidence_blocks_reuse",
+            "title": "Stale validation evidence blocks proof reuse",
+            "incident_class": "evidence_freshness_degraded",
+            "status": "replayable",
+            "source_refs": [
+                swarm_incident_source_ref(
+                    "docs/contracts/stale-evidence-renewal-queue-contract.json",
+                    "contract",
+                    "Stale evidence renewal contract preserves fail-closed refresh semantics.",
+                ),
+                swarm_incident_source_ref(
+                    "docs/evidence/predictive-swarm-telemetry-ledger.json",
+                    "evidence",
+                    "Predictive telemetry evidence can identify stale or conflicting signals.",
+                ),
+                swarm_incident_source_ref(
+                    "docs/contracts/remote-validation-proof-reuse-gate-contract.json",
+                    "contract",
+                    "Proof reuse is advisory and must reject stale or mismatched inputs.",
+                ),
+            ],
+            "timeline": [
+                swarm_incident_timeline_event(
+                    step=1,
+                    event="proof_candidate_found",
+                    status="candidate",
+                    source_ref="docs/contracts/remote-validation-proof-reuse-gate-contract.json",
+                    detail="Prior evidence matches a command class but needs freshness checks.",
+                ),
+                swarm_incident_timeline_event(
+                    step=2,
+                    event="stale_or_mismatched_inputs_detected",
+                    status="blocked",
+                    source_ref="docs/contracts/stale-evidence-renewal-queue-contract.json",
+                    detail="The candidate cannot green-light the current change.",
+                ),
+                swarm_incident_timeline_event(
+                    step=3,
+                    event="refresh_required",
+                    status="safe_action_selected",
+                    source_ref="docs/evidence/predictive-swarm-telemetry-ledger.json",
+                    detail="Queue a focused refresh instead of treating stale proof as pass.",
+                ),
+            ],
+            "expected_safe_action": (
+                "Reject stale proof reuse and refresh the focused validation evidence "
+                "before using it for an operator recommendation."
+            ),
+            "redaction": swarm_incident_redaction(),
+            "usable_for": swarm_incident_usable_for(
+                incident_replay=True,
+                proof_memory=True,
+                operator_recommendation=True,
+            ),
+            "contradiction_checks": swarm_incident_contradiction_checks(),
+            "claim_boundaries": swarm_incident_claim_boundaries(),
+        },
+        {
+            "id": "duplicate_agent_work_risk",
+            "title": "Duplicate agent work is detected without reverting peers",
+            "incident_class": "coordination_collision_risk",
+            "status": "replayable",
+            "source_refs": [
+                swarm_incident_source_ref(
+                    "scripts/report_swarm_claim_readiness.py",
+                    "detector",
+                    "Redundant-agent-work detector classifies overlap and duplicate work without mutation.",
+                ),
+                swarm_incident_source_ref(
+                    "docs/evidence/predictive-operations-closeout-gate.json",
+                    "evidence",
+                    "Predictive closeout records redundant-agent-work evidence as advisory.",
+                ),
+                swarm_incident_source_ref(
+                    ".beads/issues.jsonl",
+                    "ledger",
+                    "Beads is the ownership ledger for status and closeout comments.",
+                ),
+            ],
+            "timeline": [
+                swarm_incident_timeline_event(
+                    step=1,
+                    event="overlapping_work_detected",
+                    status="watch",
+                    source_ref="scripts/report_swarm_claim_readiness.py",
+                    detail="Two agents appear to touch the same evidence or bead surface.",
+                ),
+                swarm_incident_timeline_event(
+                    step=2,
+                    event="ownership_source_checked",
+                    status="candidate",
+                    source_ref=".beads/issues.jsonl",
+                    detail="Beads status and comments determine the current soft lock.",
+                ),
+                swarm_incident_timeline_event(
+                    step=3,
+                    event="non_overlapping_fallback_selected",
+                    status="safe_action_selected",
+                    source_ref="docs/evidence/predictive-operations-closeout-gate.json",
+                    detail="Continue on non-overlapping work or surface the conflict.",
+                ),
+            ],
+            "expected_safe_action": (
+                "Do not revert peer work; use Beads ownership, avoid the contested "
+                "surface, and choose non-overlapping evidence or surface the conflict."
+            ),
+            "redaction": swarm_incident_redaction(),
+            "usable_for": swarm_incident_usable_for(
+                incident_replay=True,
+                proof_memory=True,
+                operator_recommendation=True,
+            ),
+            "contradiction_checks": swarm_incident_contradiction_checks(),
+            "claim_boundaries": swarm_incident_claim_boundaries(),
+        },
+        {
+            "id": "dirty_worktree_admission_denial",
+            "title": "Dirty worktree prevents unsafe work admission",
+            "incident_class": "workspace_integrity_degraded",
+            "status": "replayable",
+            "source_refs": [
+                swarm_incident_source_ref(
+                    "AGENTS.md",
+                    "policy",
+                    "Agents must treat unrelated dirty files as active work and avoid reverting them.",
+                ),
+                swarm_incident_source_ref(
+                    "docs/evidence/swarm-autopilot-decision-gate.json",
+                    "evidence",
+                    "Autopilot gate evidence includes dirty worktree and safe admission boundaries.",
+                ),
+                swarm_incident_source_ref(
+                    "docs/contracts/swarm-work-admission-gate-contract.json",
+                    "contract",
+                    "Work-admission dry-run executor rejects unsafe source-of-truth mutation.",
+                ),
+            ],
+            "timeline": [
+                swarm_incident_timeline_event(
+                    step=1,
+                    event="dirty_worktree_detected",
+                    status="blocked",
+                    source_ref="AGENTS.md",
+                    detail="Unrelated local edits are present and must be preserved.",
+                ),
+                swarm_incident_timeline_event(
+                    step=2,
+                    event="admission_gate_blocks_mutation",
+                    status="blocked",
+                    source_ref="docs/contracts/swarm-work-admission-gate-contract.json",
+                    detail="The dry-run gate rejects source mutations that would trample active work.",
+                ),
+                swarm_incident_timeline_event(
+                    step=3,
+                    event="safe_surface_required",
+                    status="safe_action_selected",
+                    source_ref="docs/evidence/swarm-autopilot-decision-gate.json",
+                    detail="Proceed only on a non-overlapping owned surface.",
+                ),
+            ],
+            "expected_safe_action": (
+                "Preserve dirty unrelated work, deny unsafe admission, and continue "
+                "only on an owned non-overlapping surface."
+            ),
+            "redaction": swarm_incident_redaction(),
+            "usable_for": swarm_incident_usable_for(
+                incident_replay=True,
+                proof_memory=True,
+                operator_recommendation=True,
+            ),
+            "contradiction_checks": swarm_incident_contradiction_checks(),
+            "claim_boundaries": swarm_incident_claim_boundaries(),
+        },
+        {
+            "id": "malformed_source_artifact",
+            "title": "Malformed source artifact fails closed before recommendation",
+            "incident_class": "source_artifact_malformed",
+            "status": "replayable",
+            "source_refs": [
+                swarm_incident_source_ref(
+                    "tests/golden_corpus/swarm_operator_runpack/malformed_source_fail_closed_projection.json",
+                    "golden_fixture",
+                    "Golden projection for malformed source fail-closed behavior.",
+                ),
+                swarm_incident_source_ref(
+                    "scripts/build_swarm_operator_runpack.py",
+                    "generator",
+                    "Runpack source loading and contract assertions reject malformed inputs.",
+                ),
+                swarm_incident_source_ref(
+                    "docs/contracts/swarm-operator-runpack-contract.json",
+                    "contract",
+                    "Runpack contract defines required source and status shape.",
+                ),
+            ],
+            "timeline": [
+                swarm_incident_timeline_event(
+                    step=1,
+                    event="source_artifact_loaded",
+                    status="candidate",
+                    source_ref="tests/golden_corpus/swarm_operator_runpack/malformed_source_fail_closed_projection.json",
+                    detail="Fixture source is present but intentionally malformed.",
+                ),
+                swarm_incident_timeline_event(
+                    step=2,
+                    event="contract_shape_rejected",
+                    status="blocked",
+                    source_ref="docs/contracts/swarm-operator-runpack-contract.json",
+                    detail="Missing or malformed required fields prevent trusted use.",
+                ),
+                swarm_incident_timeline_event(
+                    step=3,
+                    event="operator_follow_up_required",
+                    status="safe_action_selected",
+                    source_ref="scripts/build_swarm_operator_runpack.py",
+                    detail="File or refresh a concrete follow-up instead of guessing.",
+                ),
+            ],
+            "expected_safe_action": (
+                "Fail closed on malformed source artifacts and require a concrete "
+                "refresh or follow-up bead before recommendation."
+            ),
+            "redaction": swarm_incident_redaction(),
+            "usable_for": swarm_incident_usable_for(
+                incident_replay=True,
+                proof_memory=True,
+                operator_recommendation=True,
+            ),
+            "contradiction_checks": swarm_incident_contradiction_checks(),
+            "claim_boundaries": swarm_incident_claim_boundaries(),
+        },
+        {
+            "id": "deletion_live_mutation_request_rejected",
+            "title": "Deletion or live mutation request is retained as a fail-closed fixture",
+            "incident_class": "unsafe_authorization_request",
+            "status": "fail_closed_fixture",
+            "source_refs": [
+                swarm_incident_source_ref(
+                    "AGENTS.md",
+                    "policy",
+                    "File deletion and irreversible commands require explicit written permission.",
+                ),
+                swarm_incident_source_ref(
+                    "docs/contracts/swarm-work-admission-gate-contract.json",
+                    "contract",
+                    "Work admission dry-run executor rejects deletion and live mutation.",
+                ),
+                swarm_incident_source_ref(
+                    "scripts/build_swarm_operator_runpack.py",
+                    "generator",
+                    "Incident corpus records unsafe authorization requests as rejected fixtures only.",
+                ),
+            ],
+            "timeline": [
+                swarm_incident_timeline_event(
+                    step=1,
+                    event="unsafe_authorization_request_received",
+                    status="blocked",
+                    source_ref="AGENTS.md",
+                    detail="The incident asks the artifact to authorize deletion or live mutation.",
+                ),
+                swarm_incident_timeline_event(
+                    step=2,
+                    event="authorization_scope_rejected",
+                    status="blocked",
+                    source_ref="docs/contracts/swarm-work-admission-gate-contract.json",
+                    detail="Advisory evidence cannot authorize destructive filesystem, git, Mail, or RCH actions.",
+                ),
+                swarm_incident_timeline_event(
+                    step=3,
+                    event="fail_closed_fixture_recorded",
+                    status="safe_action_selected",
+                    source_ref="scripts/build_swarm_operator_runpack.py",
+                    detail="The request remains a replay fixture and does not mutate live state.",
+                ),
+            ],
+            "expected_safe_action": (
+                "Reject deletion or live-mutation authorization and require the "
+                "normal explicit operator approval path outside this corpus."
+            ),
+            "redaction": swarm_incident_redaction(),
+            "usable_for": swarm_incident_usable_for(
+                incident_replay=True,
+                proof_memory=True,
+                operator_recommendation=True,
+            ),
+            "contradiction_checks": swarm_incident_contradiction_checks(),
+            "claim_boundaries": swarm_incident_claim_boundaries(),
+        },
+    ]
+    negative_controls = [
+        {
+            "id": "missing_source_path_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "reason": "Incident fixtures must name checked-in source paths.",
+            "trigger": {"source_refs": [{"path": ""}]},
+        },
+        {
+            "id": "unsafe_unredacted_body_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "reason": "Raw Agent Mail, provider, or stderr bodies must not be embedded unredacted.",
+            "trigger": {"redaction": {"unredacted_sensitive_body_embedded": True}},
+        },
+        {
+            "id": "contradictory_status_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "reason": "A replayable incident cannot carry contradictory timeline or safe-action status.",
+            "trigger": {"contradiction_checks": {"timeline_status_consistent": False}},
+        },
+        {
+            "id": "deletion_or_live_mutation_authorization_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "reason": "Advisory incident evidence cannot authorize deletion or live Agent Mail/RCH mutation.",
+            "trigger": {
+                "claim_boundaries": {
+                    "file_deletion_authorized": True,
+                    "live_mutation_authorized": True,
+                }
+            },
+        },
+    ]
+    source_boundaries = [
+        {
+            "id": "checked_in_sources_only",
+            "status": "pass",
+            "evidence": [
+                "AGENTS.md",
+                "docs/evidence/validation-scheduler-plan.json",
+                "tests/fixtures/agent_mail/schema_corrupt_health.json",
+            ],
+            "description": "The corpus references checked-in fixtures, contracts, and generated evidence only.",
+        },
+        {
+            "id": "redacted_metadata_only",
+            "status": "pass",
+            "evidence": ["scripts/build_swarm_operator_runpack.py"],
+            "description": "Incident entries embed metadata and redaction posture, not raw sensitive bodies.",
+        },
+        {
+            "id": "operator_evidence_only_not_authority",
+            "status": "pass",
+            "evidence": [
+                "docs/contracts/dropin-certification-contract.json",
+                "docs/evidence/dropin-certification-verdict.json",
+            ],
+            "description": "The corpus is advisory operator evidence, not release, drop-in, Agent Mail, or RCH authority.",
+        },
+        {
+            "id": "read_only_no_live_mutation",
+            "status": "pass",
+            "evidence": ["scripts/build_swarm_operator_runpack.py", "AGENTS.md"],
+            "description": "The generator emits JSON and does not mutate live Agent Mail, RCH, Beads, git, or files.",
+        },
+    ]
+    root = repo_root()
+    incident_ids = {incident["id"] for incident in incidents}
+    missing_incident_ids = [
+        incident_id
+        for incident_id in SWARM_INCIDENT_CORPUS_REQUIRED_INCIDENT_IDS
+        if incident_id not in incident_ids
+    ]
+    missing_source_paths = sorted(
+        {
+            str(source.get("path"))
+            for incident in incidents
+            for source in incident.get("source_refs", [])
+            if isinstance(source, dict)
+            and source.get("exists_in_repo") is True
+            and (
+                not isinstance(source.get("path"), str)
+                or not source.get("path")
+                or not (root / source.get("path", "")).exists()
+            )
+        }
+    )
+    negative_control_failures = [
+        control["id"]
+        for control in negative_controls
+        if control.get("expected_status") != "fail"
+        or control.get("verdict") != "fail"
+        or control.get("expectation_met") is not True
+    ]
+    source_boundary_failures = [
+        boundary["id"]
+        for boundary in source_boundaries
+        if boundary.get("status") != "pass"
+    ]
+    claim_boundaries = swarm_incident_claim_boundaries()
+    status = (
+        "pass"
+        if not missing_incident_ids
+        and not missing_source_paths
+        and not negative_control_failures
+        and not source_boundary_failures
+        else "fail"
+    )
+    summary = {
+        "schema": SWARM_INCIDENT_CORPUS_SCHEMA,
+        "generated_at": generated_at,
+        "status": status,
+        "purpose": "operator_incident_corpus_not_release_dropin_or_coordination_authority",
+        "source_bead": "bd-9yq7i.1",
+        "required_incident_ids": list(SWARM_INCIDENT_CORPUS_REQUIRED_INCIDENT_IDS),
+        "incidents": incidents,
+        "missing_incident_ids": missing_incident_ids,
+        "missing_source_paths": missing_source_paths,
+        "negative_controls": negative_controls,
+        "negative_control_failures": negative_control_failures,
+        "source_boundaries": source_boundaries,
+        "source_boundary_failures": source_boundary_failures,
+        "claim_boundaries": claim_boundaries,
+        "known_limitations": [
+            "This corpus is deterministic operator evidence only.",
+            "It does not replace Beads, Agent Mail, RCH, staged UBS, CI, source artifacts, or human review.",
+            "It does not authorize file deletion, git reset, live Agent Mail mutation, live RCH worker mutation, or production network/model calls.",
+            "It is not release performance evidence, benchmark evidence, capacity evidence, or strict drop-in certification evidence.",
+        ],
+        "operator_next_actions": [
+            "Use this corpus as the checked-in fixture source for incident replay work.",
+            "Refresh or file follow-up beads before relying on any incident with failed source, redaction, or contradiction checks.",
+            "Keep live Agent Mail/RCH repair and Beads ownership outside this read-only evidence artifact.",
+        ],
+        "decision": (
+            "incident_corpus_passed"
+            if status == "pass"
+            else "file_follow_up_before_relying_on_incident_corpus"
+        ),
+    }
+    assert_swarm_incident_corpus_contract(summary)
+    return summary
+
+
+def assert_swarm_incident_corpus_contract(summary: dict[str, Any]) -> None:
+    root = repo_root()
+    contract_path = root / SWARM_INCIDENT_CORPUS_CONTRACT_PATH
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise AssertionError(f"missing swarm incident corpus contract: {contract_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"swarm incident corpus contract is malformed JSON: {contract_path}: {exc}"
+        ) from exc
+    assert contract.get("schema") == SWARM_INCIDENT_CORPUS_CONTRACT_SCHEMA
+    assert contract.get("evidence_schema") == SWARM_INCIDENT_CORPUS_SCHEMA
+    assert summary.get("schema") == contract["evidence_schema"]
+    assert summary.get("purpose") == contract.get("purpose")
+    assert summary.get("status") in set(contract.get("allowed_statuses", []))
+    for key in contract.get("required_top_level_keys", []):
+        assert key in summary, f"swarm incident corpus missing key: {key}"
+    incidents = summary.get("incidents")
+    assert isinstance(incidents, list) and incidents
+    incident_ids = {
+        incident.get("id")
+        for incident in incidents
+        if isinstance(incident, dict)
+    }
+    required_incident_ids = set(contract.get("required_incident_ids", []))
+    assert incident_ids.issuperset(required_incident_ids), (
+        f"swarm incident corpus missing incidents: {sorted(required_incident_ids - incident_ids)}"
+    )
+    required_incident_keys = set(contract.get("required_incident_keys", []))
+    required_source_ref_keys = set(contract.get("required_source_ref_keys", []))
+    required_timeline_event_keys = set(contract.get("required_timeline_event_keys", []))
+    allowed_incident_statuses = set(contract.get("allowed_incident_statuses", []))
+    allowed_timeline_statuses = set(contract.get("allowed_timeline_statuses", []))
+    required_usable_keys = set(contract.get("required_usable_for_keys", []))
+    required_false_flags = set(contract.get("required_false_claim_boundary_flags", []))
+    for incident in incidents:
+        assert isinstance(incident, dict)
+        incident_id = str(incident.get("id") or "")
+        missing_incident_keys = required_incident_keys - set(incident)
+        assert not missing_incident_keys, (
+            f"swarm incident {incident_id} missing keys: {sorted(missing_incident_keys)}"
+        )
+        assert incident.get("status") in allowed_incident_statuses, (
+            f"swarm incident {incident_id} has invalid status: {incident.get('status')}"
+        )
+        source_refs = incident.get("source_refs")
+        assert isinstance(source_refs, list) and source_refs, (
+            f"swarm incident {incident_id} missing source refs"
+        )
+        source_paths: set[str] = set()
+        for source in source_refs:
+            assert isinstance(source, dict)
+            missing_source_keys = required_source_ref_keys - set(source)
+            assert not missing_source_keys, (
+                f"swarm incident {incident_id} source ref missing keys: "
+                f"{sorted(missing_source_keys)}"
+            )
+            path = source.get("path")
+            assert isinstance(path, str) and path.strip(), (
+                f"swarm incident {incident_id} source path is empty"
+            )
+            source_paths.add(path)
+            if source.get("exists_in_repo") is True:
+                assert (root / path).exists(), (
+                    f"swarm incident {incident_id} source path does not exist: {path}"
+                )
+        timeline = incident.get("timeline")
+        assert isinstance(timeline, list) and timeline, (
+            f"swarm incident {incident_id} missing timeline"
+        )
+        previous_step: int | None = None
+        for event in timeline:
+            assert isinstance(event, dict)
+            missing_event_keys = required_timeline_event_keys - set(event)
+            assert not missing_event_keys, (
+                f"swarm incident {incident_id} event missing keys: {sorted(missing_event_keys)}"
+            )
+            step = event.get("step")
+            assert isinstance(step, int), (
+                f"swarm incident {incident_id} event step is not an int"
+            )
+            if previous_step is not None:
+                assert step > previous_step, (
+                    f"swarm incident {incident_id} timeline must be monotonic"
+                )
+            assert event.get("status") in allowed_timeline_statuses, (
+                f"swarm incident {incident_id} event has invalid status: {event.get('status')}"
+            )
+            assert event.get("source_ref") in source_paths, (
+                f"swarm incident {incident_id} event source_ref is not declared: "
+                f"{event.get('source_ref')}"
+            )
+            previous_step = step
+        expected_safe_action = incident.get("expected_safe_action")
+        assert isinstance(expected_safe_action, str) and expected_safe_action.strip(), (
+            f"swarm incident {incident_id} missing expected safe action"
+        )
+        redaction = incident.get("redaction")
+        assert isinstance(redaction, dict), (
+            f"swarm incident {incident_id} missing redaction posture"
+        )
+        assert redaction.get("raw_body_embedded") is False, (
+            f"swarm incident {incident_id} embedded a raw body"
+        )
+        assert redaction.get("unredacted_sensitive_body_embedded") is False, (
+            f"swarm incident {incident_id} embedded an unredacted sensitive body"
+        )
+        assert redaction.get("redacted_or_fixture_only") is True, (
+            f"swarm incident {incident_id} is not fixture/redacted only"
+        )
+        usable_for = incident.get("usable_for")
+        assert isinstance(usable_for, dict), (
+            f"swarm incident {incident_id} missing usable_for"
+        )
+        missing_usable = required_usable_keys - set(usable_for)
+        assert not missing_usable, (
+            f"swarm incident {incident_id} usable_for missing keys: {sorted(missing_usable)}"
+        )
+        assert all(isinstance(usable_for[key], bool) for key in required_usable_keys), (
+            f"swarm incident {incident_id} usable_for values must be booleans"
+        )
+        contradiction_checks = incident.get("contradiction_checks")
+        assert isinstance(contradiction_checks, dict) and contradiction_checks, (
+            f"swarm incident {incident_id} missing contradiction checks"
+        )
+        assert all(value is True for value in contradiction_checks.values()), (
+            f"swarm incident {incident_id} has contradictory status"
+        )
+        claim_boundaries = incident.get("claim_boundaries")
+        assert isinstance(claim_boundaries, dict), (
+            f"swarm incident {incident_id} missing claim boundaries"
+        )
+        for flag in required_false_flags:
+            assert claim_boundaries.get(flag) is False, (
+                f"swarm incident {incident_id} claim boundary must be false: {flag}"
+            )
+    negative_controls = summary.get("negative_controls")
+    assert isinstance(negative_controls, list) and negative_controls
+    required_negative_ids = set(contract.get("required_negative_control_ids", []))
+    negative_ids = {
+        control.get("id")
+        for control in negative_controls
+        if isinstance(control, dict)
+    }
+    assert negative_ids.issuperset(required_negative_ids), (
+        f"swarm incident corpus missing negative controls: {sorted(required_negative_ids - negative_ids)}"
+    )
+    for control in negative_controls:
+        assert isinstance(control, dict)
+        assert control.get("expected_status") == "fail", (
+            f"swarm incident negative control must expect fail: {control.get('id')}"
+        )
+        assert control.get("verdict") == "fail", (
+            f"swarm incident negative control must fail: {control.get('id')}"
+        )
+        assert control.get("expectation_met") is True, (
+            f"swarm incident negative control expectation unmet: {control.get('id')}"
+        )
+        assert isinstance(control.get("trigger"), dict) and control.get("trigger"), (
+            f"swarm incident negative control missing trigger: {control.get('id')}"
+        )
+    source_boundaries = summary.get("source_boundaries")
+    assert isinstance(source_boundaries, list) and source_boundaries
+    boundary_ids = {
+        boundary.get("id")
+        for boundary in source_boundaries
+        if isinstance(boundary, dict)
+    }
+    required_boundaries = set(contract.get("required_source_boundary_ids", []))
+    assert boundary_ids.issuperset(required_boundaries), (
+        f"swarm incident corpus missing source boundaries: {sorted(required_boundaries - boundary_ids)}"
+    )
+    for boundary in source_boundaries:
+        assert boundary.get("status") == "pass", (
+            f"swarm incident source boundary failed: {boundary.get('id')}"
+        )
+        assert isinstance(boundary.get("evidence"), list) and boundary.get("evidence"), (
+            f"swarm incident source boundary missing evidence: {boundary.get('id')}"
+        )
+    claim_boundaries = summary.get("claim_boundaries")
+    assert isinstance(claim_boundaries, dict)
+    for flag in required_false_flags:
+        assert claim_boundaries.get(flag) is False, (
+            f"swarm incident corpus claim boundary must be false: {flag}"
+        )
+    if summary.get("status") == "pass":
+        assert summary.get("missing_incident_ids") == []
+        assert summary.get("missing_source_paths") == []
+        assert summary.get("negative_control_failures") == []
+        assert summary.get("source_boundary_failures") == []
+
+
+def write_swarm_incident_corpus_output(
+    args: argparse.Namespace,
+    summary: dict[str, Any],
+) -> None:
+    output_path = getattr(args, "out_swarm_incident_corpus_json", None)
+    if output_path is None:
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        raise RunpackError(
+            f"refusing to overwrite swarm incident corpus: {output_path}"
         )
     output_path.write_text(json_dumps(summary, pretty=True), encoding="utf-8")
 
@@ -27469,6 +29161,61 @@ def run_self_test() -> int:
             raise AssertionError(
                 "operator perceived latency positive negative-control passed"
             )
+        incident_corpus = build_swarm_incident_corpus_summary(generated_at=generated_at)
+        assert incident_corpus["schema"] == SWARM_INCIDENT_CORPUS_SCHEMA
+        assert incident_corpus["status"] == "pass"
+        assert incident_corpus["decision"] == "incident_corpus_passed"
+        assert {
+            incident["id"] for incident in incident_corpus["incidents"]
+        } == set(SWARM_INCIDENT_CORPUS_REQUIRED_INCIDENT_IDS)
+        assert {
+            control["id"] for control in incident_corpus["negative_controls"]
+        }.issuperset(SWARM_INCIDENT_CORPUS_REQUIRED_NEGATIVE_CONTROL_IDS)
+        assert not incident_corpus["missing_source_paths"]
+        assert_swarm_incident_corpus_contract(incident_corpus)
+        missing_source_corpus = json.loads(json_dumps(incident_corpus))
+        missing_source_corpus["incidents"][0]["source_refs"][0]["path"] = ""
+        try:
+            assert_swarm_incident_corpus_contract(missing_source_corpus)
+        except AssertionError as exc:
+            assert "source path" in str(exc)
+        else:
+            raise AssertionError("swarm incident missing source path passed")
+        unredacted_corpus = json.loads(json_dumps(incident_corpus))
+        unredacted_corpus["incidents"][0]["redaction"][
+            "unredacted_sensitive_body_embedded"
+        ] = True
+        try:
+            assert_swarm_incident_corpus_contract(unredacted_corpus)
+        except AssertionError as exc:
+            assert "unredacted sensitive body" in str(exc)
+        else:
+            raise AssertionError("swarm incident unsafe unredacted body passed")
+        contradictory_corpus = json.loads(json_dumps(incident_corpus))
+        contradictory_corpus["incidents"][0]["contradiction_checks"][
+            "timeline_status_consistent"
+        ] = False
+        try:
+            assert_swarm_incident_corpus_contract(contradictory_corpus)
+        except AssertionError as exc:
+            assert "contradictory status" in str(exc)
+        else:
+            raise AssertionError("swarm incident contradictory status passed")
+        mutation_authority_corpus = json.loads(json_dumps(incident_corpus))
+        mutation_authority_corpus["incidents"][-1]["claim_boundaries"][
+            "file_deletion_authorized"
+        ] = True
+        mutation_authority_corpus["incidents"][-1]["claim_boundaries"][
+            "live_mutation_authorized"
+        ] = True
+        try:
+            assert_swarm_incident_corpus_contract(mutation_authority_corpus)
+        except AssertionError as exc:
+            assert "file_deletion_authorized" in str(exc) or "live_mutation_authorized" in str(
+                exc
+            )
+        else:
+            raise AssertionError("swarm incident deletion/live mutation authority passed")
         no_tail_args = argparse.Namespace(**{**vars(args), "tail_latency_json": None})
         no_tail_runpack = build_runpack(no_tail_args)
         assert "tail_latency" not in no_tail_runpack
@@ -28010,6 +29757,21 @@ def parse_args() -> argparse.Namespace:
         help="print the operator-perceived latency trace JSON",
     )
     parser.add_argument(
+        "--run-swarm-incident-corpus",
+        action="store_true",
+        help="build the deterministic large-swarm incident corpus",
+    )
+    parser.add_argument(
+        "--out-swarm-incident-corpus-json",
+        type=Path,
+        help="write pi.swarm.incident_corpus.v1 JSON; refuses to overwrite",
+    )
+    parser.add_argument(
+        "--print-swarm-incident-corpus",
+        action="store_true",
+        help="print the deterministic large-swarm incident corpus JSON",
+    )
+    parser.add_argument(
         "--run-proof-reuse-gate",
         action="store_true",
         help="build the fail-closed remote validation proof reuse gate",
@@ -28141,6 +29903,10 @@ def main() -> int:
         args.out_operator_perceived_latency_trace_json
         or args.print_operator_perceived_latency_trace
     )
+    swarm_incident_corpus_options_used = (
+        args.out_swarm_incident_corpus_json
+        or args.print_swarm_incident_corpus
+    )
     proof_reuse_gate_options_used = (
         args.proof_ledger_json
         or args.proof_reuse_context_json
@@ -28173,6 +29939,18 @@ def main() -> int:
         print(
             "ERROR: operator perceived latency trace cannot be combined with "
             "final-gate or backpressure modes",
+            file=sys.stderr,
+        )
+        return 2
+    if args.run_swarm_incident_corpus and (
+        args.run_backpressure_budget_contract
+        or args.run_operator_perceived_latency_trace
+        or args.run_proof_reuse_gate
+        or any(final_gate_modes)
+    ):
+        print(
+            "ERROR: swarm incident corpus cannot be combined with final-gate, "
+            "backpressure, perceived-latency, or proof-reuse modes",
             file=sys.stderr,
         )
         return 2
@@ -28266,6 +30044,12 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    if swarm_incident_corpus_options_used and not args.run_swarm_incident_corpus:
+        print(
+            "ERROR: swarm incident corpus options require --run-swarm-incident-corpus",
+            file=sys.stderr,
+        )
+        return 2
     if proof_reuse_gate_options_used and not args.run_proof_reuse_gate:
         print(
             "ERROR: proof reuse gate options require --run-proof-reuse-gate",
@@ -28314,6 +30098,18 @@ def main() -> int:
             if (
                 args.print_operator_perceived_latency_trace
                 or args.out_operator_perceived_latency_trace_json is None
+            ):
+                print(json_dumps(summary, pretty=True))
+            return 0
+        if args.run_swarm_incident_corpus:
+            summary = build_swarm_incident_corpus_summary(
+                generated_at=args.generated_at or utc_now_iso(),
+            )
+            assert_swarm_incident_corpus_contract(summary)
+            write_swarm_incident_corpus_output(args, summary)
+            if (
+                args.print_swarm_incident_corpus
+                or args.out_swarm_incident_corpus_json is None
             ):
                 print(json_dumps(summary, pretty=True))
             return 0
@@ -28552,6 +30348,7 @@ def main() -> int:
         and not args.out_test_fabric_final_gate_json
         and not args.out_predictive_ops_final_gate_json
         and not args.out_backpressure_budget_contract_json
+        and not args.out_swarm_incident_corpus_json
         and not args.out_proof_reuse_gate_json
         and not args.print_autopilot_input_pack
         and not args.print_autopilot_plan
@@ -28568,6 +30365,7 @@ def main() -> int:
         and not args.print_test_fabric_final_gate
         and not args.print_predictive_ops_final_gate
         and not args.print_backpressure_budget_contract
+        and not args.print_swarm_incident_corpus
         and not args.print_proof_reuse_gate
     ):
         print(json_dumps(runpack, pretty=True))

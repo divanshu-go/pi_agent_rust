@@ -1,0 +1,139 @@
+{
+  "schema": "pi.swarm.incident_corpus_contract.v1",
+  "evidence_schema": "pi.swarm.incident_corpus.v1",
+  "purpose": "operator_incident_corpus_not_release_dropin_or_coordination_authority",
+  "description": "Fail-closed contract for deterministic large-swarm incident fixtures used by replay, proof-memory, and operator recommendation work.",
+  "required_top_level_keys": [
+    "schema",
+    "generated_at",
+    "status",
+    "purpose",
+    "source_bead",
+    "required_incident_ids",
+    "incidents",
+    "missing_incident_ids",
+    "missing_source_paths",
+    "negative_controls",
+    "negative_control_failures",
+    "source_boundaries",
+    "source_boundary_failures",
+    "claim_boundaries",
+    "known_limitations",
+    "operator_next_actions",
+    "decision"
+  ],
+  "allowed_statuses": [
+    "pass",
+    "fail"
+  ],
+  "allowed_incident_statuses": [
+    "replayable",
+    "fail_closed_fixture"
+  ],
+  "allowed_timeline_statuses": [
+    "blocked",
+    "candidate",
+    "degraded",
+    "safe_action_selected",
+    "watch"
+  ],
+  "required_incident_ids": [
+    "agent_mail_schema_corruption",
+    "rch_saturation_local_fallback_denial",
+    "stale_evidence_blocks_reuse",
+    "duplicate_agent_work_risk",
+    "dirty_worktree_admission_denial",
+    "malformed_source_artifact",
+    "deletion_live_mutation_request_rejected"
+  ],
+  "required_incident_keys": [
+    "id",
+    "title",
+    "incident_class",
+    "status",
+    "source_refs",
+    "timeline",
+    "expected_safe_action",
+    "redaction",
+    "usable_for",
+    "contradiction_checks",
+    "claim_boundaries"
+  ],
+  "required_source_ref_keys": [
+    "path",
+    "source_type",
+    "detail",
+    "exists_in_repo"
+  ],
+  "required_timeline_event_keys": [
+    "step",
+    "event",
+    "status",
+    "source_ref",
+    "detail"
+  ],
+  "required_usable_for_keys": [
+    "incident_replay",
+    "proof_memory",
+    "operator_recommendation"
+  ],
+  "required_negative_control_ids": [
+    "missing_source_path_fails_closed",
+    "unsafe_unredacted_body_fails_closed",
+    "contradictory_status_fails_closed",
+    "deletion_or_live_mutation_authorization_fails_closed"
+  ],
+  "required_source_boundary_ids": [
+    "checked_in_sources_only",
+    "redacted_metadata_only",
+    "operator_evidence_only_not_authority",
+    "read_only_no_live_mutation"
+  ],
+  "required_false_claim_boundary_flags": [
+    "release_performance_claim_authorized",
+    "dropin_certification_claim_authorized",
+    "agent_mail_or_rch_authority",
+    "live_mutation_authorized",
+    "file_deletion_authorized",
+    "benchmark_or_capacity_claim_authorized"
+  ],
+  "must_requirements": [
+    {
+      "id": "SWARM-INCIDENT-CORPUS-MUST-001",
+      "description": "The corpus covers the representative large-swarm incident classes required for degraded coordination, validation pressure, stale evidence, duplicate work, dirty worktrees, malformed artifacts, and unsafe deletion or live mutation requests.",
+      "validated_by": [
+        "required_incident_ids",
+        "required_incident_keys"
+      ]
+    },
+    {
+      "id": "SWARM-INCIDENT-CORPUS-MUST-002",
+      "description": "Every positive incident cites checked-in source material, has monotonic timeline events, names the expected safe action, and carries explicit replay/proof-memory/operator usability flags.",
+      "validated_by": [
+        "required_source_ref_keys",
+        "required_timeline_event_keys",
+        "required_usable_for_keys"
+      ]
+    },
+    {
+      "id": "SWARM-INCIDENT-CORPUS-MUST-003",
+      "description": "Negative controls fail closed for missing sources, unsafe unredacted bodies, contradictory status, and deletion or live mutation authorization.",
+      "validated_by": [
+        "required_negative_control_ids"
+      ]
+    },
+    {
+      "id": "SWARM-INCIDENT-CORPUS-MUST-004",
+      "description": "The corpus is read-only operator evidence only and is not release performance, capacity, drop-in certification, Agent Mail, RCH, Beads, deletion, or live mutation authority.",
+      "validated_by": [
+        "required_false_claim_boundary_flags",
+        "required_source_boundary_ids"
+      ]
+    }
+  ],
+  "claim_boundaries": [
+    "This contract authorizes deterministic operator incident fixtures only.",
+    "It does not authorize release performance, benchmark, capacity, or strict drop-in claims.",
+    "It does not replace Agent Mail, RCH, Beads, git, source artifacts, or operator authorization for destructive actions."
+  ]
+}

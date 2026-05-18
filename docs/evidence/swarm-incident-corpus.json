@@ -1,0 +1,714 @@
+{
+  "claim_boundaries": {
+    "agent_mail_or_rch_authority": false,
+    "allowed_claim": "operator incident corpus fixture evidence only",
+    "benchmark_or_capacity_claim_authorized": false,
+    "dropin_certification_claim_authorized": false,
+    "file_deletion_authorized": false,
+    "live_mutation_authorized": false,
+    "release_performance_claim_authorized": false
+  },
+  "decision": "incident_corpus_passed",
+  "generated_at": "2026-05-18T05:30:00+00:00",
+  "incidents": [
+    {
+      "claim_boundaries": {
+        "agent_mail_or_rch_authority": false,
+        "allowed_claim": "operator incident corpus fixture evidence only",
+        "benchmark_or_capacity_claim_authorized": false,
+        "dropin_certification_claim_authorized": false,
+        "file_deletion_authorized": false,
+        "live_mutation_authorized": false,
+        "release_performance_claim_authorized": false
+      },
+      "contradiction_checks": {
+        "safe_action_is_non_mutating": true,
+        "timeline_status_consistent": true,
+        "usable_for_matches_status": true
+      },
+      "expected_safe_action": "Use Beads assignee/status/comments as the soft lock, keep the incident visible, and avoid live Agent Mail writes until repaired.",
+      "id": "agent_mail_schema_corruption",
+      "incident_class": "coordination_degraded",
+      "redaction": {
+        "max_raw_excerpt_chars": 0,
+        "raw_body_embedded": false,
+        "redacted_fields": [
+          "body_md",
+          "provider_payload",
+          "raw_agent_mail_body",
+          "stderr_excerpt",
+          "token"
+        ],
+        "redacted_or_fixture_only": true,
+        "unredacted_sensitive_body_embedded": false
+      },
+      "source_refs": [
+        {
+          "detail": "Agent Mail can coordinate ownership but Beads status is the fallback soft lock when Mail is corrupt.",
+          "exists_in_repo": true,
+          "path": "AGENTS.md",
+          "source_type": "policy"
+        },
+        {
+          "detail": "Checked-in degraded Agent Mail health payload with missing table diagnostics.",
+          "exists_in_repo": true,
+          "path": "tests/fixtures/agent_mail/schema_corrupt_health.json",
+          "source_type": "fixture"
+        },
+        {
+          "detail": "Runpack failure-action catalog and degraded coordination evidence handling.",
+          "exists_in_repo": true,
+          "path": "scripts/build_swarm_operator_runpack.py",
+          "source_type": "generator"
+        },
+        {
+          "detail": "Beads issue status, assignee, and comments provide the soft-lock fallback.",
+          "exists_in_repo": true,
+          "path": ".beads/issues.jsonl",
+          "source_type": "ledger"
+        }
+      ],
+      "status": "replayable",
+      "timeline": [
+        {
+          "detail": "health_check reports missing Agent Mail tables.",
+          "event": "agent_mail_health_check_failed",
+          "source_ref": "tests/fixtures/agent_mail/schema_corrupt_health.json",
+          "status": "degraded",
+          "step": 1
+        },
+        {
+          "detail": "Mail bootstrap cannot become the source of truth.",
+          "event": "macro_start_session_failed",
+          "source_ref": "AGENTS.md",
+          "status": "degraded",
+          "step": 2
+        },
+        {
+          "detail": "Use Beads assignee, status, and comments as the soft lock.",
+          "event": "beads_soft_lock_selected",
+          "source_ref": ".beads/issues.jsonl",
+          "status": "safe_action_selected",
+          "step": 3
+        }
+      ],
+      "title": "Agent Mail schema corruption forces Beads soft-lock coordination",
+      "usable_for": {
+        "incident_replay": true,
+        "operator_recommendation": true,
+        "proof_memory": true
+      }
+    },
+    {
+      "claim_boundaries": {
+        "agent_mail_or_rch_authority": false,
+        "allowed_claim": "operator incident corpus fixture evidence only",
+        "benchmark_or_capacity_claim_authorized": false,
+        "dropin_certification_claim_authorized": false,
+        "file_deletion_authorized": false,
+        "live_mutation_authorized": false,
+        "release_performance_claim_authorized": false
+      },
+      "contradiction_checks": {
+        "safe_action_is_non_mutating": true,
+        "timeline_status_consistent": true,
+        "usable_for_matches_status": true
+      },
+      "expected_safe_action": "Deny local heavyweight fallback, keep the exact RCH env shape, and surface or retry only when remote capacity is available.",
+      "id": "rch_saturation_local_fallback_denial",
+      "incident_class": "validation_capacity_degraded",
+      "redaction": {
+        "max_raw_excerpt_chars": 0,
+        "raw_body_embedded": false,
+        "redacted_fields": [
+          "body_md",
+          "provider_payload",
+          "raw_agent_mail_body",
+          "stderr_excerpt",
+          "token"
+        ],
+        "redacted_or_fixture_only": true,
+        "unredacted_sensitive_body_embedded": false
+      },
+      "source_refs": [
+        {
+          "detail": "Heavy cargo validation requires RCH with isolated CARGO_TARGET_DIR and TMPDIR.",
+          "exists_in_repo": true,
+          "path": "AGENTS.md",
+          "source_type": "policy"
+        },
+        {
+          "detail": "Validation scheduler evidence records RCH-required groups and local fallback rejection.",
+          "exists_in_repo": true,
+          "path": "docs/evidence/validation-scheduler-plan.json",
+          "source_type": "evidence"
+        },
+        {
+          "detail": "Scheduler contract requires exact env and fail-closed local fallback handling.",
+          "exists_in_repo": true,
+          "path": "docs/contracts/validation-scheduler-plan-contract.json",
+          "source_type": "contract"
+        }
+      ],
+      "status": "replayable",
+      "timeline": [
+        {
+          "detail": "RCH-required gate is saturated or unavailable.",
+          "event": "rch_pressure_detected",
+          "source_ref": "docs/evidence/validation-scheduler-plan.json",
+          "status": "degraded",
+          "step": 1
+        },
+        {
+          "detail": "A heavyweight local Cargo run would violate the repository policy.",
+          "event": "local_fallback_requested",
+          "source_ref": "AGENTS.md",
+          "status": "blocked",
+          "step": 2
+        },
+        {
+          "detail": "The operator should back off, narrow, or surface the validation blocker.",
+          "event": "fallback_denied",
+          "source_ref": "docs/contracts/validation-scheduler-plan-contract.json",
+          "status": "safe_action_selected",
+          "step": 3
+        }
+      ],
+      "title": "RCH saturation denies local heavyweight Cargo fallback",
+      "usable_for": {
+        "incident_replay": true,
+        "operator_recommendation": true,
+        "proof_memory": true
+      }
+    },
+    {
+      "claim_boundaries": {
+        "agent_mail_or_rch_authority": false,
+        "allowed_claim": "operator incident corpus fixture evidence only",
+        "benchmark_or_capacity_claim_authorized": false,
+        "dropin_certification_claim_authorized": false,
+        "file_deletion_authorized": false,
+        "live_mutation_authorized": false,
+        "release_performance_claim_authorized": false
+      },
+      "contradiction_checks": {
+        "safe_action_is_non_mutating": true,
+        "timeline_status_consistent": true,
+        "usable_for_matches_status": true
+      },
+      "expected_safe_action": "Reject stale proof reuse and refresh the focused validation evidence before using it for an operator recommendation.",
+      "id": "stale_evidence_blocks_reuse",
+      "incident_class": "evidence_freshness_degraded",
+      "redaction": {
+        "max_raw_excerpt_chars": 0,
+        "raw_body_embedded": false,
+        "redacted_fields": [
+          "body_md",
+          "provider_payload",
+          "raw_agent_mail_body",
+          "stderr_excerpt",
+          "token"
+        ],
+        "redacted_or_fixture_only": true,
+        "unredacted_sensitive_body_embedded": false
+      },
+      "source_refs": [
+        {
+          "detail": "Stale evidence renewal contract preserves fail-closed refresh semantics.",
+          "exists_in_repo": true,
+          "path": "docs/contracts/stale-evidence-renewal-queue-contract.json",
+          "source_type": "contract"
+        },
+        {
+          "detail": "Predictive telemetry evidence can identify stale or conflicting signals.",
+          "exists_in_repo": true,
+          "path": "docs/evidence/predictive-swarm-telemetry-ledger.json",
+          "source_type": "evidence"
+        },
+        {
+          "detail": "Proof reuse is advisory and must reject stale or mismatched inputs.",
+          "exists_in_repo": true,
+          "path": "docs/contracts/remote-validation-proof-reuse-gate-contract.json",
+          "source_type": "contract"
+        }
+      ],
+      "status": "replayable",
+      "timeline": [
+        {
+          "detail": "Prior evidence matches a command class but needs freshness checks.",
+          "event": "proof_candidate_found",
+          "source_ref": "docs/contracts/remote-validation-proof-reuse-gate-contract.json",
+          "status": "candidate",
+          "step": 1
+        },
+        {
+          "detail": "The candidate cannot green-light the current change.",
+          "event": "stale_or_mismatched_inputs_detected",
+          "source_ref": "docs/contracts/stale-evidence-renewal-queue-contract.json",
+          "status": "blocked",
+          "step": 2
+        },
+        {
+          "detail": "Queue a focused refresh instead of treating stale proof as pass.",
+          "event": "refresh_required",
+          "source_ref": "docs/evidence/predictive-swarm-telemetry-ledger.json",
+          "status": "safe_action_selected",
+          "step": 3
+        }
+      ],
+      "title": "Stale validation evidence blocks proof reuse",
+      "usable_for": {
+        "incident_replay": true,
+        "operator_recommendation": true,
+        "proof_memory": true
+      }
+    },
+    {
+      "claim_boundaries": {
+        "agent_mail_or_rch_authority": false,
+        "allowed_claim": "operator incident corpus fixture evidence only",
+        "benchmark_or_capacity_claim_authorized": false,
+        "dropin_certification_claim_authorized": false,
+        "file_deletion_authorized": false,
+        "live_mutation_authorized": false,
+        "release_performance_claim_authorized": false
+      },
+      "contradiction_checks": {
+        "safe_action_is_non_mutating": true,
+        "timeline_status_consistent": true,
+        "usable_for_matches_status": true
+      },
+      "expected_safe_action": "Do not revert peer work; use Beads ownership, avoid the contested surface, and choose non-overlapping evidence or surface the conflict.",
+      "id": "duplicate_agent_work_risk",
+      "incident_class": "coordination_collision_risk",
+      "redaction": {
+        "max_raw_excerpt_chars": 0,
+        "raw_body_embedded": false,
+        "redacted_fields": [
+          "body_md",
+          "provider_payload",
+          "raw_agent_mail_body",
+          "stderr_excerpt",
+          "token"
+        ],
+        "redacted_or_fixture_only": true,
+        "unredacted_sensitive_body_embedded": false
+      },
+      "source_refs": [
+        {
+          "detail": "Redundant-agent-work detector classifies overlap and duplicate work without mutation.",
+          "exists_in_repo": true,
+          "path": "scripts/report_swarm_claim_readiness.py",
+          "source_type": "detector"
+        },
+        {
+          "detail": "Predictive closeout records redundant-agent-work evidence as advisory.",
+          "exists_in_repo": true,
+          "path": "docs/evidence/predictive-operations-closeout-gate.json",
+          "source_type": "evidence"
+        },
+        {
+          "detail": "Beads is the ownership ledger for status and closeout comments.",
+          "exists_in_repo": true,
+          "path": ".beads/issues.jsonl",
+          "source_type": "ledger"
+        }
+      ],
+      "status": "replayable",
+      "timeline": [
+        {
+          "detail": "Two agents appear to touch the same evidence or bead surface.",
+          "event": "overlapping_work_detected",
+          "source_ref": "scripts/report_swarm_claim_readiness.py",
+          "status": "watch",
+          "step": 1
+        },
+        {
+          "detail": "Beads status and comments determine the current soft lock.",
+          "event": "ownership_source_checked",
+          "source_ref": ".beads/issues.jsonl",
+          "status": "candidate",
+          "step": 2
+        },
+        {
+          "detail": "Continue on non-overlapping work or surface the conflict.",
+          "event": "non_overlapping_fallback_selected",
+          "source_ref": "docs/evidence/predictive-operations-closeout-gate.json",
+          "status": "safe_action_selected",
+          "step": 3
+        }
+      ],
+      "title": "Duplicate agent work is detected without reverting peers",
+      "usable_for": {
+        "incident_replay": true,
+        "operator_recommendation": true,
+        "proof_memory": true
+      }
+    },
+    {
+      "claim_boundaries": {
+        "agent_mail_or_rch_authority": false,
+        "allowed_claim": "operator incident corpus fixture evidence only",
+        "benchmark_or_capacity_claim_authorized": false,
+        "dropin_certification_claim_authorized": false,
+        "file_deletion_authorized": false,
+        "live_mutation_authorized": false,
+        "release_performance_claim_authorized": false
+      },
+      "contradiction_checks": {
+        "safe_action_is_non_mutating": true,
+        "timeline_status_consistent": true,
+        "usable_for_matches_status": true
+      },
+      "expected_safe_action": "Preserve dirty unrelated work, deny unsafe admission, and continue only on an owned non-overlapping surface.",
+      "id": "dirty_worktree_admission_denial",
+      "incident_class": "workspace_integrity_degraded",
+      "redaction": {
+        "max_raw_excerpt_chars": 0,
+        "raw_body_embedded": false,
+        "redacted_fields": [
+          "body_md",
+          "provider_payload",
+          "raw_agent_mail_body",
+          "stderr_excerpt",
+          "token"
+        ],
+        "redacted_or_fixture_only": true,
+        "unredacted_sensitive_body_embedded": false
+      },
+      "source_refs": [
+        {
+          "detail": "Agents must treat unrelated dirty files as active work and avoid reverting them.",
+          "exists_in_repo": true,
+          "path": "AGENTS.md",
+          "source_type": "policy"
+        },
+        {
+          "detail": "Autopilot gate evidence includes dirty worktree and safe admission boundaries.",
+          "exists_in_repo": true,
+          "path": "docs/evidence/swarm-autopilot-decision-gate.json",
+          "source_type": "evidence"
+        },
+        {
+          "detail": "Work-admission dry-run executor rejects unsafe source-of-truth mutation.",
+          "exists_in_repo": true,
+          "path": "docs/contracts/swarm-work-admission-gate-contract.json",
+          "source_type": "contract"
+        }
+      ],
+      "status": "replayable",
+      "timeline": [
+        {
+          "detail": "Unrelated local edits are present and must be preserved.",
+          "event": "dirty_worktree_detected",
+          "source_ref": "AGENTS.md",
+          "status": "blocked",
+          "step": 1
+        },
+        {
+          "detail": "The dry-run gate rejects source mutations that would trample active work.",
+          "event": "admission_gate_blocks_mutation",
+          "source_ref": "docs/contracts/swarm-work-admission-gate-contract.json",
+          "status": "blocked",
+          "step": 2
+        },
+        {
+          "detail": "Proceed only on a non-overlapping owned surface.",
+          "event": "safe_surface_required",
+          "source_ref": "docs/evidence/swarm-autopilot-decision-gate.json",
+          "status": "safe_action_selected",
+          "step": 3
+        }
+      ],
+      "title": "Dirty worktree prevents unsafe work admission",
+      "usable_for": {
+        "incident_replay": true,
+        "operator_recommendation": true,
+        "proof_memory": true
+      }
+    },
+    {
+      "claim_boundaries": {
+        "agent_mail_or_rch_authority": false,
+        "allowed_claim": "operator incident corpus fixture evidence only",
+        "benchmark_or_capacity_claim_authorized": false,
+        "dropin_certification_claim_authorized": false,
+        "file_deletion_authorized": false,
+        "live_mutation_authorized": false,
+        "release_performance_claim_authorized": false
+      },
+      "contradiction_checks": {
+        "safe_action_is_non_mutating": true,
+        "timeline_status_consistent": true,
+        "usable_for_matches_status": true
+      },
+      "expected_safe_action": "Fail closed on malformed source artifacts and require a concrete refresh or follow-up bead before recommendation.",
+      "id": "malformed_source_artifact",
+      "incident_class": "source_artifact_malformed",
+      "redaction": {
+        "max_raw_excerpt_chars": 0,
+        "raw_body_embedded": false,
+        "redacted_fields": [
+          "body_md",
+          "provider_payload",
+          "raw_agent_mail_body",
+          "stderr_excerpt",
+          "token"
+        ],
+        "redacted_or_fixture_only": true,
+        "unredacted_sensitive_body_embedded": false
+      },
+      "source_refs": [
+        {
+          "detail": "Golden projection for malformed source fail-closed behavior.",
+          "exists_in_repo": true,
+          "path": "tests/golden_corpus/swarm_operator_runpack/malformed_source_fail_closed_projection.json",
+          "source_type": "golden_fixture"
+        },
+        {
+          "detail": "Runpack source loading and contract assertions reject malformed inputs.",
+          "exists_in_repo": true,
+          "path": "scripts/build_swarm_operator_runpack.py",
+          "source_type": "generator"
+        },
+        {
+          "detail": "Runpack contract defines required source and status shape.",
+          "exists_in_repo": true,
+          "path": "docs/contracts/swarm-operator-runpack-contract.json",
+          "source_type": "contract"
+        }
+      ],
+      "status": "replayable",
+      "timeline": [
+        {
+          "detail": "Fixture source is present but intentionally malformed.",
+          "event": "source_artifact_loaded",
+          "source_ref": "tests/golden_corpus/swarm_operator_runpack/malformed_source_fail_closed_projection.json",
+          "status": "candidate",
+          "step": 1
+        },
+        {
+          "detail": "Missing or malformed required fields prevent trusted use.",
+          "event": "contract_shape_rejected",
+          "source_ref": "docs/contracts/swarm-operator-runpack-contract.json",
+          "status": "blocked",
+          "step": 2
+        },
+        {
+          "detail": "File or refresh a concrete follow-up instead of guessing.",
+          "event": "operator_follow_up_required",
+          "source_ref": "scripts/build_swarm_operator_runpack.py",
+          "status": "safe_action_selected",
+          "step": 3
+        }
+      ],
+      "title": "Malformed source artifact fails closed before recommendation",
+      "usable_for": {
+        "incident_replay": true,
+        "operator_recommendation": true,
+        "proof_memory": true
+      }
+    },
+    {
+      "claim_boundaries": {
+        "agent_mail_or_rch_authority": false,
+        "allowed_claim": "operator incident corpus fixture evidence only",
+        "benchmark_or_capacity_claim_authorized": false,
+        "dropin_certification_claim_authorized": false,
+        "file_deletion_authorized": false,
+        "live_mutation_authorized": false,
+        "release_performance_claim_authorized": false
+      },
+      "contradiction_checks": {
+        "safe_action_is_non_mutating": true,
+        "timeline_status_consistent": true,
+        "usable_for_matches_status": true
+      },
+      "expected_safe_action": "Reject deletion or live-mutation authorization and require the normal explicit operator approval path outside this corpus.",
+      "id": "deletion_live_mutation_request_rejected",
+      "incident_class": "unsafe_authorization_request",
+      "redaction": {
+        "max_raw_excerpt_chars": 0,
+        "raw_body_embedded": false,
+        "redacted_fields": [
+          "body_md",
+          "provider_payload",
+          "raw_agent_mail_body",
+          "stderr_excerpt",
+          "token"
+        ],
+        "redacted_or_fixture_only": true,
+        "unredacted_sensitive_body_embedded": false
+      },
+      "source_refs": [
+        {
+          "detail": "File deletion and irreversible commands require explicit written permission.",
+          "exists_in_repo": true,
+          "path": "AGENTS.md",
+          "source_type": "policy"
+        },
+        {
+          "detail": "Work admission dry-run executor rejects deletion and live mutation.",
+          "exists_in_repo": true,
+          "path": "docs/contracts/swarm-work-admission-gate-contract.json",
+          "source_type": "contract"
+        },
+        {
+          "detail": "Incident corpus records unsafe authorization requests as rejected fixtures only.",
+          "exists_in_repo": true,
+          "path": "scripts/build_swarm_operator_runpack.py",
+          "source_type": "generator"
+        }
+      ],
+      "status": "fail_closed_fixture",
+      "timeline": [
+        {
+          "detail": "The incident asks the artifact to authorize deletion or live mutation.",
+          "event": "unsafe_authorization_request_received",
+          "source_ref": "AGENTS.md",
+          "status": "blocked",
+          "step": 1
+        },
+        {
+          "detail": "Advisory evidence cannot authorize destructive filesystem, git, Mail, or RCH actions.",
+          "event": "authorization_scope_rejected",
+          "source_ref": "docs/contracts/swarm-work-admission-gate-contract.json",
+          "status": "blocked",
+          "step": 2
+        },
+        {
+          "detail": "The request remains a replay fixture and does not mutate live state.",
+          "event": "fail_closed_fixture_recorded",
+          "source_ref": "scripts/build_swarm_operator_runpack.py",
+          "status": "safe_action_selected",
+          "step": 3
+        }
+      ],
+      "title": "Deletion or live mutation request is retained as a fail-closed fixture",
+      "usable_for": {
+        "incident_replay": true,
+        "operator_recommendation": true,
+        "proof_memory": true
+      }
+    }
+  ],
+  "known_limitations": [
+    "This corpus is deterministic operator evidence only.",
+    "It does not replace Beads, Agent Mail, RCH, staged UBS, CI, source artifacts, or human review.",
+    "It does not authorize file deletion, git reset, live Agent Mail mutation, live RCH worker mutation, or production network/model calls.",
+    "It is not release performance evidence, benchmark evidence, capacity evidence, or strict drop-in certification evidence."
+  ],
+  "missing_incident_ids": [],
+  "missing_source_paths": [],
+  "negative_control_failures": [],
+  "negative_controls": [
+    {
+      "expectation_met": true,
+      "expected_status": "fail",
+      "id": "missing_source_path_fails_closed",
+      "reason": "Incident fixtures must name checked-in source paths.",
+      "trigger": {
+        "source_refs": [
+          {
+            "path": ""
+          }
+        ]
+      },
+      "verdict": "fail"
+    },
+    {
+      "expectation_met": true,
+      "expected_status": "fail",
+      "id": "unsafe_unredacted_body_fails_closed",
+      "reason": "Raw Agent Mail, provider, or stderr bodies must not be embedded unredacted.",
+      "trigger": {
+        "redaction": {
+          "unredacted_sensitive_body_embedded": true
+        }
+      },
+      "verdict": "fail"
+    },
+    {
+      "expectation_met": true,
+      "expected_status": "fail",
+      "id": "contradictory_status_fails_closed",
+      "reason": "A replayable incident cannot carry contradictory timeline or safe-action status.",
+      "trigger": {
+        "contradiction_checks": {
+          "timeline_status_consistent": false
+        }
+      },
+      "verdict": "fail"
+    },
+    {
+      "expectation_met": true,
+      "expected_status": "fail",
+      "id": "deletion_or_live_mutation_authorization_fails_closed",
+      "reason": "Advisory incident evidence cannot authorize deletion or live Agent Mail/RCH mutation.",
+      "trigger": {
+        "claim_boundaries": {
+          "file_deletion_authorized": true,
+          "live_mutation_authorized": true
+        }
+      },
+      "verdict": "fail"
+    }
+  ],
+  "operator_next_actions": [
+    "Use this corpus as the checked-in fixture source for incident replay work.",
+    "Refresh or file follow-up beads before relying on any incident with failed source, redaction, or contradiction checks.",
+    "Keep live Agent Mail/RCH repair and Beads ownership outside this read-only evidence artifact."
+  ],
+  "purpose": "operator_incident_corpus_not_release_dropin_or_coordination_authority",
+  "required_incident_ids": [
+    "agent_mail_schema_corruption",
+    "rch_saturation_local_fallback_denial",
+    "stale_evidence_blocks_reuse",
+    "duplicate_agent_work_risk",
+    "dirty_worktree_admission_denial",
+    "malformed_source_artifact",
+    "deletion_live_mutation_request_rejected"
+  ],
+  "schema": "pi.swarm.incident_corpus.v1",
+  "source_bead": "bd-9yq7i.1",
+  "source_boundaries": [
+    {
+      "description": "The corpus references checked-in fixtures, contracts, and generated evidence only.",
+      "evidence": [
+        "AGENTS.md",
+        "docs/evidence/validation-scheduler-plan.json",
+        "tests/fixtures/agent_mail/schema_corrupt_health.json"
+      ],
+      "id": "checked_in_sources_only",
+      "status": "pass"
+    },
+    {
+      "description": "Incident entries embed metadata and redaction posture, not raw sensitive bodies.",
+      "evidence": [
+        "scripts/build_swarm_operator_runpack.py"
+      ],
+      "id": "redacted_metadata_only",
+      "status": "pass"
+    },
+    {
+      "description": "The corpus is advisory operator evidence, not release, drop-in, Agent Mail, or RCH authority.",
+      "evidence": [
+        "docs/contracts/dropin-certification-contract.json",
+        "docs/evidence/dropin-certification-verdict.json"
+      ],
+      "id": "operator_evidence_only_not_authority",
+      "status": "pass"
+    },
+    {
+      "description": "The generator emits JSON and does not mutate live Agent Mail, RCH, Beads, git, or files.",
+      "evidence": [
+        "scripts/build_swarm_operator_runpack.py",
+        "AGENTS.md"
+      ],
+      "id": "read_only_no_live_mutation",
+      "status": "pass"
+    }
+  ],
+  "source_boundary_failures": [],
+  "status": "pass"
+}

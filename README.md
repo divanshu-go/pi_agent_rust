@@ -2102,6 +2102,16 @@ fixture artifact is `docs/evidence/operator-perceived-latency-trace.json`.
 The trace is advisory only and does not authorize benchmark, capacity, release
 performance, strict drop-in, or backpressure-budget replacement claims.
 
+The swarm incident corpus emits `pi.swarm.incident_corpus.v1`. It records
+deterministic degraded-source fixtures for Agent Mail schema corruption, RCH
+saturation with local-fallback denial, stale evidence, duplicate work risk,
+dirty worktree admission denial, malformed sources, and deletion or live
+mutation rejection. It is governed by
+`docs/contracts/swarm-incident-corpus-contract.json`; the current fixture
+artifact is `docs/evidence/swarm-incident-corpus.json`. The corpus is operator
+evidence only and does not replace release performance, drop-in certification,
+Agent Mail, RCH, Beads, git, source artifacts, or destructive-action authority.
+
 For the full launch, throttling, recovery, and handoff workflow for large
 multi-agent runs, see [docs/swarm-operations-runbook.md](docs/swarm-operations-runbook.md).
 
