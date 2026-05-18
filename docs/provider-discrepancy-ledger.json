@@ -3,9 +3,9 @@
   "bead": "bd-3uqg.12.1.1",
   "generated_at": "2026-02-14T00:40:00Z",
   "generated_by": "CopperBrook (Claude Opus 4.6)",
-  "last_reviewed_at": "2026-05-18T09:12:00Z",
+  "last_reviewed_at": "2026-05-18T09:20:00Z",
   "reviewed_by": "SilentReef (Codex)",
-  "review_bead": "bd-ryg6j.2",
+  "review_bead": "bd-ryg6j.3",
   "methodology": {
     "description": "Normalized discrepancy ledger synthesized from 4 upstream audit beads. Each finding is classified by root-cause and user-impact severity.",
     "source_beads": [
@@ -67,8 +67,8 @@
       "logging_schema_drift": 4
     },
     "by_remediation_status": {
-      "fixed": 14,
-      "partially_fixed": 1,
+      "fixed": 15,
+      "partially_fixed": 0,
       "open": 4
     }
   },
@@ -102,14 +102,14 @@
     },
     {
       "id": "DISC-003",
-      "title": "Common provider aliases remain partially complete",
+      "title": "Common provider aliases reviewed and covered",
       "source_bead": "bd-3uqg.14.3.4",
       "root_cause": "alias_mismatch",
       "severity": "high",
       "user_impact": "Users typing common provider names (together, grok, hf, nim, pplx, etc.) got 'provider not found' errors despite the provider being fully implemented.",
-      "evidence": "bd-3uqg.14.3.4 comments: Gap 1, src/provider_metadata.rs alias fields, docs/provider-auth-troubleshooting.md provider name crosswalk",
-      "remediation_status": "partially_fixed",
-      "remediation_note": "Provider docs now report 91 canonical providers and 43 aliases, and src/provider_metadata.rs covers the high-traffic UX aliases from bd-tuh3g plus later aliases such as nanogpt, novita, zhipu, glm, lm-studio, vercel-ai-gateway, copilot, gitlab-duo, and Azure variants. Remaining work is a targeted review of no-alias/under-aliased longtail providers, tracked by bd-ryg6j.3.",
+      "evidence": "bd-3uqg.14.3.4 comments: Gap 1, src/provider_metadata.rs alias fields, tests/provider_metadata_comprehensive.rs alias snapshot, docs/provider-auth-troubleshooting.md provider name crosswalk",
+      "remediation_status": "fixed",
+      "remediation_note": "Provider docs now report 91 canonical providers and 43 aliases. src/provider_metadata.rs covers the high-traffic UX aliases from bd-tuh3g plus later aliases such as nanogpt, novita, zhipu, glm, lm-studio, vercel-ai-gateway, copilot, gitlab-duo, Codex, Gemini CLI, Antigravity, Kimi coding, and Azure variants. bd-ryg6j.3 reviewed the remaining no-alias and under-aliased longtail providers against repo-backed evidence; remaining canonical-only providers are exact-branded, regional/coding-plan variants, or ambiguous without a concrete upstream/docs reference.",
       "remediation_beads": ["bd-tuh3g", "bd-ryg6j.3"],
       "affected_providers": ["togetherai", "xai", "huggingface", "nvidia", "lmstudio", "deepseek", "perplexity", "deepinfra", "mistral", "siliconflow"]
     },
@@ -319,6 +319,7 @@
       "description": "Already fixed in this sprint",
       "items": [
         "DISC-004",
+        "DISC-003",
         "DISC-005",
         "DISC-006",
         "DISC-007",
@@ -336,7 +337,7 @@
     },
     "p1_high_value": {
       "description": "High user impact, actionable code changes",
-      "items": ["DISC-003"]
+      "items": []
     },
     "p2_medium_value": {
       "description": "Infrastructure/docs improvements",
@@ -351,6 +352,7 @@
   "cross_references": {
     "remediation_beads_created": [
       {"bead": "bd-tuh3g", "fixes": ["DISC-003"], "status": "closed"},
+      {"bead": "bd-ryg6j.3", "fixes": ["DISC-003"], "status": "closed"},
       {"bead": "bd-1gi21", "fixes": ["DISC-005"], "status": "closed"},
       {"bead": "bd-1fgjj", "fixes": ["DISC-006"], "status": "closed"},
       {"bead": "bd-3gsk0", "fixes": ["DISC-004"], "status": "closed"}
