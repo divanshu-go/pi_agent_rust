@@ -566,6 +566,21 @@ fn pattern_buffer_base64_roundtrip() {
 }
 
 #[test]
+fn pattern_zlib_gzip_gunzip_roundtrip() {
+    let result = eval_multi(
+        r#"import zlib from "node:zlib";
+import { Buffer } from "node:buffer";"#,
+        r#"(() => {
+        const input = Buffer.from("extension zlib");
+        const compressed = zlib.gzipSync(input);
+        const decompressed = zlib.gunzipSync(compressed);
+        return decompressed.toString("utf8") + ":" + (compressed.toString("base64") !== input.toString("base64"));
+    })()"#,
+    );
+    assert_eq!(result, "extension zlib:true");
+}
+
+#[test]
 fn pattern_crypto_hmac_auth_header() {
     // Common extension pattern: HMAC signature for API auth
     let result = eval_multi(

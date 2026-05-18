@@ -204,6 +204,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.21.0", features = ["v4"] }
 memchr = "2.8.0"
 base64 = "0.22"
+flate2 = "1.1.9"
 sha2 = "0.10"
 sha1 = "0.10"
 md-5 = "0.10"

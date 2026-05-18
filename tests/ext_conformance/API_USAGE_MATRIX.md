@@ -42,7 +42,7 @@ Generated: 2026-02-07 | Corpus: 1,167 files across 230 extensions
 | `node:assert` | 1 | - | - | 1 | Real | P3 |
 | `node:string_decoder` | 1 | - | - | 1 | Stub | P3 |
 | `node:tty` | 1 | - | - | 1 | **Missing** | P3 |
-| `node:zlib` | 1 | - | - | 1 | **Missing** | P3 |
+| `node:zlib` | 1 | - | - | 1 | Partial | P3 |
 | `node:v8` | 1 | - | - | 1 | **Missing** | P3 |
 | `node:perf_hooks` | 1 | - | - | 1 | **Missing** | P3 |
 | `node:vm` | 1 | - | - | 1 | **Missing** | P3 |
@@ -137,7 +137,7 @@ All P0 modules (path, fs, os, child_process) have real implementations.
 - `node:net` (7 ext) - stubbed sockets (no network I/O)
 - `node:test` (7 ext) - partial runner (test/describe/it + hooks + run); reporters/concurrency not supported
 - `node:assert/strict` (7 ext) - variant of existing assert
-- 6 modules with 1 ext each: tty, zlib, v8, perf_hooks, vm, stream/web
+- 6 modules with 1 ext each: tty, zlib (gzip/gunzip subset only), v8, perf_hooks, vm, stream/web
 
 ## Criticality Scoring Methodology
 

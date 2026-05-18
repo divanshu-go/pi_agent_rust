@@ -384,6 +384,55 @@ impl HostcallRequest {
 const MAX_JSON_DEPTH: usize = 64;
 const MAX_JOBS_PER_TICK: usize = 10_000;
 const DEFAULT_MODULE_CACHE_LIMIT_BYTES: usize = 32 * 1024 * 1024;
+const PIJS_ZLIB_MAX_INPUT_BYTES: usize = 16 * 1024 * 1024;
+const PIJS_ZLIB_MAX_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
+
+fn pijs_zlib_error(api: &'static str, message: impl std::fmt::Display) -> rquickjs::Error {
+    rquickjs::Error::new_into_js_message("zlib", api, message.to_string())
+}
+
+fn pijs_zlib_check_input(api: &'static str, bytes: &[u8]) -> rquickjs::Result<()> {
+    if bytes.len() > PIJS_ZLIB_MAX_INPUT_BYTES {
+        return Err(pijs_zlib_error(
+            api,
+            format!("input exceeds maximum size of {PIJS_ZLIB_MAX_INPUT_BYTES} bytes"),
+        ));
+    }
+    Ok(())
+}
+
+fn pijs_zlib_gzip_base64(bytes: &[u8]) -> rquickjs::Result<String> {
+    pijs_zlib_check_input("gzip", bytes)?;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut encoder, bytes)
+        .map_err(|err| pijs_zlib_error("gzip", format!("compression failed: {err}")))?;
+    let compressed = encoder
+        .finish()
+        .map_err(|err| pijs_zlib_error("gzip", format!("compression failed: {err}")))?;
+    if compressed.len() > PIJS_ZLIB_MAX_OUTPUT_BYTES {
+        return Err(pijs_zlib_error(
+            "gzip",
+            format!("output exceeds maximum size of {PIJS_ZLIB_MAX_OUTPUT_BYTES} bytes"),
+        ));
+    }
+    Ok(BASE64_STANDARD.encode(compressed))
+}
+
+fn pijs_zlib_gunzip_base64(bytes: &[u8]) -> rquickjs::Result<String> {
+    pijs_zlib_check_input("gunzip", bytes)?;
+    let decoder = flate2::read::GzDecoder::new(bytes);
+    let mut limited = std::io::Read::take(decoder, (PIJS_ZLIB_MAX_OUTPUT_BYTES as u64) + 1);
+    let mut decompressed = Vec::new();
+    std::io::Read::read_to_end(&mut limited, &mut decompressed)
+        .map_err(|err| pijs_zlib_error("gunzip", format!("decompression failed: {err}")))?;
+    if decompressed.len() > PIJS_ZLIB_MAX_OUTPUT_BYTES {
+        return Err(pijs_zlib_error(
+            "gunzip",
+            format!("output exceeds maximum size of {PIJS_ZLIB_MAX_OUTPUT_BYTES} bytes"),
+        ));
+    }
+    Ok(BASE64_STANDARD.encode(decompressed))
+}
 
 /// Convert a serde_json::Value to a rquickjs Value.
 #[allow(clippy::option_if_let_else)]
@@ -13656,10 +13705,12 @@ export default { connect, createServer, TLSSocket, DEFAULT_MIN_VERSION, DEFAULT_
         .to_string(),
     );
 
-    // node:zlib — compression streams are not implemented in PiJS
+    // node:zlib - demand-driven gzip/gunzip subset; stream/Brotli APIs are unavailable.
     modules.insert(
         "node:zlib".to_string(),
         r"
+import { Buffer } from 'node:buffer';
+
 const constants = {
   Z_NO_COMPRESSION: 0,
   Z_BEST_SPEED: 1,
@@ -13671,11 +13722,68 @@ function unsupported(name) {
   throw new Error(`node:zlib.${name} is not available in PiJS`);
 }
 
-export function gzip(_buffer, callback) {
-  if (typeof callback === 'function') callback(new Error('node:zlib.gzip is not available in PiJS'));
+function toBuffer(value) {
+  if (typeof value === 'string') return Buffer.from(value);
+  if (value instanceof ArrayBuffer) return Buffer.from(new Uint8Array(value));
+  if (ArrayBuffer.isView(value)) {
+    return Buffer.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+  }
+  if (Array.isArray(value)) return Buffer.from(value);
+  throw new TypeError('node:zlib input must be a string, Buffer, ArrayBuffer, TypedArray, or array');
 }
-export function gunzip(_buffer, callback) {
-  if (typeof callback === 'function') callback(new Error('node:zlib.gunzip is not available in PiJS'));
+
+function fromBase64(encoded) {
+  return Buffer.from(encoded, 'base64');
+}
+
+function runNative(name, buffer) {
+  const nativeName = name === 'gzip' ? '__pi_zlib_gzip_native' : '__pi_zlib_gunzip_native';
+  const native = globalThis[nativeName];
+  if (typeof native !== 'function') {
+    throw new Error(`node:zlib.${name} native helper is not available in PiJS`);
+  }
+  return fromBase64(native(toBuffer(buffer)));
+}
+
+function normalizeCallback(options, callback) {
+  const cb = typeof options === 'function' ? options : callback;
+  if (typeof cb !== 'function') {
+    throw new TypeError('node:zlib callback must be a function');
+  }
+  return cb;
+}
+
+function scheduleCallback(callback, err, result) {
+  const enqueue = typeof queueMicrotask === 'function'
+    ? queueMicrotask
+    : (fn) => Promise.resolve().then(fn);
+  enqueue(() => callback(err, result));
+}
+
+export function gzipSync(buffer, _options) {
+  return runNative('gzip', buffer);
+}
+
+export function gunzipSync(buffer, _options) {
+  return runNative('gunzip', buffer);
+}
+
+export function gzip(buffer, options, callback) {
+  const cb = normalizeCallback(options, callback);
+  try {
+    scheduleCallback(cb, null, gzipSync(buffer, typeof options === 'function' ? undefined : options));
+  } catch (err) {
+    scheduleCallback(cb, err);
+  }
+}
+
+export function gunzip(buffer, options, callback) {
+  const cb = normalizeCallback(options, callback);
+  try {
+    scheduleCallback(cb, null, gunzipSync(buffer, typeof options === 'function' ? undefined : options));
+  } catch (err) {
+    scheduleCallback(cb, err);
+  }
 }
 
 export function createGzip() { unsupported('createGzip'); }
@@ -13686,14 +13794,16 @@ export function createBrotliCompress() { unsupported('createBrotliCompress'); }
 export function createBrotliDecompress() { unsupported('createBrotliDecompress'); }
 
 export const promises = {
-  gzip: async () => { unsupported('promises.gzip'); },
-  gunzip: async () => { unsupported('promises.gunzip'); },
+  gzip: async (buffer, options) => gzipSync(buffer, options),
+  gunzip: async (buffer, options) => gunzipSync(buffer, options),
 };
 
 export default {
   constants,
   gzip,
   gunzip,
+  gzipSync,
+  gunzipSync,
   createGzip,
   createGunzip,
   createDeflate,
@@ -16821,6 +16931,40 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
                                 out.push(byte as char);
                             }
                             Ok(out)
+                        },
+                    ),
+                )?;
+
+                // __pi_zlib_gzip_native(Uint8Array) -> base64 gzip payload
+                global.set(
+                    "__pi_zlib_gzip_native",
+                    Func::from(
+                        move |_ctx: Ctx<'_>, input: rquickjs::TypedArray<'_, u8>| -> rquickjs::Result<String> {
+                            let bytes = input.as_bytes().ok_or_else(|| {
+                                rquickjs::Error::new_into_js_message(
+                                    "zlib",
+                                    "gzip",
+                                    "Detached TypedArray",
+                                )
+                            })?;
+                            pijs_zlib_gzip_base64(bytes)
+                        },
+                    ),
+                )?;
+
+                // __pi_zlib_gunzip_native(Uint8Array) -> base64 decompressed payload
+                global.set(
+                    "__pi_zlib_gunzip_native",
+                    Func::from(
+                        move |_ctx: Ctx<'_>, input: rquickjs::TypedArray<'_, u8>| -> rquickjs::Result<String> {
+                            let bytes = input.as_bytes().ok_or_else(|| {
+                                rquickjs::Error::new_into_js_message(
+                                    "zlib",
+                                    "gunzip",
+                                    "Detached TypedArray",
+                                )
+                            })?;
+                            pijs_zlib_gunzip_base64(bytes)
                         },
                     ),
                 )?;
@@ -27279,6 +27423,79 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
             let r = get_global_json(&runtime, "cryptoRng").await;
             assert_eq!(r["len"], serde_json::json!(32));
             assert_eq!(r["inRange"], serde_json::json!(true));
+        });
+    }
+
+    #[test]
+    fn pijs_node_zlib_gzip_gunzip_roundtrip() {
+        futures::executor::block_on(async {
+            let clock = Arc::new(DeterministicClock::new(0));
+            let runtime = PiJsRuntime::with_clock(Arc::clone(&clock))
+                .await
+                .expect("create runtime");
+
+            runtime
+                .eval(
+                    r"
+                    globalThis.zlibResults = {};
+                    (async () => {
+                        const zlib = await import('node:zlib');
+                        const { Buffer } = await import('node:buffer');
+
+                        const input = Buffer.from('hello zlib');
+                        const compressed = await zlib.promises.gzip(input);
+                        const decompressed = await zlib.promises.gunzip(compressed);
+                        globalThis.zlibResults.roundtrip = decompressed.toString('utf8');
+                        globalThis.zlibResults.compressedDifferent =
+                            compressed.toString('base64') !== input.toString('base64');
+
+                        await new Promise((resolve, reject) => {
+                            zlib.gzip(Buffer.from('callback zlib'), (err, gz) => {
+                                if (err) {
+                                    reject(err);
+                                    return;
+                                }
+                                zlib.gunzip(gz, (err2, out) => {
+                                    if (err2) {
+                                        reject(err2);
+                                        return;
+                                    }
+                                    globalThis.zlibResults.callback = out.toString('utf8');
+                                    resolve();
+                                });
+                            });
+                        });
+
+                        try {
+                            zlib.createGzip();
+                            globalThis.zlibResults.unsupported = 'missing throw';
+                        } catch (err) {
+                            globalThis.zlibResults.unsupported = String(err && err.message || err);
+                        }
+
+                        globalThis.zlibResults.done = true;
+                    })().catch((err) => {
+                        globalThis.zlibResults.done = true;
+                        globalThis.zlibResults.error = String(err && err.message || err);
+                    });
+                    ",
+                )
+                .await
+                .expect("eval node:zlib");
+
+            drain_until_idle(&runtime, &clock).await;
+
+            let r = get_global_json(&runtime, "zlibResults").await;
+            assert_eq!(r["done"], serde_json::json!(true));
+            assert_eq!(r.get("error"), None);
+            assert_eq!(r["roundtrip"], serde_json::json!("hello zlib"));
+            assert_eq!(r["callback"], serde_json::json!("callback zlib"));
+            assert_eq!(r["compressedDifferent"], serde_json::json!(true));
+            assert!(
+                r["unsupported"]
+                    .as_str()
+                    .is_some_and(|msg| msg.contains("createGzip"))
+            );
         });
     }
 

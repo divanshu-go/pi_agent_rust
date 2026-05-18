@@ -368,13 +368,12 @@ pub fn known_module_support(specifier: &str) -> Option<ModuleSupport> {
         | "timers" => Some(ModuleSupport::Real),
 
         // P1 — partial
-        "crypto" => Some(ModuleSupport::Partial),
+        "crypto" | "zlib" => Some(ModuleSupport::Partial),
         "readline" | "test" => Some(ModuleSupport::Partial),
         "http" | "https" => Some(ModuleSupport::Partial),
 
         // P2 — stubs
-        "zlib"
-        | "tty"
+        "tty"
         | "assert"
         | "http2"
         | "net"
@@ -2998,6 +2997,15 @@ mod tests {
     }
 
     #[test]
+    fn known_modules_zlib_partial() {
+        assert_eq!(known_module_support("zlib"), Some(ModuleSupport::Partial));
+        assert_eq!(
+            known_module_support("node:zlib"),
+            Some(ModuleSupport::Partial)
+        );
+    }
+
+    #[test]
     fn known_modules_error_throw() {
         assert_eq!(
             known_module_support("node:tls"),
@@ -3013,7 +3021,6 @@ mod tests {
 
     #[test]
     fn known_modules_stubs() {
-        assert_eq!(known_module_support("zlib"), Some(ModuleSupport::Stub));
         assert_eq!(known_module_support("node:vm"), Some(ModuleSupport::Stub));
         assert_eq!(
             known_module_support("node:http2"),
