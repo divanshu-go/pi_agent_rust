@@ -122,6 +122,9 @@ BACKPRESSURE_BUDGET_CONTRACT_SCHEMA = (
 BACKPRESSURE_BUDGET_CONTRACT_SPEC_SCHEMA = (
     "pi.swarm.provider_rpc_tui_backpressure_budget_contract_spec.v1"
 )
+BACKPRESSURE_FAIRNESS_STRESS_GATE_SCHEMA = (
+    "pi.swarm.provider_rpc_tui_fairness_stress_gate.v1"
+)
 SWARM_REPLAY_PREVIEW_SCHEMA = "pi.swarm.replay_preview.v1"
 RUNPACK_CONTRACT_PATH = Path("docs/contracts/swarm-operator-runpack-contract.json")
 TURN_PRESSURE_LEDGER_CONTRACT_PATH = Path(
@@ -658,6 +661,18 @@ BACKPRESSURE_BUDGET_REQUIRED_CANONICAL_METRICS = (
     "pressure_depth",
     "latency_or_step",
     "verdict",
+)
+BACKPRESSURE_FAIRNESS_REQUIRED_METRICS = (
+    "max_starvation_window",
+    "per_stream_chunk_progress",
+    "rpc_output_flush_progress",
+    "frame_budget_degradation_class",
+)
+BACKPRESSURE_FAIRNESS_REQUIRED_FIXTURES = (
+    "balanced_load",
+    "one_slow_stream",
+    "rpc_output_flood",
+    "tui_budget_pressure",
 )
 WORK_PARTITION_INSPECT_SENTINEL = "<inspect-bead-before-reserving>"
 WORK_SURFACE_RULES: tuple[dict[str, Any], ...] = (
@@ -15244,6 +15259,183 @@ def build_tui_degradation_backpressure_surface(root: Path) -> dict[str, Any]:
     }
 
 
+def fairness_surface_statuses(surfaces: list[dict[str, Any]]) -> dict[str, str]:
+    return {str(surface.get("id")): str(surface.get("status")) for surface in surfaces}
+
+
+def fairness_fixture_verdict(
+    *,
+    surface_statuses: dict[str, str],
+    max_starvation_window: int,
+    starvation_budget: int,
+    per_stream_chunk_progress: dict[str, int],
+    rpc_output_flush_progress: int,
+    frame_budget_degradation_class: str,
+) -> str:
+    if any(status != "pass" for status in surface_statuses.values()):
+        return "fail"
+    if max_starvation_window > starvation_budget:
+        return "fail"
+    if any(count <= 0 for count in per_stream_chunk_progress.values()):
+        return "fail"
+    if rpc_output_flush_progress <= 0:
+        return "fail"
+    if frame_budget_degradation_class in {"starved", "critical"}:
+        return "fail"
+    return "pass"
+
+
+def fairness_fixture(
+    *,
+    fixture_id: str,
+    description: str,
+    surface_statuses: dict[str, str],
+    max_starvation_window: int,
+    starvation_budget: int,
+    per_stream_chunk_progress: dict[str, int],
+    rpc_output_flush_progress: int,
+    frame_budget_degradation_class: str,
+    expected_verdict: str = "pass",
+) -> dict[str, Any]:
+    actual_verdict = fairness_fixture_verdict(
+        surface_statuses=surface_statuses,
+        max_starvation_window=max_starvation_window,
+        starvation_budget=starvation_budget,
+        per_stream_chunk_progress=per_stream_chunk_progress,
+        rpc_output_flush_progress=rpc_output_flush_progress,
+        frame_budget_degradation_class=frame_budget_degradation_class,
+    )
+    return {
+        "id": fixture_id,
+        "fixture_kind": "synthetic_contract_fixture_not_performance_claim",
+        "description": description,
+        "max_starvation_window": max_starvation_window,
+        "starvation_budget": starvation_budget,
+        "per_stream_chunk_progress": per_stream_chunk_progress,
+        "rpc_output_flush_progress": rpc_output_flush_progress,
+        "frame_budget_degradation_class": frame_budget_degradation_class,
+        "surface_statuses": surface_statuses,
+        "expected_verdict": expected_verdict,
+        "verdict": actual_verdict,
+        "expectation_met": actual_verdict == expected_verdict,
+    }
+
+
+def build_backpressure_fairness_stress_gate(
+    surfaces: list[dict[str, Any]],
+) -> dict[str, Any]:
+    surface_statuses = fairness_surface_statuses(surfaces)
+    starvation_budget = 3
+    fixtures = [
+        fairness_fixture(
+            fixture_id="balanced_load",
+            description="Provider chunks, RPC flushes, and TUI frames all make progress under balanced fanout.",
+            surface_statuses=surface_statuses,
+            max_starvation_window=1,
+            starvation_budget=starvation_budget,
+            per_stream_chunk_progress={"fast_stream": 4, "slow_stream": 3},
+            rpc_output_flush_progress=3,
+            frame_budget_degradation_class="normal",
+        ),
+        fairness_fixture(
+            fixture_id="one_slow_stream",
+            description="One slow provider stream cannot starve faster streams or RPC/TUI semantic progress.",
+            surface_statuses=surface_statuses,
+            max_starvation_window=2,
+            starvation_budget=starvation_budget,
+            per_stream_chunk_progress={"fast_stream": 5, "slow_stream": 1},
+            rpc_output_flush_progress=2,
+            frame_budget_degradation_class="watch",
+        ),
+        fairness_fixture(
+            fixture_id="rpc_output_flood",
+            description="RPC low-value output flood is coalesced while semantic provider and TUI progress remains visible.",
+            surface_statuses=surface_statuses,
+            max_starvation_window=3,
+            starvation_budget=starvation_budget,
+            per_stream_chunk_progress={"provider_stream": 3, "tool_stream": 2},
+            rpc_output_flush_progress=1,
+            frame_budget_degradation_class="pressure",
+        ),
+        fairness_fixture(
+            fixture_id="tui_budget_pressure",
+            description="TUI frame pressure may degrade rendering class but cannot hide provider/RPC semantic progress.",
+            surface_statuses=surface_statuses,
+            max_starvation_window=3,
+            starvation_budget=starvation_budget,
+            per_stream_chunk_progress={"provider_stream": 2, "tool_stream": 1},
+            rpc_output_flush_progress=2,
+            frame_budget_degradation_class="pressure",
+        ),
+    ]
+    negative_controls = [
+        fairness_fixture(
+            fixture_id="rpc_success_tui_starves_fail_closed",
+            description="The gate must fail closed when RPC reports success but TUI semantic progress is starved.",
+            surface_statuses={**surface_statuses, "tui_degradation": "pass"},
+            max_starvation_window=starvation_budget + 2,
+            starvation_budget=starvation_budget,
+            per_stream_chunk_progress={"provider_stream": 2, "tool_stream": 1},
+            rpc_output_flush_progress=3,
+            frame_budget_degradation_class="starved",
+            expected_verdict="fail",
+        )
+    ]
+    missing_fixtures = [
+        fixture_id
+        for fixture_id in BACKPRESSURE_FAIRNESS_REQUIRED_FIXTURES
+        if fixture_id not in {fixture["id"] for fixture in fixtures}
+    ]
+    fixture_failures = [
+        fixture["id"]
+        for fixture in fixtures
+        if fixture.get("verdict") != "pass" or fixture.get("expectation_met") is not True
+    ]
+    negative_control_failures = [
+        control["id"]
+        for control in negative_controls
+        if control.get("verdict") != "fail" or control.get("expectation_met") is not True
+    ]
+    status = (
+        "pass"
+        if not missing_fixtures and not fixture_failures and not negative_control_failures
+        else "fail"
+    )
+    return {
+        "schema": BACKPRESSURE_FAIRNESS_STRESS_GATE_SCHEMA,
+        "status": status,
+        "fixture_kind": "synthetic_contract_fixtures_not_release_performance_claims",
+        "required_metrics": list(BACKPRESSURE_FAIRNESS_REQUIRED_METRICS),
+        "required_fixture_ids": list(BACKPRESSURE_FAIRNESS_REQUIRED_FIXTURES),
+        "starvation_budget": {
+            "max_starvation_window": starvation_budget,
+            "unit": "synthetic_scheduling_steps",
+        },
+        "fixtures": fixtures,
+        "negative_controls": negative_controls,
+        "missing_fixtures": missing_fixtures,
+        "fixture_failures": fixture_failures,
+        "negative_control_failures": negative_control_failures,
+        "source_evidence_paths": [
+            str(surface.get("evidence_path"))
+            for surface in surfaces
+            if surface.get("evidence_path")
+        ],
+        "fail_closed_conditions": [
+            "any required surface status is not pass",
+            "max_starvation_window exceeds the synthetic starvation budget",
+            "any provider stream reports zero chunk progress",
+            "RPC semantic output flush progress is zero",
+            "TUI frame-budget degradation class is starved or critical",
+        ],
+        "operator_summary": (
+            "Synthetic fairness fixtures verify that provider chunks, RPC flushes, "
+            "and TUI semantic frames all make progress together; negative controls "
+            "prove the gate fails closed when one surface succeeds while another starves."
+        ),
+    }
+
+
 def build_backpressure_budget_contract_summary(*, generated_at: str) -> dict[str, Any]:
     root = repo_root()
     surfaces = [
@@ -15251,6 +15443,7 @@ def build_backpressure_budget_contract_summary(*, generated_at: str) -> dict[str
         build_rpc_output_backpressure_surface(root),
         build_tui_degradation_backpressure_surface(root),
     ]
+    fairness_stress_gate = build_backpressure_fairness_stress_gate(surfaces)
     present_surface_ids = {surface["id"] for surface in surfaces}
     missing_surfaces = [
         surface_id
@@ -15267,7 +15460,10 @@ def build_backpressure_budget_contract_summary(*, generated_at: str) -> dict[str
     ]
     status = (
         "pass"
-        if not missing_surfaces and not failing_surfaces and not incompatible_surfaces
+        if not missing_surfaces
+        and not failing_surfaces
+        and not incompatible_surfaces
+        and fairness_stress_gate["status"] == "pass"
         else "fail"
     )
     operator_summary = [
@@ -15280,10 +15476,11 @@ def build_backpressure_budget_contract_summary(*, generated_at: str) -> dict[str
         "generated_at": generated_at,
         "status": status,
         "purpose": "operator_backpressure_budget_contract_not_release_performance_claim",
-        "source_bead": "bd-63x3v.9.8",
+        "source_bead": "bd-63x3v.10.5",
         "required_surface_ids": list(BACKPRESSURE_BUDGET_REQUIRED_SURFACE_IDS),
         "required_canonical_metrics": list(BACKPRESSURE_BUDGET_REQUIRED_CANONICAL_METRICS),
         "surfaces": surfaces,
+        "fairness_stress_gate": fairness_stress_gate,
         "missing_surfaces": missing_surfaces,
         "failing_surfaces": failing_surfaces,
         "incompatible_surfaces": incompatible_surfaces,
@@ -15317,10 +15514,44 @@ def assert_backpressure_budget_contract(summary: dict[str, Any]) -> None:
         if summary.get("status") == "pass":
             assert missing == [], f"surface has missing metrics: {surface.get('id')}"
             assert surface.get("status") == "pass"
+    fairness_gate = summary.get("fairness_stress_gate")
+    assert isinstance(fairness_gate, dict)
+    assert fairness_gate.get("schema") == BACKPRESSURE_FAIRNESS_STRESS_GATE_SCHEMA
+    required_fairness_metrics = set(
+        contract.get("required_fairness_metrics", BACKPRESSURE_FAIRNESS_REQUIRED_METRICS)
+    )
+    assert set(fairness_gate.get("required_metrics", [])).issuperset(
+        required_fairness_metrics
+    )
+    required_fixture_ids = set(
+        contract.get("required_stress_fixture_ids", BACKPRESSURE_FAIRNESS_REQUIRED_FIXTURES)
+    )
+    fixture_ids = {
+        fixture.get("id")
+        for fixture in fairness_gate.get("fixtures", [])
+        if isinstance(fixture, dict)
+    }
+    assert fixture_ids.issuperset(required_fixture_ids)
+    for fixture in fairness_gate.get("fixtures", []):
+        assert fixture.get("fixture_kind") == "synthetic_contract_fixture_not_performance_claim"
+        assert fixture.get("verdict") in {"pass", "fail"}
+        assert fixture.get("expectation_met") is True
+        for metric in required_fairness_metrics:
+            assert metric in fixture, (
+                f"fairness fixture missing metric {metric}: {fixture.get('id')}"
+            )
+    negative_controls = fairness_gate.get("negative_controls")
+    assert isinstance(negative_controls, list) and negative_controls
+    for control in negative_controls:
+        assert control.get("verdict") == "fail"
+        assert control.get("expectation_met") is True
     if summary.get("status") == "pass":
         assert summary.get("missing_surfaces") == []
         assert summary.get("failing_surfaces") == []
         assert summary.get("incompatible_surfaces") == []
+        assert fairness_gate.get("status") == "pass"
+        assert fairness_gate.get("fixture_failures") == []
+        assert fairness_gate.get("negative_control_failures") == []
         boundaries = summary.get("claim_boundaries", {})
         assert boundaries.get("read_only_aggregator") is True
         assert boundaries.get("does_not_duplicate_pressure_tests") is True
@@ -20340,6 +20571,19 @@ def run_self_test() -> int:
         assert {
             surface["id"] for surface in backpressure_budget_contract["surfaces"]
         } == set(BACKPRESSURE_BUDGET_REQUIRED_SURFACE_IDS)
+        fairness_gate = backpressure_budget_contract["fairness_stress_gate"]
+        assert fairness_gate["schema"] == BACKPRESSURE_FAIRNESS_STRESS_GATE_SCHEMA
+        assert fairness_gate["status"] == "pass"
+        assert {
+            fixture["id"] for fixture in fairness_gate["fixtures"]
+        } == set(BACKPRESSURE_FAIRNESS_REQUIRED_FIXTURES)
+        assert all(
+            fixture["verdict"] == "pass" and fixture["expectation_met"] is True
+            for fixture in fairness_gate["fixtures"]
+        )
+        assert fairness_gate["negative_controls"][0]["verdict"] == "fail"
+        assert fairness_gate["negative_controls"][0]["expectation_met"] is True
+        assert "max_starvation_window" in fairness_gate["required_metrics"]
         assert_backpressure_budget_contract(backpressure_budget_contract)
         no_tail_args = argparse.Namespace(**{**vars(args), "tail_latency_json": None})
         no_tail_runpack = build_runpack(no_tail_args)

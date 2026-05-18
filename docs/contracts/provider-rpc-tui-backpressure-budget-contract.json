@@ -15,6 +15,7 @@
     "required_surface_ids",
     "required_canonical_metrics",
     "surfaces",
+    "fairness_stress_gate",
     "missing_surfaces",
     "failing_surfaces",
     "incompatible_surfaces",
@@ -34,6 +35,19 @@
     "pressure_depth",
     "latency_or_step",
     "verdict"
+  ],
+  "fairness_stress_gate_schema": "pi.swarm.provider_rpc_tui_fairness_stress_gate.v1",
+  "required_fairness_metrics": [
+    "max_starvation_window",
+    "per_stream_chunk_progress",
+    "rpc_output_flush_progress",
+    "frame_budget_degradation_class"
+  ],
+  "required_stress_fixture_ids": [
+    "balanced_load",
+    "one_slow_stream",
+    "rpc_output_flood",
+    "tui_budget_pressure"
   ],
   "required_surface_fields": [
     "id",
@@ -56,8 +70,12 @@
       "description": "Every surface must map to event count, semantic preservation, low-value coalescing, pressure depth, latency or deterministic step evidence, and verdict fields."
     },
     {
+      "id": "fairness_stress_gate",
+      "description": "The aggregate output must include synthetic contract fixtures for balanced load, one slow stream, RPC output flood, and TUI budget pressure. Each fixture must define max starvation window, per-stream chunk progress, RPC output flush progress, and frame-budget degradation class, and a negative control must fail closed when one surface reports success while another starves."
+    },
+    {
       "id": "fail_closed_on_missing_surface",
-      "description": "If any required surface is absent, fails, lacks semantic-loss assertions, or lacks a canonical metric mapping, the aggregate status must be fail."
+      "description": "If any required surface is absent, fails, lacks semantic-loss assertions, lacks a canonical metric mapping, or fails the fairness stress gate, the aggregate status must be fail."
     },
     {
       "id": "operator_summary",

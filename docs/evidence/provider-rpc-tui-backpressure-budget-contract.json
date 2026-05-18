@@ -8,7 +8,153 @@
   },
   "decision": "contract_passed",
   "failing_surfaces": [],
-  "generated_at": "2026-05-17T04:34:19.266890+00:00",
+  "fairness_stress_gate": {
+    "fail_closed_conditions": [
+      "any required surface status is not pass",
+      "max_starvation_window exceeds the synthetic starvation budget",
+      "any provider stream reports zero chunk progress",
+      "RPC semantic output flush progress is zero",
+      "TUI frame-budget degradation class is starved or critical"
+    ],
+    "fixture_failures": [],
+    "fixture_kind": "synthetic_contract_fixtures_not_release_performance_claims",
+    "fixtures": [
+      {
+        "description": "Provider chunks, RPC flushes, and TUI frames all make progress under balanced fanout.",
+        "expectation_met": true,
+        "expected_verdict": "pass",
+        "fixture_kind": "synthetic_contract_fixture_not_performance_claim",
+        "frame_budget_degradation_class": "normal",
+        "id": "balanced_load",
+        "max_starvation_window": 1,
+        "per_stream_chunk_progress": {
+          "fast_stream": 4,
+          "slow_stream": 3
+        },
+        "rpc_output_flush_progress": 3,
+        "starvation_budget": 3,
+        "surface_statuses": {
+          "provider_streaming": "pass",
+          "rpc_output": "pass",
+          "tui_degradation": "pass"
+        },
+        "verdict": "pass"
+      },
+      {
+        "description": "One slow provider stream cannot starve faster streams or RPC/TUI semantic progress.",
+        "expectation_met": true,
+        "expected_verdict": "pass",
+        "fixture_kind": "synthetic_contract_fixture_not_performance_claim",
+        "frame_budget_degradation_class": "watch",
+        "id": "one_slow_stream",
+        "max_starvation_window": 2,
+        "per_stream_chunk_progress": {
+          "fast_stream": 5,
+          "slow_stream": 1
+        },
+        "rpc_output_flush_progress": 2,
+        "starvation_budget": 3,
+        "surface_statuses": {
+          "provider_streaming": "pass",
+          "rpc_output": "pass",
+          "tui_degradation": "pass"
+        },
+        "verdict": "pass"
+      },
+      {
+        "description": "RPC low-value output flood is coalesced while semantic provider and TUI progress remains visible.",
+        "expectation_met": true,
+        "expected_verdict": "pass",
+        "fixture_kind": "synthetic_contract_fixture_not_performance_claim",
+        "frame_budget_degradation_class": "pressure",
+        "id": "rpc_output_flood",
+        "max_starvation_window": 3,
+        "per_stream_chunk_progress": {
+          "provider_stream": 3,
+          "tool_stream": 2
+        },
+        "rpc_output_flush_progress": 1,
+        "starvation_budget": 3,
+        "surface_statuses": {
+          "provider_streaming": "pass",
+          "rpc_output": "pass",
+          "tui_degradation": "pass"
+        },
+        "verdict": "pass"
+      },
+      {
+        "description": "TUI frame pressure may degrade rendering class but cannot hide provider/RPC semantic progress.",
+        "expectation_met": true,
+        "expected_verdict": "pass",
+        "fixture_kind": "synthetic_contract_fixture_not_performance_claim",
+        "frame_budget_degradation_class": "pressure",
+        "id": "tui_budget_pressure",
+        "max_starvation_window": 3,
+        "per_stream_chunk_progress": {
+          "provider_stream": 2,
+          "tool_stream": 1
+        },
+        "rpc_output_flush_progress": 2,
+        "starvation_budget": 3,
+        "surface_statuses": {
+          "provider_streaming": "pass",
+          "rpc_output": "pass",
+          "tui_degradation": "pass"
+        },
+        "verdict": "pass"
+      }
+    ],
+    "missing_fixtures": [],
+    "negative_control_failures": [],
+    "negative_controls": [
+      {
+        "description": "The gate must fail closed when RPC reports success but TUI semantic progress is starved.",
+        "expectation_met": true,
+        "expected_verdict": "fail",
+        "fixture_kind": "synthetic_contract_fixture_not_performance_claim",
+        "frame_budget_degradation_class": "starved",
+        "id": "rpc_success_tui_starves_fail_closed",
+        "max_starvation_window": 5,
+        "per_stream_chunk_progress": {
+          "provider_stream": 2,
+          "tool_stream": 1
+        },
+        "rpc_output_flush_progress": 3,
+        "starvation_budget": 3,
+        "surface_statuses": {
+          "provider_streaming": "pass",
+          "rpc_output": "pass",
+          "tui_degradation": "pass"
+        },
+        "verdict": "fail"
+      }
+    ],
+    "operator_summary": "Synthetic fairness fixtures verify that provider chunks, RPC flushes, and TUI semantic frames all make progress together; negative controls prove the gate fails closed when one surface succeeds while another starves.",
+    "required_fixture_ids": [
+      "balanced_load",
+      "one_slow_stream",
+      "rpc_output_flood",
+      "tui_budget_pressure"
+    ],
+    "required_metrics": [
+      "max_starvation_window",
+      "per_stream_chunk_progress",
+      "rpc_output_flush_progress",
+      "frame_budget_degradation_class"
+    ],
+    "schema": "pi.swarm.provider_rpc_tui_fairness_stress_gate.v1",
+    "source_evidence_paths": [
+      "tests/provider_streaming.rs",
+      "docs/evidence/rpc-output-pressure.jsonl",
+      "src/interactive/tests.rs"
+    ],
+    "starvation_budget": {
+      "max_starvation_window": 3,
+      "unit": "synthetic_scheduling_steps"
+    },
+    "status": "pass"
+  },
+  "generated_at": "2026-05-18T00:34:00+00:00",
   "incompatible_surfaces": [],
   "missing_surfaces": [],
   "operator_summary": [
@@ -31,7 +177,7 @@
     "tui_degradation"
   ],
   "schema": "pi.swarm.provider_rpc_tui_backpressure_budget_contract.v1",
-  "source_bead": "bd-63x3v.9.8",
+  "source_bead": "bd-63x3v.10.5",
   "status": "pass",
   "surfaces": [
     {

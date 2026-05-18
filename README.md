@@ -2026,7 +2026,10 @@ child Beads to RCH workspace-shadow detection, Agent Mail degraded Beads
 soft-lock evidence, validation proof replay, temp artifact inventory, stale
 claim heuristics, degraded-coordination E2E proof, cgroup/NUMA/RCH budget
 modeling, provider/RPC/TUI backpressure budgets, operator explanations, pushed
-refs, source-boundary checks, and quality gates. It is governed by
+refs, source-boundary checks, and quality gates. The provider/RPC/TUI contract
+now includes a synthetic fairness stress gate for balanced load, one slow
+provider stream, RPC output flood, and TUI frame-budget pressure, with fail-closed
+negative controls when one surface reports success while another starves. It is governed by
 `docs/contracts/sixth-wave-validation-hardening-closeout-gate-contract.json`;
 the current artifact is
 `docs/evidence/sixth-wave-validation-hardening-closeout-gate.json`. The gate is
