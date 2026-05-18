@@ -1,0 +1,52 @@
+{
+  "schema": "pi.ext.compatibility_closeout_gate_contract.v1",
+  "decision_gate_schema": "pi.ext.compatibility_closeout_gate.v1",
+  "purpose": "extension_compatibility_prompt_to_artifact_closeout_gate_not_source_of_truth",
+  "required_top_level_keys": [
+    "schema",
+    "generated_at",
+    "source_bead",
+    "parent_epic",
+    "final_decision",
+    "parent_close_allowed",
+    "missing_checks",
+    "follow_up_beads_created",
+    "summary",
+    "child_closeout",
+    "focused_extension_gates",
+    "quality_gates",
+    "coordination",
+    "redaction"
+  ],
+  "required_child_bead_ids": [
+    "bd-d7v9g.1",
+    "bd-d7v9g.2",
+    "bd-d7v9g.3",
+    "bd-d7v9g.4",
+    "bd-d7v9g.5",
+    "bd-d7v9g.6",
+    "bd-d7v9g.8",
+    "bd-d7v9g.9",
+    "bd-0bu83"
+  ],
+  "required_check_ids": [],
+  "required_quality_gate_ids": [],
+  "requirements": [
+    {
+      "id": "contract_required",
+      "description": "Extension compatibility closeout evidence must have an explicit contract so generic closeout freshness audits cannot silently pass contract_path=null artifacts."
+    },
+    {
+      "id": "child_closeout",
+      "description": "Every child closeout entry must identify a Bead, record status=closed, result=pass, and name the focused evidence artifact or validation surface."
+    },
+    {
+      "id": "quality_gates",
+      "description": "Every quality gate entry must include the exact command and a pass result."
+    },
+    {
+      "id": "claim_boundaries",
+      "description": "This contract covers compatibility closeout freshness only; it does not authorize release, performance, capacity, strict drop-in, live service, Agent Mail, RCH, git, Beads mutation, or file deletion claims."
+    }
+  ]
+}

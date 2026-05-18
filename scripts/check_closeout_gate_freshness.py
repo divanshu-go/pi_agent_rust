@@ -266,10 +266,16 @@ def check_contract_required_ids(
 ) -> None:
     if contract is None:
         return
+    child_entries = []
+    for field_name in ("child_artifact_map", "child_closeout"):
+        entries = evidence.get(field_name)
+        if isinstance(entries, list):
+            child_entries.extend(entry for entry in entries if isinstance(entry, dict))
     child_ids = {
-        entry.get("bead_id")
-        for entry in evidence.get("child_artifact_map") or []
-        if isinstance(entry, dict) and isinstance(entry.get("bead_id"), str)
+        bead_id
+        for entry in child_entries
+        for bead_id in (entry.get("bead_id"), entry.get("bead"))
+        if isinstance(bead_id, str)
     }
     for bead_id in contract.get("required_child_bead_ids") or []:
         if isinstance(bead_id, str) and bead_id not in child_ids:
@@ -338,13 +344,16 @@ def check_generated_at(
 
 
 def check_quality_gates(report: ArtifactReport, evidence: dict[str, Any]) -> None:
-    for entry in evidence.get("quality_gate_results") or []:
-        if not isinstance(entry, dict):
-            continue
-        gate_id = str(entry.get("id") or "<missing-id>")
-        status = str(entry.get("status") or "").lower()
+    entries: list[dict[str, Any]] = []
+    for field_name in ("quality_gate_results", "quality_gates"):
+        raw_entries = evidence.get(field_name)
+        if isinstance(raw_entries, list):
+            entries.extend(entry for entry in raw_entries if isinstance(entry, dict))
+    for entry in entries:
+        gate_id = str(entry.get("id") or entry.get("command") or "<missing-id>")
+        status = str(entry.get("status") or entry.get("result") or "").lower()
         command = entry.get("command")
-        if status and status != "pass":
+        if status and not status.startswith("pass"):
             report.add(Finding(
                 "fail",
                 "quality_gate_status",
@@ -442,6 +451,41 @@ def check_beads_and_child_map(
                 f"child bead {bead_id} is missing a commit hash",
                 "Record the pushed commit hash for this child bead.",
             ))
+
+    for entry in evidence.get("child_closeout") or []:
+        if not isinstance(entry, dict):
+            continue
+        bead_id = entry.get("bead")
+        if not isinstance(bead_id, str):
+            report.add(Finding(
+                "fail",
+                "child_bead_id",
+                "child_closeout entry is missing bead",
+                "Regenerate the closeout gate with explicit child bead IDs.",
+            ))
+            continue
+        if entry.get("status") != "closed":
+            report.add(Finding(
+                "fail",
+                "child_artifact_status",
+                f"child_closeout records {bead_id} as {entry.get('status')!r}, not closed",
+                "Regenerate the artifact after closing the child bead or mark follow-up work explicitly.",
+            ))
+        if entry.get("result") != "pass":
+            report.add(Finding(
+                "fail",
+                "child_closeout_result",
+                f"child_closeout records {bead_id} result={entry.get('result')!r}, not pass",
+                "Regenerate the artifact after the child closeout evidence passes.",
+            ))
+        if not isinstance(entry.get("evidence"), str) or not entry.get("evidence"):
+            report.add(Finding(
+                "fail",
+                "child_evidence",
+                f"child_closeout records {bead_id} without evidence",
+                "Record the child evidence artifact or focused validation surface.",
+            ))
+        check_bead_status(report, bead_statuses, bead_id, "child_bead_current_status")
 
 
 def check_commits(report: ArtifactReport, repo_root: Path, evidence: dict[str, Any]) -> None:
@@ -548,6 +592,13 @@ def audit_artifact(
     contract = contracts_by_schema.get(schema or "")
     if contract is not None:
         report.contract_path = contract.get("_path")
+    else:
+        report.add(Finding(
+            "fail",
+            "missing_contract",
+            f"no closeout-gate contract found for schema {schema!r}",
+            "Add a docs/contracts/*closeout-gate-contract.json entry whose decision_gate_schema matches this artifact schema.",
+        ))
 
     generated_at = check_generated_at(report, evidence, now, max_age)
     check_required_keys(report, evidence, contract)
@@ -783,6 +834,21 @@ def run_self_test() -> int:
         if missing_commit_status != 1 or "missing_commit" not in json.dumps(missing_commit):
             print(json.dumps(missing_commit, indent=2))
             print("SELF-TEST FAIL: missing commit should fail")
+            return 2
+
+        write_fixture(root, now, commit)
+        write_json(
+            root / "docs/evidence/uncontracted-closeout-gate.json",
+            {
+                "schema": "pi.demo.uncontracted_closeout_gate.v1",
+                "generated_at": now.isoformat().replace("+00:00", "Z"),
+                "missing_checks": [],
+            },
+        )
+        missing_contract_status, missing_contract = build_summary(root, now, max_age_days=14)
+        if missing_contract_status != 1 or "missing_contract" not in json.dumps(missing_contract):
+            print(json.dumps(missing_contract, indent=2))
+            print("SELF-TEST FAIL: uncontracted closeout evidence should fail")
             return 2
 
         write_fixture(root, now, commit)
