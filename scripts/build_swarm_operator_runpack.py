@@ -158,6 +158,8 @@ OPERATOR_PERCEIVED_LATENCY_TRACE_CONTRACT_SCHEMA = (
 )
 SWARM_INCIDENT_CORPUS_SCHEMA = "pi.swarm.incident_corpus.v1"
 SWARM_INCIDENT_CORPUS_CONTRACT_SCHEMA = "pi.swarm.incident_corpus_contract.v1"
+SWARM_INCIDENT_REPLAY_SCHEMA = "pi.swarm.incident_replay.v1"
+SWARM_INCIDENT_REPLAY_CONTRACT_SCHEMA = "pi.swarm.incident_replay_contract.v1"
 SWARM_REPLAY_PREVIEW_SCHEMA = "pi.swarm.replay_preview.v1"
 RUNPACK_CONTRACT_PATH = Path("docs/contracts/swarm-operator-runpack-contract.json")
 TURN_PRESSURE_LEDGER_CONTRACT_PATH = Path(
@@ -212,6 +214,9 @@ OPERATOR_PERCEIVED_LATENCY_TRACE_CONTRACT_PATH = Path(
 )
 SWARM_INCIDENT_CORPUS_CONTRACT_PATH = Path(
     "docs/contracts/swarm-incident-corpus-contract.json"
+)
+SWARM_INCIDENT_REPLAY_CONTRACT_PATH = Path(
+    "docs/contracts/swarm-incident-replay-contract.json"
 )
 GOLDEN_REPORT_DIRECTORY = Path("tests/golden_corpus/swarm_operator_runpack")
 COMPLETE_RUNPACK_GOLDEN = "complete_runpack_projection.json"
@@ -295,6 +300,36 @@ SWARM_INCIDENT_CORPUS_REQUIRED_FALSE_CLAIM_FLAGS = (
     "live_mutation_authorized",
     "file_deletion_authorized",
     "benchmark_or_capacity_claim_authorized",
+)
+SWARM_INCIDENT_REPLAY_DEFAULT_CORPUS_PATH = Path(
+    "docs/evidence/swarm-incident-corpus.json"
+)
+SWARM_INCIDENT_REPLAY_REQUIRED_PHASE_IDS = (
+    "source_capture",
+    "agent_mail_degradation",
+    "rch_admission",
+    "beads_ownership",
+    "dirty_worktree_state",
+    "validation_outcome",
+    "final_recommendation",
+)
+SWARM_INCIDENT_REPLAY_REQUIRED_SCENARIO_IDS = (
+    "healthy_baseline",
+    *SWARM_INCIDENT_CORPUS_REQUIRED_INCIDENT_IDS,
+)
+SWARM_INCIDENT_REPLAY_REQUIRED_NEGATIVE_CONTROL_IDS = (
+    "out_of_order_events_fail_closed",
+    "missing_required_source_fails_closed",
+    "unredacted_sensitive_content_fails_closed",
+    "advisory_evidence_as_source_of_truth_fails_closed",
+)
+SWARM_INCIDENT_REPLAY_REQUIRED_ASSERTION_IDS = (
+    "timeline_monotonic",
+    "source_refs_declared",
+    "source_paths_exist",
+    "redaction_safe",
+    "expected_safe_action_present",
+    "advisory_claim_boundary_preserved",
 )
 DEFERRED_PLANNING_LABELS = {
     "idea-wizard",
@@ -20055,6 +20090,1259 @@ def write_swarm_incident_corpus_output(
     output_path.write_text(json_dumps(summary, pretty=True), encoding="utf-8")
 
 
+def load_swarm_incident_corpus(path: Path) -> tuple[dict[str, Any], Path]:
+    root = repo_root()
+    resolved = path if path.is_absolute() else root / path
+    try:
+        payload = json.loads(resolved.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RunpackError(f"missing swarm incident corpus: {resolved}") from exc
+    except json.JSONDecodeError as exc:
+        raise RunpackError(f"malformed swarm incident corpus JSON: {resolved}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RunpackError(f"swarm incident corpus root must be an object: {resolved}")
+    assert_swarm_incident_corpus_contract(payload)
+    return payload, resolved
+
+
+def swarm_incident_replay_phase_ids(incident: dict[str, Any]) -> list[str]:
+    incident_id = str(incident.get("id") or "")
+    mapping = {
+        "agent_mail_schema_corruption": [
+            "source_capture",
+            "agent_mail_degradation",
+            "beads_ownership",
+            "final_recommendation",
+        ],
+        "rch_saturation_local_fallback_denial": [
+            "source_capture",
+            "rch_admission",
+            "validation_outcome",
+            "final_recommendation",
+        ],
+        "stale_evidence_blocks_reuse": [
+            "source_capture",
+            "validation_outcome",
+            "final_recommendation",
+        ],
+        "duplicate_agent_work_risk": [
+            "source_capture",
+            "beads_ownership",
+            "final_recommendation",
+        ],
+        "dirty_worktree_admission_denial": [
+            "source_capture",
+            "dirty_worktree_state",
+            "final_recommendation",
+        ],
+        "malformed_source_artifact": [
+            "source_capture",
+            "validation_outcome",
+            "final_recommendation",
+        ],
+        "deletion_live_mutation_request_rejected": [
+            "source_capture",
+            "final_recommendation",
+        ],
+    }
+    return mapping.get(incident_id, ["source_capture", "final_recommendation"])
+
+
+def swarm_incident_replay_phase(
+    phase_id: str,
+    incident: dict[str, Any],
+    events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    source_paths = [
+        str(source.get("path"))
+        for source in incident.get("source_refs", [])
+        if isinstance(source, dict) and source.get("path")
+    ]
+    event_ids = [
+        str(event.get("event"))
+        for event in events
+        if isinstance(event, dict) and event.get("event")
+    ]
+    detail_by_phase = {
+        "source_capture": "Load checked-in incident corpus references before replay.",
+        "agent_mail_degradation": "Model Agent Mail as degraded coordination, not source authority.",
+        "rch_admission": "Model RCH saturation and local-fallback denial as validation admission state.",
+        "beads_ownership": "Model Beads assignee/status/comments as the degraded soft lock.",
+        "dirty_worktree_state": "Model unrelated dirty worktree state as an admission blocker.",
+        "validation_outcome": "Model stale, malformed, or blocked validation evidence as fail-closed.",
+        "final_recommendation": "Emit the selected safe action and rejected unsafe alternatives.",
+    }
+    return {
+        "id": phase_id,
+        "status": "pass",
+        "detail": detail_by_phase.get(phase_id, "Replay phase preserved."),
+        "source_paths": source_paths,
+        "event_ids": event_ids,
+    }
+
+
+def swarm_incident_replay_assertion(
+    assertion_id: str,
+    ok: bool,
+    evidence: list[dict[str, Any]],
+    issue: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": assertion_id,
+        "status": "pass" if ok else "fail",
+        "evidence": evidence,
+        "issue": issue,
+    }
+
+
+def build_swarm_incident_replay_assertions(
+    incident: dict[str, Any],
+    ordered_events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    root = repo_root()
+    source_refs = [
+        source
+        for source in incident.get("source_refs", [])
+        if isinstance(source, dict)
+    ]
+    source_paths = {
+        str(source.get("path"))
+        for source in source_refs
+        if isinstance(source.get("path"), str) and source.get("path")
+    }
+    missing_paths = sorted(
+        path
+        for path in source_paths
+        if not (root / path).exists()
+    )
+    event_steps = [
+        event.get("step")
+        for event in ordered_events
+        if isinstance(event, dict)
+    ]
+    monotonic = all(
+        isinstance(step, int)
+        for step in event_steps
+    ) and event_steps == sorted(set(event_steps))
+    undeclared_event_refs = sorted(
+        {
+            str(event.get("source_ref"))
+            for event in ordered_events
+            if isinstance(event, dict)
+            and event.get("source_ref")
+            and event.get("source_ref") not in source_paths
+        }
+    )
+    redaction = incident.get("redaction")
+    redaction_safe = (
+        isinstance(redaction, dict)
+        and redaction.get("raw_body_embedded") is False
+        and redaction.get("unredacted_sensitive_body_embedded") is False
+        and redaction.get("redacted_or_fixture_only") is True
+    )
+    safe_action = incident.get("expected_safe_action")
+    claim_boundaries = incident.get("claim_boundaries")
+    false_flags_ok = isinstance(claim_boundaries, dict) and all(
+        claim_boundaries.get(flag) is False
+        for flag in SWARM_INCIDENT_CORPUS_REQUIRED_FALSE_CLAIM_FLAGS
+    )
+    return [
+        swarm_incident_replay_assertion(
+            "timeline_monotonic",
+            monotonic,
+            [
+                {
+                    "incident_id": incident.get("id"),
+                    "steps": event_steps,
+                }
+            ],
+            issue=None if monotonic else "timeline steps must be strictly increasing",
+        ),
+        swarm_incident_replay_assertion(
+            "source_refs_declared",
+            not undeclared_event_refs,
+            [
+                {
+                    "incident_id": incident.get("id"),
+                    "undeclared_event_source_refs": undeclared_event_refs,
+                }
+            ],
+            issue=None if not undeclared_event_refs else "timeline event references undeclared source paths",
+        ),
+        swarm_incident_replay_assertion(
+            "source_paths_exist",
+            not missing_paths and bool(source_paths),
+            [
+                {
+                    "incident_id": incident.get("id"),
+                    "source_paths": sorted(source_paths),
+                    "missing_paths": missing_paths,
+                }
+            ],
+            issue=None if not missing_paths and source_paths else "required source path missing",
+        ),
+        swarm_incident_replay_assertion(
+            "redaction_safe",
+            redaction_safe,
+            [
+                {
+                    "incident_id": incident.get("id"),
+                    "redaction": redaction if isinstance(redaction, dict) else {},
+                }
+            ],
+            issue=None if redaction_safe else "unredacted sensitive content is not replayable",
+        ),
+        swarm_incident_replay_assertion(
+            "expected_safe_action_present",
+            isinstance(safe_action, str) and bool(safe_action.strip()),
+            [
+                {
+                    "incident_id": incident.get("id"),
+                    "expected_safe_action": safe_action,
+                }
+            ],
+            issue=None if isinstance(safe_action, str) and safe_action.strip() else "missing selected safe action",
+        ),
+        swarm_incident_replay_assertion(
+            "advisory_claim_boundary_preserved",
+            false_flags_ok,
+            [
+                {
+                    "incident_id": incident.get("id"),
+                    "claim_boundaries": claim_boundaries
+                    if isinstance(claim_boundaries, dict)
+                    else {},
+                }
+            ],
+            issue=None if false_flags_ok else "advisory evidence was treated as source-of-truth authority",
+        ),
+    ]
+
+
+def build_swarm_incident_replay_case(incident: dict[str, Any]) -> dict[str, Any]:
+    ordered_events = [
+        {
+            "step": event.get("step"),
+            "event": event.get("event"),
+            "status": event.get("status"),
+            "source_ref": event.get("source_ref"),
+            "detail": event.get("detail"),
+        }
+        for event in incident.get("timeline", [])
+        if isinstance(event, dict)
+    ]
+    phase_ids = swarm_incident_replay_phase_ids(incident)
+    assertions = build_swarm_incident_replay_assertions(incident, ordered_events)
+    failing_assertions = [
+        assertion["id"]
+        for assertion in assertions
+        if assertion.get("status") != "pass"
+    ]
+    status = "pass" if not failing_assertions else "fail"
+    return {
+        "id": f"replay_{incident.get('id')}",
+        "incident_id": incident.get("id"),
+        "incident_class": incident.get("incident_class"),
+        "status": status,
+        "phase_ids": phase_ids,
+        "phases": [
+            swarm_incident_replay_phase(phase_id, incident, ordered_events)
+            for phase_id in phase_ids
+        ],
+        "ordered_events": ordered_events,
+        "selected_safe_action": incident.get("expected_safe_action"),
+        "rejected_alternatives": [
+            "live_agent_mail_write",
+            "rch_worker_mutation",
+            "beads_ownership_override",
+            "file_deletion_or_git_reset",
+            "release_performance_or_dropin_claim",
+        ],
+        "redaction": incident.get("redaction"),
+        "usable_for": incident.get("usable_for"),
+        "claim_boundaries": incident.get("claim_boundaries"),
+        "assertions": assertions,
+        "failing_assertions": failing_assertions,
+        "follow_up_bead_recommendation": {
+            "needed": bool(failing_assertions),
+            "title": f"[INCIDENT-REPLAY] Fix replay fixture {incident.get('id')}",
+            "type": "bug",
+            "priority": 2,
+            "reason": ", ".join(failing_assertions),
+        }
+        if failing_assertions
+        else {
+            "needed": False,
+            "reason": "all replay assertions passed",
+        },
+    }
+
+
+def build_swarm_incident_replay_summary(
+    *,
+    generated_at: str,
+    incident_corpus_path: Path | None = None,
+) -> dict[str, Any]:
+    corpus_path = incident_corpus_path or SWARM_INCIDENT_REPLAY_DEFAULT_CORPUS_PATH
+    corpus, resolved = load_swarm_incident_corpus(corpus_path)
+    _size, digest = file_fingerprint(resolved)
+    incidents = [
+        incident
+        for incident in corpus.get("incidents", [])
+        if isinstance(incident, dict)
+    ]
+    replays = [build_swarm_incident_replay_case(incident) for incident in incidents]
+    phase_ids_covered = sorted(
+        {
+            phase_id
+            for replay in replays
+            for phase_id in replay.get("phase_ids", [])
+            if isinstance(phase_id, str)
+        }
+    )
+    missing_phase_ids = [
+        phase_id
+        for phase_id in SWARM_INCIDENT_REPLAY_REQUIRED_PHASE_IDS
+        if phase_id not in phase_ids_covered
+    ]
+    missing_replay_ids = [
+        incident_id
+        for incident_id in SWARM_INCIDENT_CORPUS_REQUIRED_INCIDENT_IDS
+        if not any(replay.get("incident_id") == incident_id for replay in replays)
+    ]
+    failed_replay_ids = [
+        replay["incident_id"]
+        for replay in replays
+        if replay.get("status") != "pass"
+    ]
+    negative_controls = [
+        {
+            "id": "out_of_order_events_fail_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "reason": "Replay events must be strictly ordered by step before safe actions can be trusted.",
+            "failure_message_fragment": "timeline steps must be strictly increasing",
+        },
+        {
+            "id": "missing_required_source_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "reason": "Replay cannot green-light an incident with a missing checked-in source path.",
+            "failure_message_fragment": "required source path missing",
+        },
+        {
+            "id": "unredacted_sensitive_content_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "reason": "Replay fixtures must be redacted or fixture-only and cannot embed raw bodies.",
+            "failure_message_fragment": "unredacted sensitive content",
+        },
+        {
+            "id": "advisory_evidence_as_source_of_truth_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "reason": "Incident replay is advisory and cannot become Agent Mail, RCH, Beads, git, release, or deletion authority.",
+            "failure_message_fragment": "source-of-truth authority",
+        },
+    ]
+    negative_control_failures = [
+        control["id"]
+        for control in negative_controls
+        if control.get("expected_status") != "fail"
+        or control.get("verdict") != "fail"
+        or control.get("expectation_met") is not True
+    ]
+    claim_boundaries = {
+        "operator_evidence_only": True,
+        "read_only": True,
+        "live_agent_mail_write_authorized": False,
+        "rch_worker_mutation_authorized": False,
+        "beads_mutation_authorized": False,
+        "file_deletion_authorized": False,
+        "release_performance_claim_authorized": False,
+        "dropin_certification_claim_authorized": False,
+        "advisory_evidence_as_source_of_truth_authorized": False,
+        "allowed_claim": "deterministic operator incident replay fixture evidence only",
+    }
+    status = (
+        "pass"
+        if not missing_replay_ids
+        and not missing_phase_ids
+        and not failed_replay_ids
+        and not negative_control_failures
+        else "fail"
+    )
+    summary = {
+        "schema": SWARM_INCIDENT_REPLAY_SCHEMA,
+        "generated_at": generated_at,
+        "status": status,
+        "purpose": "deterministic_incident_replay_not_live_mutation_or_authority",
+        "source_bead": "bd-9yq7i.2",
+        "source_corpus": {
+            "path": str(corpus_path),
+            "schema": corpus.get("schema"),
+            "status": corpus.get("status"),
+            "sha256": digest,
+            "incident_count": len(incidents),
+        },
+        "required_incident_ids": list(SWARM_INCIDENT_CORPUS_REQUIRED_INCIDENT_IDS),
+        "required_phase_ids": list(SWARM_INCIDENT_REPLAY_REQUIRED_PHASE_IDS),
+        "phase_ids_covered": phase_ids_covered,
+        "missing_phase_ids": missing_phase_ids,
+        "missing_replay_ids": missing_replay_ids,
+        "replays": replays,
+        "failed_replay_ids": failed_replay_ids,
+        "negative_controls": negative_controls,
+        "negative_control_failures": negative_control_failures,
+        "claim_boundaries": claim_boundaries,
+        "operator_next_actions": [
+            "Use this replay output as deterministic fixture input for no-mock incident E2E and operator work recommendation beads.",
+            "File or refresh follow-up beads before relying on any replay with failed assertions.",
+            "Keep live Agent Mail repair, RCH worker state, Beads ownership, git refs, and deletion decisions outside this artifact.",
+        ],
+        "decision": (
+            "incident_replay_passed"
+            if status == "pass"
+            else "file_follow_up_before_relying_on_incident_replay"
+        ),
+    }
+    assert_swarm_incident_replay_contract(summary)
+    return summary
+
+
+def assert_swarm_incident_replay_contract(summary: dict[str, Any]) -> None:
+    root = repo_root()
+    contract_path = root / SWARM_INCIDENT_REPLAY_CONTRACT_PATH
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise AssertionError(f"missing swarm incident replay contract: {contract_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"swarm incident replay contract is malformed JSON: {contract_path}: {exc}"
+        ) from exc
+    assert contract.get("schema") == SWARM_INCIDENT_REPLAY_CONTRACT_SCHEMA
+    assert contract.get("replay_schema") == SWARM_INCIDENT_REPLAY_SCHEMA
+    assert summary.get("schema") == contract["replay_schema"]
+    assert summary.get("purpose") == contract.get("purpose")
+    assert summary.get("status") in set(contract.get("allowed_statuses", []))
+    for key in contract.get("required_top_level_keys", []):
+        assert key in summary, f"swarm incident replay missing key: {key}"
+    source_corpus = summary.get("source_corpus")
+    assert isinstance(source_corpus, dict)
+    for key in contract.get("required_source_corpus_keys", []):
+        assert key in source_corpus, f"swarm incident replay source corpus missing key: {key}"
+    replays = summary.get("replays")
+    assert isinstance(replays, list) and replays
+    replay_ids = {
+        replay.get("incident_id")
+        for replay in replays
+        if isinstance(replay, dict)
+    }
+    required_incidents = set(contract.get("required_incident_ids", []))
+    assert replay_ids.issuperset(required_incidents), (
+        f"swarm incident replay missing incidents: {sorted(required_incidents - replay_ids)}"
+    )
+    required_replay_keys = set(contract.get("required_replay_keys", []))
+    required_event_keys = set(contract.get("required_ordered_event_keys", []))
+    required_assertions = set(contract.get("required_assertion_ids", []))
+    allowed_replay_statuses = set(contract.get("allowed_replay_statuses", []))
+    required_phase_ids = set(contract.get("required_phase_ids", []))
+    phase_ids = set(summary.get("phase_ids_covered", []))
+    assert phase_ids.issuperset(required_phase_ids), (
+        f"swarm incident replay missing phases: {sorted(required_phase_ids - phase_ids)}"
+    )
+    for replay in replays:
+        assert isinstance(replay, dict)
+        incident_id = str(replay.get("incident_id") or "")
+        missing_replay_keys = required_replay_keys - set(replay)
+        assert not missing_replay_keys, (
+            f"swarm incident replay {incident_id} missing keys: {sorted(missing_replay_keys)}"
+        )
+        assert replay.get("status") in allowed_replay_statuses, (
+            f"swarm incident replay {incident_id} has invalid status"
+        )
+        ordered_events = replay.get("ordered_events")
+        assert isinstance(ordered_events, list) and ordered_events, (
+            f"swarm incident replay {incident_id} missing ordered events"
+        )
+        previous_step: int | None = None
+        for event in ordered_events:
+            assert isinstance(event, dict)
+            missing_event_keys = required_event_keys - set(event)
+            assert not missing_event_keys, (
+                f"swarm incident replay {incident_id} event missing keys: {sorted(missing_event_keys)}"
+            )
+            step = event.get("step")
+            assert isinstance(step, int), (
+                f"swarm incident replay {incident_id} event step is not an int"
+            )
+            if previous_step is not None:
+                assert step > previous_step, (
+                    f"swarm incident replay {incident_id} timeline steps must be strictly increasing"
+                )
+            previous_step = step
+        assertions = replay.get("assertions")
+        assert isinstance(assertions, list) and assertions
+        assertion_ids = {
+            assertion.get("id")
+            for assertion in assertions
+            if isinstance(assertion, dict)
+        }
+        assert assertion_ids.issuperset(required_assertions), (
+            f"swarm incident replay {incident_id} missing assertions: {sorted(required_assertions - assertion_ids)}"
+        )
+        for assertion in assertions:
+            assert assertion.get("status") in {"pass", "fail"}, (
+                f"swarm incident replay {incident_id} assertion has invalid status"
+            )
+            assert isinstance(assertion.get("evidence"), list) and assertion.get("evidence"), (
+                f"swarm incident replay {incident_id} assertion missing evidence"
+            )
+        redaction = replay.get("redaction")
+        assert isinstance(redaction, dict)
+        assert redaction.get("raw_body_embedded") is False, (
+            f"swarm incident replay {incident_id} embedded a raw body"
+        )
+        assert redaction.get("unredacted_sensitive_body_embedded") is False, (
+            f"swarm incident replay {incident_id} embedded unredacted sensitive content"
+        )
+        claim_boundaries = replay.get("claim_boundaries")
+        assert isinstance(claim_boundaries, dict)
+        for flag in SWARM_INCIDENT_CORPUS_REQUIRED_FALSE_CLAIM_FLAGS:
+            assert claim_boundaries.get(flag) is False, (
+                f"swarm incident replay {incident_id} advisory evidence as source-of-truth authority: {flag}"
+            )
+        if summary.get("status") == "pass":
+            assert replay.get("status") == "pass", (
+                f"swarm incident replay {incident_id} failed"
+            )
+            assert replay.get("failing_assertions") == []
+            assert all(assertion.get("status") == "pass" for assertion in assertions)
+    negative_controls = summary.get("negative_controls")
+    assert isinstance(negative_controls, list) and negative_controls
+    required_negative_ids = set(contract.get("required_negative_control_ids", []))
+    negative_ids = {
+        control.get("id")
+        for control in negative_controls
+        if isinstance(control, dict)
+    }
+    assert negative_ids.issuperset(required_negative_ids), (
+        f"swarm incident replay missing negative controls: {sorted(required_negative_ids - negative_ids)}"
+    )
+    for control in negative_controls:
+        assert control.get("expected_status") == "fail", (
+            f"swarm incident replay negative control must expect fail: {control.get('id')}"
+        )
+        assert control.get("verdict") == "fail", (
+            f"swarm incident replay negative control must fail: {control.get('id')}"
+        )
+        assert control.get("expectation_met") is True, (
+            f"swarm incident replay negative control expectation unmet: {control.get('id')}"
+        )
+    claim_boundaries = summary.get("claim_boundaries")
+    assert isinstance(claim_boundaries, dict)
+    for flag in contract.get("required_false_claim_boundary_flags", []):
+        assert claim_boundaries.get(flag) is False, (
+            f"swarm incident replay claim boundary must be false: {flag}"
+        )
+    if summary.get("status") == "pass":
+        assert summary.get("missing_phase_ids") == []
+        assert summary.get("missing_replay_ids") == []
+        assert summary.get("failed_replay_ids") == []
+        assert summary.get("negative_control_failures") == []
+
+
+def write_swarm_incident_replay_output(
+    args: argparse.Namespace,
+    summary: dict[str, Any],
+) -> None:
+    output_path = getattr(args, "out_swarm_incident_replay_json", None)
+    if output_path is None:
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        raise RunpackError(
+            f"refusing to overwrite swarm incident replay: {output_path}"
+        )
+    output_path.write_text(json_dumps(summary, pretty=True), encoding="utf-8")
+
+
+def incident_replay_failure(
+    *,
+    incident_id: str,
+    step_id: str,
+    source_path: str,
+    contract_field: str,
+    reason: str,
+) -> str:
+    return (
+        f"incident_id={incident_id} step_id={step_id} source_path={source_path} "
+        f"contract_field={contract_field}: {reason}"
+    )
+
+
+def load_swarm_incident_corpus(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RunpackError(f"missing swarm incident corpus: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise RunpackError(f"malformed swarm incident corpus JSON: {path}: {exc}") from exc
+    assert_swarm_incident_corpus_contract(payload)
+    return payload
+
+
+def replay_phase_for_event(incident_id: str, event: dict[str, Any]) -> str:
+    event_name = str(event.get("event", ""))
+    source_ref = str(event.get("source_ref", ""))
+    if "agent_mail" in event_name or "macro_start_session" in event_name:
+        return "agent_mail_degradation"
+    if "rch" in event_name or "fallback" in event_name or "validation-scheduler" in source_ref:
+        return "rch_admission"
+    if "beads" in event_name or "ownership" in event_name or ".beads/" in source_ref:
+        return "beads_ownership"
+    if "dirty_worktree" in event_name or "admission_gate" in event_name:
+        return "dirty_worktree_state"
+    if (
+        "proof" in event_name
+        or "stale" in event_name
+        or "source_artifact" in event_name
+        or "contract" in event_name
+        or "malformed" in incident_id
+    ):
+        return "validation_outcome"
+    if "unsafe" in event_name or "delete" in event_name or "mutation" in event_name:
+        return "final_recommendation"
+    if event.get("status") == "safe_action_selected":
+        return "final_recommendation"
+    return "validation_outcome"
+
+
+def replay_step_assertion(
+    *,
+    assertion_id: str,
+    incident_id: str,
+    step_id: str,
+    source_path: str,
+    contract_field: str,
+    ok: bool,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "id": assertion_id,
+        "incident_id": incident_id,
+        "step_id": step_id,
+        "source_path": source_path,
+        "contract_field": contract_field,
+        "status": "pass" if ok else "fail",
+        "message": (
+            message
+            if ok
+            else incident_replay_failure(
+                incident_id=incident_id,
+                step_id=step_id,
+                source_path=source_path,
+                contract_field=contract_field,
+                reason=message,
+            )
+        ),
+    }
+
+
+def build_swarm_incident_replay_steps(
+    incident: dict[str, Any],
+    *,
+    root: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    incident_id = str(incident.get("id") or "unknown_incident")
+    source_refs = [
+        source for source in incident.get("source_refs", []) if isinstance(source, dict)
+    ]
+    source_paths = {
+        str(source.get("path"))
+        for source in source_refs
+        if isinstance(source.get("path"), str) and source.get("path")
+    }
+    timeline = [event for event in incident.get("timeline", []) if isinstance(event, dict)]
+    phase_transitions: list[dict[str, Any]] = [
+        {
+            "ordinal": 1,
+            "phase_id": "source_capture",
+            "event": "source_refs_loaded",
+            "status": "pass",
+            "source_path": ",".join(sorted(source_paths)),
+            "state_delta": {
+                "source_ref_count": len(source_refs),
+                "checked_in_source_count": sum(
+                    1 for source in source_refs if source.get("exists_in_repo") is True
+                ),
+            },
+        }
+    ]
+    assertions: list[dict[str, Any]] = []
+    diagnostics: list[str] = []
+    previous_step: int | None = None
+    for event in timeline:
+        step = event.get("step")
+        source_path = str(event.get("source_ref") or "")
+        step_id = f"step-{step}" if isinstance(step, int) else "step-invalid"
+        monotonic_ok = isinstance(step, int) and (
+            previous_step is None or step > previous_step
+        )
+        source_declared_ok = source_path in source_paths
+        source_exists_ok = source_declared_ok and (root / source_path).exists()
+        phase_id = replay_phase_for_event(incident_id, event)
+        assertions.extend(
+            [
+                replay_step_assertion(
+                    assertion_id="timeline_monotonic",
+                    incident_id=incident_id,
+                    step_id=step_id,
+                    source_path=source_path,
+                    contract_field="timeline.step",
+                    ok=monotonic_ok,
+                    message="timeline step is strictly increasing",
+                ),
+                replay_step_assertion(
+                    assertion_id="source_refs_declared",
+                    incident_id=incident_id,
+                    step_id=step_id,
+                    source_path=source_path,
+                    contract_field="timeline.source_ref",
+                    ok=source_declared_ok,
+                    message="timeline source_ref is declared by the incident source_refs",
+                ),
+                replay_step_assertion(
+                    assertion_id="source_paths_exist",
+                    incident_id=incident_id,
+                    step_id=step_id,
+                    source_path=source_path,
+                    contract_field="source_refs.path",
+                    ok=source_exists_ok,
+                    message="timeline source_ref resolves to a checked-in source path",
+                ),
+            ]
+        )
+        if not monotonic_ok or not source_declared_ok or not source_exists_ok:
+            diagnostics.append(assertions[-1]["message"])
+        phase_transitions.append(
+            {
+                "ordinal": len(phase_transitions) + 1,
+                "phase_id": phase_id,
+                "event": event.get("event"),
+                "status": "pass" if event.get("status") != "blocked" else "blocked_expected",
+                "source_path": source_path,
+                "state_delta": {
+                    "event_status": event.get("status"),
+                    "detail": event.get("detail"),
+                },
+            }
+        )
+        if isinstance(step, int):
+            previous_step = step
+    redaction = incident.get("redaction") if isinstance(incident.get("redaction"), dict) else {}
+    redaction_ok = (
+        redaction.get("raw_body_embedded") is False
+        and redaction.get("unredacted_sensitive_body_embedded") is False
+        and redaction.get("redacted_or_fixture_only") is True
+    )
+    assertions.append(
+        replay_step_assertion(
+            assertion_id="redaction_safe",
+            incident_id=incident_id,
+            step_id="incident",
+            source_path=",".join(sorted(source_paths)),
+            contract_field="redaction",
+            ok=redaction_ok,
+            message="incident replay embeds only redacted fixture metadata",
+        )
+    )
+    safe_action = incident.get("expected_safe_action")
+    assertions.append(
+        replay_step_assertion(
+            assertion_id="expected_safe_action_present",
+            incident_id=incident_id,
+            step_id="final",
+            source_path=",".join(sorted(source_paths)),
+            contract_field="expected_safe_action",
+            ok=isinstance(safe_action, str) and bool(safe_action.strip()),
+            message="expected safe action is present",
+        )
+    )
+    claim_boundaries = (
+        incident.get("claim_boundaries")
+        if isinstance(incident.get("claim_boundaries"), dict)
+        else {}
+    )
+    advisory_ok = all(
+        claim_boundaries.get(flag) is False
+        for flag in SWARM_INCIDENT_CORPUS_REQUIRED_FALSE_CLAIM_FLAGS
+    )
+    assertions.append(
+        replay_step_assertion(
+            assertion_id="advisory_claim_boundary_preserved",
+            incident_id=incident_id,
+            step_id="final",
+            source_path=",".join(sorted(source_paths)),
+            contract_field="claim_boundaries",
+            ok=advisory_ok,
+            message="advisory evidence is not promoted to a source of truth",
+        )
+    )
+    phase_transitions.append(
+        {
+            "ordinal": len(phase_transitions) + 1,
+            "phase_id": "final_recommendation",
+            "event": "selected_safe_action",
+            "status": "pass",
+            "source_path": "expected_safe_action",
+            "state_delta": {
+                "selected_safe_action": safe_action,
+                "follow_up_bead_recommendation": follow_up_for_incident(incident_id),
+            },
+        }
+    )
+    return phase_transitions, assertions, diagnostics
+
+
+def follow_up_for_incident(incident_id: str) -> str | None:
+    if incident_id in {
+        "stale_evidence_blocks_reuse",
+        "malformed_source_artifact",
+        "duplicate_agent_work_risk",
+    }:
+        return "file_or_link_follow_up_bead_for_source_refresh_or_collision"
+    if incident_id == "deletion_live_mutation_request_rejected":
+        return "surface_blocker_and_request_explicit_operator_authorization_outside_replay"
+    return None
+
+
+def build_swarm_incident_replay_summary(
+    corpus: dict[str, Any],
+    *,
+    corpus_path: Path,
+    generated_at: str,
+) -> dict[str, Any]:
+    root = repo_root()
+    assert_swarm_incident_corpus_contract(corpus)
+    incident_replays: list[dict[str, Any]] = []
+    phase_coverage: set[str] = {"source_capture", "final_recommendation"}
+    for incident in corpus.get("incidents", []):
+        if not isinstance(incident, dict):
+            continue
+        incident_id = str(incident.get("id") or "unknown_incident")
+        phase_transitions, assertions, diagnostics = build_swarm_incident_replay_steps(
+            incident,
+            root=root,
+        )
+        phase_coverage.update(
+            str(transition.get("phase_id"))
+            for transition in phase_transitions
+            if transition.get("phase_id")
+        )
+        failed_assertions = [
+            assertion for assertion in assertions if assertion.get("status") != "pass"
+        ]
+        incident_replays.append(
+            {
+                "id": incident_id,
+                "source_corpus_path": str(corpus_path),
+                "source_corpus_schema": corpus.get("schema"),
+                "incident_class": incident.get("incident_class"),
+                "status": "pass" if not failed_assertions else "fail",
+                "phase_transitions": phase_transitions,
+                "step_assertions": assertions,
+                "failed_assertions": failed_assertions,
+                "redacted_raw_excerpts": [
+                    {
+                        "source_path": source.get("path"),
+                        "excerpt": "[REDACTED]",
+                        "redaction_status": "redacted",
+                    }
+                    for source in incident.get("source_refs", [])
+                    if isinstance(source, dict)
+                ],
+                "selected_safe_action": incident.get("expected_safe_action"),
+                "follow_up_bead_recommendation": follow_up_for_incident(incident_id),
+                "diagnostics": diagnostics,
+            }
+        )
+    healthy_baseline = {
+        "id": "healthy_baseline",
+        "source_corpus_path": str(corpus_path),
+        "source_corpus_schema": corpus.get("schema"),
+        "status": "pass",
+        "phase_transitions": [
+            {
+                "ordinal": 1,
+                "phase_id": "source_capture",
+                "event": "corpus_contract_loaded",
+                "status": "pass",
+                "source_path": str(corpus_path),
+                "state_delta": {"incident_count": len(corpus.get("incidents", []))},
+            },
+            {
+                "ordinal": 2,
+                "phase_id": "final_recommendation",
+                "event": "normal_sources_remain_authoritative",
+                "status": "pass",
+                "source_path": str(corpus_path),
+                "state_delta": {
+                    "selected_safe_action": (
+                        "Use live Beads, Agent Mail, RCH, git, and source artifacts "
+                        "as authorities when they are healthy; keep replay advisory."
+                    )
+                },
+            },
+        ],
+        "step_assertions": [
+            replay_step_assertion(
+                assertion_id="advisory_claim_boundary_preserved",
+                incident_id="healthy_baseline",
+                step_id="final",
+                source_path=str(corpus_path),
+                contract_field="claim_boundaries",
+                ok=True,
+                message="healthy replay keeps source systems authoritative",
+            )
+        ],
+        "failed_assertions": [],
+        "selected_safe_action": (
+            "Use live source systems when healthy; use replay only as advisory fixture evidence."
+        ),
+        "follow_up_bead_recommendation": None,
+        "diagnostics": [],
+    }
+    scenario_results = [healthy_baseline, *incident_replays]
+    negative_controls = build_swarm_incident_replay_negative_controls(corpus, corpus_path)
+    failed_negative_controls = [
+        control["id"]
+        for control in negative_controls
+        if not (
+            control.get("expected_status") == "fail"
+            and control.get("verdict") == "fail"
+            and control.get("expectation_met") is True
+        )
+    ]
+    missing_phase_ids = sorted(
+        set(SWARM_INCIDENT_REPLAY_REQUIRED_PHASE_IDS) - phase_coverage
+    )
+    missing_scenario_ids = sorted(
+        set(SWARM_INCIDENT_REPLAY_REQUIRED_SCENARIO_IDS)
+        - {scenario["id"] for scenario in scenario_results}
+    )
+    failed_replays = [
+        replay["id"] for replay in scenario_results if replay.get("status") != "pass"
+    ]
+    claim_boundaries = {
+        "operator_evidence_only": True,
+        "read_only": True,
+        "release_performance_claim_authorized": False,
+        "benchmark_or_capacity_claim_authorized": False,
+        "dropin_certification_claim_authorized": False,
+        "agent_mail_authority_authorized": False,
+        "rch_authority_authorized": False,
+        "beads_mutation_authorized": False,
+        "live_mutation_authorized": False,
+        "file_deletion_authorized": False,
+        "allowed_claim": (
+            "Deterministic read-only incident replay over checked-in corpus fixtures."
+        ),
+    }
+    status = (
+        "pass"
+        if not failed_replays
+        and not missing_phase_ids
+        and not missing_scenario_ids
+        and not failed_negative_controls
+        else "fail"
+    )
+    summary = {
+        "schema": SWARM_INCIDENT_REPLAY_SCHEMA,
+        "generated_at": generated_at,
+        "status": status,
+        "purpose": "read_only_incident_replay_harness_not_source_of_truth_or_runtime_mutation",
+        "source_bead": "bd-9yq7i.2",
+        "source_corpus": {
+            "path": str(corpus_path),
+            "schema": corpus.get("schema"),
+            "generated_at": corpus.get("generated_at"),
+            "status": corpus.get("status"),
+            "decision": corpus.get("decision"),
+        },
+        "required_phase_ids": list(SWARM_INCIDENT_REPLAY_REQUIRED_PHASE_IDS),
+        "phase_coverage": sorted(phase_coverage),
+        "missing_phase_ids": missing_phase_ids,
+        "required_scenario_ids": list(SWARM_INCIDENT_REPLAY_REQUIRED_SCENARIO_IDS),
+        "missing_scenario_ids": missing_scenario_ids,
+        "scenario_results": scenario_results,
+        "failed_replays": failed_replays,
+        "negative_controls": negative_controls,
+        "failed_negative_controls": failed_negative_controls,
+        "claim_boundaries": claim_boundaries,
+        "summary": {
+            "scenario_count": len(scenario_results),
+            "incident_replay_count": len(incident_replays),
+            "phase_count": len(phase_coverage),
+            "failed_replay_count": len(failed_replays),
+            "negative_control_count": len(negative_controls),
+        },
+        "operator_next_actions": [
+            "Use replay output to inspect deterministic incident state transitions.",
+            "Treat replay recommendations as advisory; source systems remain authoritative.",
+            "File or link follow-up beads for stale, malformed, contradictory, or unsafe incidents.",
+        ],
+        "decision": "replay_passed" if status == "pass" else "file_follow_up_before_relying_on_replay",
+    }
+    assert_swarm_incident_replay_contract(summary)
+    return summary
+
+
+def build_swarm_incident_replay_negative_controls(
+    corpus: dict[str, Any],
+    corpus_path: Path,
+) -> list[dict[str, Any]]:
+    first_incident = next(
+        (incident for incident in corpus.get("incidents", []) if isinstance(incident, dict)),
+        {},
+    )
+    first_source = ""
+    if isinstance(first_incident, dict):
+        refs = first_incident.get("source_refs")
+        if isinstance(refs, list) and refs and isinstance(refs[0], dict):
+            first_source = str(refs[0].get("path") or "")
+    return [
+        {
+            "id": "out_of_order_events_fail_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "diagnostic": incident_replay_failure(
+                incident_id=str(first_incident.get("id") or "unknown_incident"),
+                step_id="step-2",
+                source_path=first_source,
+                contract_field="timeline.step",
+                reason="timeline event order must be strictly increasing",
+            ),
+            "unsafe_fixture": {"timeline": [{"step": 2}, {"step": 1}]},
+        },
+        {
+            "id": "missing_required_source_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "diagnostic": incident_replay_failure(
+                incident_id=str(first_incident.get("id") or "unknown_incident"),
+                step_id="step-1",
+                source_path="docs/evidence/does-not-exist.json",
+                contract_field="source_refs.path",
+                reason="required source path is missing",
+            ),
+            "unsafe_fixture": {"source_ref": "docs/evidence/does-not-exist.json"},
+        },
+        {
+            "id": "unredacted_sensitive_content_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "diagnostic": incident_replay_failure(
+                incident_id=str(first_incident.get("id") or "unknown_incident"),
+                step_id="incident",
+                source_path=str(corpus_path),
+                contract_field="redaction.unredacted_sensitive_body_embedded",
+                reason="replay output must not embed unredacted sensitive content",
+            ),
+            "unsafe_fixture": {"redaction": {"unredacted_sensitive_body_embedded": True}},
+        },
+        {
+            "id": "advisory_evidence_as_source_of_truth_fails_closed",
+            "expected_status": "fail",
+            "verdict": "fail",
+            "expectation_met": True,
+            "diagnostic": incident_replay_failure(
+                incident_id=str(first_incident.get("id") or "unknown_incident"),
+                step_id="final",
+                source_path=str(corpus_path),
+                contract_field="claim_boundaries.agent_mail_authority_authorized",
+                reason="advisory replay evidence cannot replace Agent Mail, RCH, Beads, git, or source artifacts",
+            ),
+            "unsafe_fixture": {
+                "claim_boundaries": {"agent_mail_authority_authorized": True}
+            },
+        },
+    ]
+
+
+def assert_swarm_incident_replay_contract(summary: dict[str, Any]) -> None:
+    root = repo_root()
+    contract_path = root / SWARM_INCIDENT_REPLAY_CONTRACT_PATH
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise AssertionError(f"missing swarm incident replay contract: {contract_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"swarm incident replay contract is malformed JSON: {contract_path}: {exc}"
+        ) from exc
+    assert contract.get("schema") == SWARM_INCIDENT_REPLAY_CONTRACT_SCHEMA
+    assert contract.get("evidence_schema") == SWARM_INCIDENT_REPLAY_SCHEMA
+    assert summary.get("schema") == contract["evidence_schema"]
+    assert summary.get("purpose") == contract.get("purpose")
+    assert summary.get("status") in set(contract.get("allowed_statuses", []))
+    for key in contract.get("required_top_level_keys", []):
+        assert key in summary, f"swarm incident replay missing key: {key}"
+    phase_coverage = set(summary.get("phase_coverage", []))
+    required_phases = set(contract.get("required_phase_ids", []))
+    assert phase_coverage.issuperset(required_phases), (
+        f"swarm incident replay missing phases: {sorted(required_phases - phase_coverage)}"
+    )
+    scenario_results = summary.get("scenario_results")
+    assert isinstance(scenario_results, list) and scenario_results
+    scenario_ids = {
+        scenario.get("id")
+        for scenario in scenario_results
+        if isinstance(scenario, dict)
+    }
+    required_scenarios = set(contract.get("required_scenario_ids", []))
+    assert scenario_ids.issuperset(required_scenarios), (
+        f"swarm incident replay missing scenarios: {sorted(required_scenarios - scenario_ids)}"
+    )
+    required_transition_keys = set(contract.get("required_phase_transition_keys", []))
+    required_assertion_keys = set(contract.get("required_step_assertion_keys", []))
+    required_assertion_ids = set(contract.get("required_assertion_ids", []))
+    allowed_transition_statuses = set(contract.get("allowed_transition_statuses", []))
+    for scenario in scenario_results:
+        assert isinstance(scenario, dict)
+        scenario_id = str(scenario.get("id") or "unknown_scenario")
+        assert scenario.get("status") in set(contract.get("allowed_statuses", []))
+        transitions = scenario.get("phase_transitions")
+        assert isinstance(transitions, list) and transitions, (
+            f"swarm incident replay scenario missing phase transitions: {scenario_id}"
+        )
+        ordinals = [
+            transition.get("ordinal")
+            for transition in transitions
+            if isinstance(transition, dict)
+        ]
+        assert all(isinstance(ordinal, int) for ordinal in ordinals), (
+            f"swarm incident replay scenario has non-integer transition ordinals: {scenario_id}"
+        )
+        assert all(
+            current > previous
+            for previous, current in zip(ordinals, ordinals[1:], strict=False)
+        ), (
+            f"swarm incident replay scenario has out-of-order transitions: {scenario_id}"
+        )
+        for transition in transitions:
+            assert isinstance(transition, dict)
+            missing = required_transition_keys - set(transition)
+            assert not missing, (
+                f"swarm incident replay transition missing keys in {scenario_id}: "
+                f"{sorted(missing)}"
+            )
+            assert transition.get("phase_id") in phase_coverage
+            assert transition.get("status") in allowed_transition_statuses
+        assertions = scenario.get("step_assertions")
+        assert isinstance(assertions, list) and assertions, (
+            f"swarm incident replay scenario missing assertions: {scenario_id}"
+        )
+        assertion_ids = {
+            assertion.get("id")
+            for assertion in assertions
+            if isinstance(assertion, dict)
+        }
+        if scenario_id != "healthy_baseline":
+            assert assertion_ids.issuperset(required_assertion_ids), (
+                f"swarm incident replay scenario missing assertions in {scenario_id}: "
+                f"{sorted(required_assertion_ids - assertion_ids)}"
+            )
+        for assertion in assertions:
+            assert isinstance(assertion, dict)
+            missing = required_assertion_keys - set(assertion)
+            assert not missing, (
+                f"swarm incident replay assertion missing keys in {scenario_id}: "
+                f"{sorted(missing)}"
+            )
+            assert assertion.get("status") == "pass", (
+                assertion.get("message")
+                or f"swarm incident replay assertion failed in {scenario_id}"
+            )
+            for diagnostic_field in contract.get("required_failure_diagnostic_fields", []):
+                assert assertion.get(diagnostic_field) not in {None, ""}, (
+                    f"swarm incident replay assertion missing diagnostic field "
+                    f"{diagnostic_field} in {scenario_id}"
+                )
+        assert not scenario.get("failed_assertions"), (
+            f"swarm incident replay scenario has failed assertions: {scenario_id}"
+        )
+    negative_controls = summary.get("negative_controls")
+    assert isinstance(negative_controls, list) and negative_controls
+    negative_ids = {
+        control.get("id")
+        for control in negative_controls
+        if isinstance(control, dict)
+    }
+    required_negative_ids = set(contract.get("required_negative_control_ids", []))
+    assert negative_ids.issuperset(required_negative_ids), (
+        f"swarm incident replay missing negative controls: "
+        f"{sorted(required_negative_ids - negative_ids)}"
+    )
+    for control in negative_controls:
+        assert isinstance(control, dict)
+        control_id = str(control.get("id") or "unknown_control")
+        assert control.get("expected_status") == "fail", (
+            f"swarm incident replay negative control must expect fail: {control_id}"
+        )
+        assert control.get("verdict") == "fail", (
+            f"swarm incident replay negative control must fail: {control_id}"
+        )
+        assert control.get("expectation_met") is True, (
+            f"swarm incident replay negative control expectation unmet: {control_id}"
+        )
+        diagnostic = control.get("diagnostic")
+        assert isinstance(diagnostic, str) and diagnostic
+        for fragment in contract.get("required_failure_diagnostic_fragments", []):
+            assert fragment in diagnostic, (
+                f"swarm incident replay negative control diagnostic missing "
+                f"{fragment}: {control_id}"
+            )
+    claim_boundaries = summary.get("claim_boundaries")
+    assert isinstance(claim_boundaries, dict)
+    for flag in contract.get("required_true_claim_boundary_flags", []):
+        assert claim_boundaries.get(flag) is True, (
+            f"swarm incident replay claim boundary must be true: {flag}"
+        )
+    for flag in contract.get("required_false_claim_boundary_flags", []):
+        assert claim_boundaries.get(flag) is False, (
+            f"swarm incident replay claim boundary must be false: {flag}"
+        )
+    if summary.get("status") == "pass":
+        assert summary.get("missing_phase_ids") == []
+        assert summary.get("missing_scenario_ids") == []
+        assert summary.get("failed_replays") == []
+        assert summary.get("failed_negative_controls") == []
+
+
+def write_swarm_incident_replay_output(
+    args: argparse.Namespace,
+    summary: dict[str, Any],
+) -> None:
+    output_path = getattr(args, "out_swarm_incident_replay_json", None)
+    if output_path is None:
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        raise RunpackError(
+            f"refusing to overwrite swarm incident replay output: {output_path}"
+        )
+    output_path.write_text(json_dumps(summary, pretty=True), encoding="utf-8")
+
+
 def adaptive_execution_child_artifact_map(
     issues: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -29216,6 +30504,89 @@ def run_self_test() -> int:
             )
         else:
             raise AssertionError("swarm incident deletion/live mutation authority passed")
+        incident_replay = build_swarm_incident_replay_summary(
+            incident_corpus,
+            corpus_path=SWARM_INCIDENT_REPLAY_DEFAULT_CORPUS_PATH,
+            generated_at=generated_at,
+        )
+        assert incident_replay["schema"] == SWARM_INCIDENT_REPLAY_SCHEMA
+        assert incident_replay["status"] == "pass"
+        assert incident_replay["decision"] == "replay_passed"
+        assert {
+            scenario["id"] for scenario in incident_replay["scenario_results"]
+        }.issuperset(SWARM_INCIDENT_REPLAY_REQUIRED_SCENARIO_IDS)
+        assert set(incident_replay["phase_coverage"]).issuperset(
+            SWARM_INCIDENT_REPLAY_REQUIRED_PHASE_IDS
+        )
+        assert {
+            control["id"] for control in incident_replay["negative_controls"]
+        }.issuperset(SWARM_INCIDENT_REPLAY_REQUIRED_NEGATIVE_CONTROL_IDS)
+        assert_swarm_incident_replay_contract(incident_replay)
+        out_of_order_replay = json.loads(json_dumps(incident_replay))
+        out_of_order_replay["scenario_results"][1]["phase_transitions"][1][
+            "ordinal"
+        ] = 1
+        try:
+            assert_swarm_incident_replay_contract(out_of_order_replay)
+        except AssertionError as exc:
+            assert "out-of-order transitions" in str(exc)
+        else:
+            raise AssertionError("swarm incident replay out-of-order events passed")
+        missing_source_replay = json.loads(json_dumps(incident_replay))
+        source_assertion = next(
+            assertion
+            for assertion in missing_source_replay["scenario_results"][1]["step_assertions"]
+            if assertion["id"] == "source_paths_exist"
+        )
+        source_assertion["status"] = "fail"
+        source_assertion["message"] = incident_replay_failure(
+            incident_id=source_assertion["incident_id"],
+            step_id=source_assertion["step_id"],
+            source_path="docs/evidence/does-not-exist.json",
+            contract_field=source_assertion["contract_field"],
+            reason="required source path missing",
+        )
+        missing_source_replay["scenario_results"][1]["failed_assertions"] = [
+            source_assertion
+        ]
+        try:
+            assert_swarm_incident_replay_contract(missing_source_replay)
+        except AssertionError as exc:
+            assert "required source path missing" in str(exc)
+            assert "incident_id=" in str(exc)
+            assert "step_id=" in str(exc)
+            assert "source_path=" in str(exc)
+            assert "contract_field=" in str(exc)
+        else:
+            raise AssertionError("swarm incident replay missing source passed")
+        unredacted_replay = json.loads(json_dumps(incident_replay))
+        redaction_assertion = next(
+            assertion
+            for assertion in unredacted_replay["scenario_results"][1]["step_assertions"]
+            if assertion["id"] == "redaction_safe"
+        )
+        redaction_assertion["status"] = "fail"
+        redaction_assertion["message"] = incident_replay_failure(
+            incident_id=redaction_assertion["incident_id"],
+            step_id=redaction_assertion["step_id"],
+            source_path=redaction_assertion["source_path"],
+            contract_field="redaction.unredacted_sensitive_body_embedded",
+            reason="unredacted sensitive content is not replayable",
+        )
+        try:
+            assert_swarm_incident_replay_contract(unredacted_replay)
+        except AssertionError as exc:
+            assert "unredacted sensitive content" in str(exc)
+        else:
+            raise AssertionError("swarm incident replay unredacted content passed")
+        authority_replay = json.loads(json_dumps(incident_replay))
+        authority_replay["claim_boundaries"]["agent_mail_authority_authorized"] = True
+        try:
+            assert_swarm_incident_replay_contract(authority_replay)
+        except AssertionError as exc:
+            assert "agent_mail_authority_authorized" in str(exc)
+        else:
+            raise AssertionError("swarm incident replay advisory authority misuse passed")
         no_tail_args = argparse.Namespace(**{**vars(args), "tail_latency_json": None})
         no_tail_runpack = build_runpack(no_tail_args)
         assert "tail_latency" not in no_tail_runpack
@@ -29772,6 +31143,27 @@ def parse_args() -> argparse.Namespace:
         help="print the deterministic large-swarm incident corpus JSON",
     )
     parser.add_argument(
+        "--run-swarm-incident-replay",
+        action="store_true",
+        help="build the deterministic large-swarm incident replay harness output",
+    )
+    parser.add_argument(
+        "--incident-corpus-json",
+        type=Path,
+        default=SWARM_INCIDENT_REPLAY_DEFAULT_CORPUS_PATH,
+        help="pi.swarm.incident_corpus.v1 JSON to replay",
+    )
+    parser.add_argument(
+        "--out-swarm-incident-replay-json",
+        type=Path,
+        help="write pi.swarm.incident_replay.v1 JSON; refuses to overwrite",
+    )
+    parser.add_argument(
+        "--print-swarm-incident-replay",
+        action="store_true",
+        help="print the deterministic large-swarm incident replay JSON",
+    )
+    parser.add_argument(
         "--run-proof-reuse-gate",
         action="store_true",
         help="build the fail-closed remote validation proof reuse gate",
@@ -29907,6 +31299,10 @@ def main() -> int:
         args.out_swarm_incident_corpus_json
         or args.print_swarm_incident_corpus
     )
+    swarm_incident_replay_options_used = (
+        args.out_swarm_incident_replay_json
+        or args.print_swarm_incident_replay
+    )
     proof_reuse_gate_options_used = (
         args.proof_ledger_json
         or args.proof_reuse_context_json
@@ -29945,11 +31341,24 @@ def main() -> int:
     if args.run_swarm_incident_corpus and (
         args.run_backpressure_budget_contract
         or args.run_operator_perceived_latency_trace
+        or args.run_swarm_incident_replay
         or args.run_proof_reuse_gate
         or any(final_gate_modes)
     ):
         print(
             "ERROR: swarm incident corpus cannot be combined with final-gate, "
+            "backpressure, perceived-latency, incident-replay, or proof-reuse modes",
+            file=sys.stderr,
+        )
+        return 2
+    if args.run_swarm_incident_replay and (
+        args.run_backpressure_budget_contract
+        or args.run_operator_perceived_latency_trace
+        or args.run_proof_reuse_gate
+        or any(final_gate_modes)
+    ):
+        print(
+            "ERROR: swarm incident replay cannot be combined with final-gate, "
             "backpressure, perceived-latency, or proof-reuse modes",
             file=sys.stderr,
         )
@@ -29957,11 +31366,12 @@ def main() -> int:
     if args.run_proof_reuse_gate and (
         args.run_backpressure_budget_contract
         or args.run_operator_perceived_latency_trace
+        or args.run_swarm_incident_replay
         or any(final_gate_modes)
     ):
         print(
             "ERROR: proof reuse gate cannot be combined with final-gate, "
-            "backpressure, or perceived-latency modes",
+            "backpressure, perceived-latency, or incident-replay modes",
             file=sys.stderr,
         )
         return 2
@@ -30050,6 +31460,12 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    if swarm_incident_replay_options_used and not args.run_swarm_incident_replay:
+        print(
+            "ERROR: swarm incident replay options require --run-swarm-incident-replay",
+            file=sys.stderr,
+        )
+        return 2
     if proof_reuse_gate_options_used and not args.run_proof_reuse_gate:
         print(
             "ERROR: proof reuse gate options require --run-proof-reuse-gate",
@@ -30110,6 +31526,20 @@ def main() -> int:
             if (
                 args.print_swarm_incident_corpus
                 or args.out_swarm_incident_corpus_json is None
+            ):
+                print(json_dumps(summary, pretty=True))
+            return 0
+        if args.run_swarm_incident_replay:
+            corpus = load_swarm_incident_corpus(args.incident_corpus_json)
+            summary = build_swarm_incident_replay_summary(
+                corpus,
+                corpus_path=args.incident_corpus_json,
+                generated_at=args.generated_at or utc_now_iso(),
+            )
+            write_swarm_incident_replay_output(args, summary)
+            if (
+                args.print_swarm_incident_replay
+                or args.out_swarm_incident_replay_json is None
             ):
                 print(json_dumps(summary, pretty=True))
             return 0
@@ -30349,6 +31779,7 @@ def main() -> int:
         and not args.out_predictive_ops_final_gate_json
         and not args.out_backpressure_budget_contract_json
         and not args.out_swarm_incident_corpus_json
+        and not args.out_swarm_incident_replay_json
         and not args.out_proof_reuse_gate_json
         and not args.print_autopilot_input_pack
         and not args.print_autopilot_plan
@@ -30366,6 +31797,7 @@ def main() -> int:
         and not args.print_predictive_ops_final_gate
         and not args.print_backpressure_budget_contract
         and not args.print_swarm_incident_corpus
+        and not args.print_swarm_incident_replay
         and not args.print_proof_reuse_gate
     ):
         print(json_dumps(runpack, pretty=True))

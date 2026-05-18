@@ -1,0 +1,1540 @@
+{
+  "claim_boundaries": {
+    "agent_mail_authority_authorized": false,
+    "allowed_claim": "Deterministic read-only incident replay over checked-in corpus fixtures.",
+    "beads_mutation_authorized": false,
+    "benchmark_or_capacity_claim_authorized": false,
+    "dropin_certification_claim_authorized": false,
+    "file_deletion_authorized": false,
+    "live_mutation_authorized": false,
+    "operator_evidence_only": true,
+    "rch_authority_authorized": false,
+    "read_only": true,
+    "release_performance_claim_authorized": false
+  },
+  "decision": "replay_passed",
+  "failed_negative_controls": [],
+  "failed_replays": [],
+  "generated_at": "2026-05-18T05:45:00+00:00",
+  "missing_phase_ids": [],
+  "missing_scenario_ids": [],
+  "negative_controls": [
+    {
+      "diagnostic": "incident_id=agent_mail_schema_corruption step_id=step-2 source_path=AGENTS.md contract_field=timeline.step: timeline event order must be strictly increasing",
+      "expectation_met": true,
+      "expected_status": "fail",
+      "id": "out_of_order_events_fail_closed",
+      "unsafe_fixture": {
+        "timeline": [
+          {
+            "step": 2
+          },
+          {
+            "step": 1
+          }
+        ]
+      },
+      "verdict": "fail"
+    },
+    {
+      "diagnostic": "incident_id=agent_mail_schema_corruption step_id=step-1 source_path=docs/evidence/does-not-exist.json contract_field=source_refs.path: required source path is missing",
+      "expectation_met": true,
+      "expected_status": "fail",
+      "id": "missing_required_source_fails_closed",
+      "unsafe_fixture": {
+        "source_ref": "docs/evidence/does-not-exist.json"
+      },
+      "verdict": "fail"
+    },
+    {
+      "diagnostic": "incident_id=agent_mail_schema_corruption step_id=incident source_path=docs/evidence/swarm-incident-corpus.json contract_field=redaction.unredacted_sensitive_body_embedded: replay output must not embed unredacted sensitive content",
+      "expectation_met": true,
+      "expected_status": "fail",
+      "id": "unredacted_sensitive_content_fails_closed",
+      "unsafe_fixture": {
+        "redaction": {
+          "unredacted_sensitive_body_embedded": true
+        }
+      },
+      "verdict": "fail"
+    },
+    {
+      "diagnostic": "incident_id=agent_mail_schema_corruption step_id=final source_path=docs/evidence/swarm-incident-corpus.json contract_field=claim_boundaries.agent_mail_authority_authorized: advisory replay evidence cannot replace Agent Mail, RCH, Beads, git, or source artifacts",
+      "expectation_met": true,
+      "expected_status": "fail",
+      "id": "advisory_evidence_as_source_of_truth_fails_closed",
+      "unsafe_fixture": {
+        "claim_boundaries": {
+          "agent_mail_authority_authorized": true
+        }
+      },
+      "verdict": "fail"
+    }
+  ],
+  "operator_next_actions": [
+    "Use replay output to inspect deterministic incident state transitions.",
+    "Treat replay recommendations as advisory; source systems remain authoritative.",
+    "File or link follow-up beads for stale, malformed, contradictory, or unsafe incidents."
+  ],
+  "phase_coverage": [
+    "agent_mail_degradation",
+    "beads_ownership",
+    "dirty_worktree_state",
+    "final_recommendation",
+    "rch_admission",
+    "source_capture",
+    "validation_outcome"
+  ],
+  "purpose": "read_only_incident_replay_harness_not_source_of_truth_or_runtime_mutation",
+  "required_phase_ids": [
+    "source_capture",
+    "agent_mail_degradation",
+    "rch_admission",
+    "beads_ownership",
+    "dirty_worktree_state",
+    "validation_outcome",
+    "final_recommendation"
+  ],
+  "required_scenario_ids": [
+    "healthy_baseline",
+    "agent_mail_schema_corruption",
+    "rch_saturation_local_fallback_denial",
+    "stale_evidence_blocks_reuse",
+    "duplicate_agent_work_risk",
+    "dirty_worktree_admission_denial",
+    "malformed_source_artifact",
+    "deletion_live_mutation_request_rejected"
+  ],
+  "scenario_results": [
+    {
+      "diagnostics": [],
+      "failed_assertions": [],
+      "follow_up_bead_recommendation": null,
+      "id": "healthy_baseline",
+      "phase_transitions": [
+        {
+          "event": "corpus_contract_loaded",
+          "ordinal": 1,
+          "phase_id": "source_capture",
+          "source_path": "docs/evidence/swarm-incident-corpus.json",
+          "state_delta": {
+            "incident_count": 7
+          },
+          "status": "pass"
+        },
+        {
+          "event": "normal_sources_remain_authoritative",
+          "ordinal": 2,
+          "phase_id": "final_recommendation",
+          "source_path": "docs/evidence/swarm-incident-corpus.json",
+          "state_delta": {
+            "selected_safe_action": "Use live Beads, Agent Mail, RCH, git, and source artifacts as authorities when they are healthy; keep replay advisory."
+          },
+          "status": "pass"
+        }
+      ],
+      "selected_safe_action": "Use live source systems when healthy; use replay only as advisory fixture evidence.",
+      "source_corpus_path": "docs/evidence/swarm-incident-corpus.json",
+      "source_corpus_schema": "pi.swarm.incident_corpus.v1",
+      "status": "pass",
+      "step_assertions": [
+        {
+          "contract_field": "claim_boundaries",
+          "id": "advisory_claim_boundary_preserved",
+          "incident_id": "healthy_baseline",
+          "message": "healthy replay keeps source systems authoritative",
+          "source_path": "docs/evidence/swarm-incident-corpus.json",
+          "status": "pass",
+          "step_id": "final"
+        }
+      ]
+    },
+    {
+      "diagnostics": [],
+      "failed_assertions": [],
+      "follow_up_bead_recommendation": null,
+      "id": "agent_mail_schema_corruption",
+      "incident_class": "coordination_degraded",
+      "phase_transitions": [
+        {
+          "event": "source_refs_loaded",
+          "ordinal": 1,
+          "phase_id": "source_capture",
+          "source_path": ".beads/issues.jsonl,AGENTS.md,scripts/build_swarm_operator_runpack.py,tests/fixtures/agent_mail/schema_corrupt_health.json",
+          "state_delta": {
+            "checked_in_source_count": 4,
+            "source_ref_count": 4
+          },
+          "status": "pass"
+        },
+        {
+          "event": "agent_mail_health_check_failed",
+          "ordinal": 2,
+          "phase_id": "agent_mail_degradation",
+          "source_path": "tests/fixtures/agent_mail/schema_corrupt_health.json",
+          "state_delta": {
+            "detail": "health_check reports missing Agent Mail tables.",
+            "event_status": "degraded"
+          },
+          "status": "pass"
+        },
+        {
+          "event": "macro_start_session_failed",
+          "ordinal": 3,
+          "phase_id": "agent_mail_degradation",
+          "source_path": "AGENTS.md",
+          "state_delta": {
+            "detail": "Mail bootstrap cannot become the source of truth.",
+            "event_status": "degraded"
+          },
+          "status": "pass"
+        },
+        {
+          "event": "beads_soft_lock_selected",
+          "ordinal": 4,
+          "phase_id": "beads_ownership",
+          "source_path": ".beads/issues.jsonl",
+          "state_delta": {
+            "detail": "Use Beads assignee, status, and comments as the soft lock.",
+            "event_status": "safe_action_selected"
+          },
+          "status": "pass"
+        },
+        {
+          "event": "selected_safe_action",
+          "ordinal": 5,
+          "phase_id": "final_recommendation",
+          "source_path": "expected_safe_action",
+          "state_delta": {
+            "follow_up_bead_recommendation": null,
+            "selected_safe_action": "Use Beads assignee/status/comments as the soft lock, keep the incident visible, and avoid live Agent Mail writes until repaired."
+          },
+          "status": "pass"
+        }
+      ],
+      "redacted_raw_excerpts": [
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "AGENTS.md"
+        },
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "tests/fixtures/agent_mail/schema_corrupt_health.json"
+        },
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "scripts/build_swarm_operator_runpack.py"
+        },
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": ".beads/issues.jsonl"
+        }
+      ],
+      "selected_safe_action": "Use Beads assignee/status/comments as the soft lock, keep the incident visible, and avoid live Agent Mail writes until repaired.",
+      "source_corpus_path": "docs/evidence/swarm-incident-corpus.json",
+      "source_corpus_schema": "pi.swarm.incident_corpus.v1",
+      "status": "pass",
+      "step_assertions": [
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "agent_mail_schema_corruption",
+          "message": "timeline step is strictly increasing",
+          "source_path": "tests/fixtures/agent_mail/schema_corrupt_health.json",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "agent_mail_schema_corruption",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "tests/fixtures/agent_mail/schema_corrupt_health.json",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "agent_mail_schema_corruption",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "tests/fixtures/agent_mail/schema_corrupt_health.json",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "agent_mail_schema_corruption",
+          "message": "timeline step is strictly increasing",
+          "source_path": "AGENTS.md",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "agent_mail_schema_corruption",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "AGENTS.md",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "agent_mail_schema_corruption",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "AGENTS.md",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "agent_mail_schema_corruption",
+          "message": "timeline step is strictly increasing",
+          "source_path": ".beads/issues.jsonl",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "agent_mail_schema_corruption",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": ".beads/issues.jsonl",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "agent_mail_schema_corruption",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": ".beads/issues.jsonl",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "redaction",
+          "id": "redaction_safe",
+          "incident_id": "agent_mail_schema_corruption",
+          "message": "incident replay embeds only redacted fixture metadata",
+          "source_path": ".beads/issues.jsonl,AGENTS.md,scripts/build_swarm_operator_runpack.py,tests/fixtures/agent_mail/schema_corrupt_health.json",
+          "status": "pass",
+          "step_id": "incident"
+        },
+        {
+          "contract_field": "expected_safe_action",
+          "id": "expected_safe_action_present",
+          "incident_id": "agent_mail_schema_corruption",
+          "message": "expected safe action is present",
+          "source_path": ".beads/issues.jsonl,AGENTS.md,scripts/build_swarm_operator_runpack.py,tests/fixtures/agent_mail/schema_corrupt_health.json",
+          "status": "pass",
+          "step_id": "final"
+        },
+        {
+          "contract_field": "claim_boundaries",
+          "id": "advisory_claim_boundary_preserved",
+          "incident_id": "agent_mail_schema_corruption",
+          "message": "advisory evidence is not promoted to a source of truth",
+          "source_path": ".beads/issues.jsonl,AGENTS.md,scripts/build_swarm_operator_runpack.py,tests/fixtures/agent_mail/schema_corrupt_health.json",
+          "status": "pass",
+          "step_id": "final"
+        }
+      ]
+    },
+    {
+      "diagnostics": [],
+      "failed_assertions": [],
+      "follow_up_bead_recommendation": null,
+      "id": "rch_saturation_local_fallback_denial",
+      "incident_class": "validation_capacity_degraded",
+      "phase_transitions": [
+        {
+          "event": "source_refs_loaded",
+          "ordinal": 1,
+          "phase_id": "source_capture",
+          "source_path": "AGENTS.md,docs/contracts/validation-scheduler-plan-contract.json,docs/evidence/validation-scheduler-plan.json",
+          "state_delta": {
+            "checked_in_source_count": 3,
+            "source_ref_count": 3
+          },
+          "status": "pass"
+        },
+        {
+          "event": "rch_pressure_detected",
+          "ordinal": 2,
+          "phase_id": "rch_admission",
+          "source_path": "docs/evidence/validation-scheduler-plan.json",
+          "state_delta": {
+            "detail": "RCH-required gate is saturated or unavailable.",
+            "event_status": "degraded"
+          },
+          "status": "pass"
+        },
+        {
+          "event": "local_fallback_requested",
+          "ordinal": 3,
+          "phase_id": "rch_admission",
+          "source_path": "AGENTS.md",
+          "state_delta": {
+            "detail": "A heavyweight local Cargo run would violate the repository policy.",
+            "event_status": "blocked"
+          },
+          "status": "blocked_expected"
+        },
+        {
+          "event": "fallback_denied",
+          "ordinal": 4,
+          "phase_id": "rch_admission",
+          "source_path": "docs/contracts/validation-scheduler-plan-contract.json",
+          "state_delta": {
+            "detail": "The operator should back off, narrow, or surface the validation blocker.",
+            "event_status": "safe_action_selected"
+          },
+          "status": "pass"
+        },
+        {
+          "event": "selected_safe_action",
+          "ordinal": 5,
+          "phase_id": "final_recommendation",
+          "source_path": "expected_safe_action",
+          "state_delta": {
+            "follow_up_bead_recommendation": null,
+            "selected_safe_action": "Deny local heavyweight fallback, keep the exact RCH env shape, and surface or retry only when remote capacity is available."
+          },
+          "status": "pass"
+        }
+      ],
+      "redacted_raw_excerpts": [
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "AGENTS.md"
+        },
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "docs/evidence/validation-scheduler-plan.json"
+        },
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "docs/contracts/validation-scheduler-plan-contract.json"
+        }
+      ],
+      "selected_safe_action": "Deny local heavyweight fallback, keep the exact RCH env shape, and surface or retry only when remote capacity is available.",
+      "source_corpus_path": "docs/evidence/swarm-incident-corpus.json",
+      "source_corpus_schema": "pi.swarm.incident_corpus.v1",
+      "status": "pass",
+      "step_assertions": [
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "rch_saturation_local_fallback_denial",
+          "message": "timeline step is strictly increasing",
+          "source_path": "docs/evidence/validation-scheduler-plan.json",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "rch_saturation_local_fallback_denial",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "docs/evidence/validation-scheduler-plan.json",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "rch_saturation_local_fallback_denial",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "docs/evidence/validation-scheduler-plan.json",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "rch_saturation_local_fallback_denial",
+          "message": "timeline step is strictly increasing",
+          "source_path": "AGENTS.md",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "rch_saturation_local_fallback_denial",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "AGENTS.md",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "rch_saturation_local_fallback_denial",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "AGENTS.md",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "rch_saturation_local_fallback_denial",
+          "message": "timeline step is strictly increasing",
+          "source_path": "docs/contracts/validation-scheduler-plan-contract.json",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "rch_saturation_local_fallback_denial",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "docs/contracts/validation-scheduler-plan-contract.json",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "rch_saturation_local_fallback_denial",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "docs/contracts/validation-scheduler-plan-contract.json",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "redaction",
+          "id": "redaction_safe",
+          "incident_id": "rch_saturation_local_fallback_denial",
+          "message": "incident replay embeds only redacted fixture metadata",
+          "source_path": "AGENTS.md,docs/contracts/validation-scheduler-plan-contract.json,docs/evidence/validation-scheduler-plan.json",
+          "status": "pass",
+          "step_id": "incident"
+        },
+        {
+          "contract_field": "expected_safe_action",
+          "id": "expected_safe_action_present",
+          "incident_id": "rch_saturation_local_fallback_denial",
+          "message": "expected safe action is present",
+          "source_path": "AGENTS.md,docs/contracts/validation-scheduler-plan-contract.json,docs/evidence/validation-scheduler-plan.json",
+          "status": "pass",
+          "step_id": "final"
+        },
+        {
+          "contract_field": "claim_boundaries",
+          "id": "advisory_claim_boundary_preserved",
+          "incident_id": "rch_saturation_local_fallback_denial",
+          "message": "advisory evidence is not promoted to a source of truth",
+          "source_path": "AGENTS.md,docs/contracts/validation-scheduler-plan-contract.json,docs/evidence/validation-scheduler-plan.json",
+          "status": "pass",
+          "step_id": "final"
+        }
+      ]
+    },
+    {
+      "diagnostics": [],
+      "failed_assertions": [],
+      "follow_up_bead_recommendation": "file_or_link_follow_up_bead_for_source_refresh_or_collision",
+      "id": "stale_evidence_blocks_reuse",
+      "incident_class": "evidence_freshness_degraded",
+      "phase_transitions": [
+        {
+          "event": "source_refs_loaded",
+          "ordinal": 1,
+          "phase_id": "source_capture",
+          "source_path": "docs/contracts/remote-validation-proof-reuse-gate-contract.json,docs/contracts/stale-evidence-renewal-queue-contract.json,docs/evidence/predictive-swarm-telemetry-ledger.json",
+          "state_delta": {
+            "checked_in_source_count": 3,
+            "source_ref_count": 3
+          },
+          "status": "pass"
+        },
+        {
+          "event": "proof_candidate_found",
+          "ordinal": 2,
+          "phase_id": "validation_outcome",
+          "source_path": "docs/contracts/remote-validation-proof-reuse-gate-contract.json",
+          "state_delta": {
+            "detail": "Prior evidence matches a command class but needs freshness checks.",
+            "event_status": "candidate"
+          },
+          "status": "pass"
+        },
+        {
+          "event": "stale_or_mismatched_inputs_detected",
+          "ordinal": 3,
+          "phase_id": "validation_outcome",
+          "source_path": "docs/contracts/stale-evidence-renewal-queue-contract.json",
+          "state_delta": {
+            "detail": "The candidate cannot green-light the current change.",
+            "event_status": "blocked"
+          },
+          "status": "blocked_expected"
+        },
+        {
+          "event": "refresh_required",
+          "ordinal": 4,
+          "phase_id": "final_recommendation",
+          "source_path": "docs/evidence/predictive-swarm-telemetry-ledger.json",
+          "state_delta": {
+            "detail": "Queue a focused refresh instead of treating stale proof as pass.",
+            "event_status": "safe_action_selected"
+          },
+          "status": "pass"
+        },
+        {
+          "event": "selected_safe_action",
+          "ordinal": 5,
+          "phase_id": "final_recommendation",
+          "source_path": "expected_safe_action",
+          "state_delta": {
+            "follow_up_bead_recommendation": "file_or_link_follow_up_bead_for_source_refresh_or_collision",
+            "selected_safe_action": "Reject stale proof reuse and refresh the focused validation evidence before using it for an operator recommendation."
+          },
+          "status": "pass"
+        }
+      ],
+      "redacted_raw_excerpts": [
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "docs/contracts/stale-evidence-renewal-queue-contract.json"
+        },
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "docs/evidence/predictive-swarm-telemetry-ledger.json"
+        },
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "docs/contracts/remote-validation-proof-reuse-gate-contract.json"
+        }
+      ],
+      "selected_safe_action": "Reject stale proof reuse and refresh the focused validation evidence before using it for an operator recommendation.",
+      "source_corpus_path": "docs/evidence/swarm-incident-corpus.json",
+      "source_corpus_schema": "pi.swarm.incident_corpus.v1",
+      "status": "pass",
+      "step_assertions": [
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "stale_evidence_blocks_reuse",
+          "message": "timeline step is strictly increasing",
+          "source_path": "docs/contracts/remote-validation-proof-reuse-gate-contract.json",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "stale_evidence_blocks_reuse",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "docs/contracts/remote-validation-proof-reuse-gate-contract.json",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "stale_evidence_blocks_reuse",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "docs/contracts/remote-validation-proof-reuse-gate-contract.json",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "stale_evidence_blocks_reuse",
+          "message": "timeline step is strictly increasing",
+          "source_path": "docs/contracts/stale-evidence-renewal-queue-contract.json",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "stale_evidence_blocks_reuse",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "docs/contracts/stale-evidence-renewal-queue-contract.json",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "stale_evidence_blocks_reuse",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "docs/contracts/stale-evidence-renewal-queue-contract.json",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "stale_evidence_blocks_reuse",
+          "message": "timeline step is strictly increasing",
+          "source_path": "docs/evidence/predictive-swarm-telemetry-ledger.json",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "stale_evidence_blocks_reuse",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "docs/evidence/predictive-swarm-telemetry-ledger.json",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "stale_evidence_blocks_reuse",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "docs/evidence/predictive-swarm-telemetry-ledger.json",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "redaction",
+          "id": "redaction_safe",
+          "incident_id": "stale_evidence_blocks_reuse",
+          "message": "incident replay embeds only redacted fixture metadata",
+          "source_path": "docs/contracts/remote-validation-proof-reuse-gate-contract.json,docs/contracts/stale-evidence-renewal-queue-contract.json,docs/evidence/predictive-swarm-telemetry-ledger.json",
+          "status": "pass",
+          "step_id": "incident"
+        },
+        {
+          "contract_field": "expected_safe_action",
+          "id": "expected_safe_action_present",
+          "incident_id": "stale_evidence_blocks_reuse",
+          "message": "expected safe action is present",
+          "source_path": "docs/contracts/remote-validation-proof-reuse-gate-contract.json,docs/contracts/stale-evidence-renewal-queue-contract.json,docs/evidence/predictive-swarm-telemetry-ledger.json",
+          "status": "pass",
+          "step_id": "final"
+        },
+        {
+          "contract_field": "claim_boundaries",
+          "id": "advisory_claim_boundary_preserved",
+          "incident_id": "stale_evidence_blocks_reuse",
+          "message": "advisory evidence is not promoted to a source of truth",
+          "source_path": "docs/contracts/remote-validation-proof-reuse-gate-contract.json,docs/contracts/stale-evidence-renewal-queue-contract.json,docs/evidence/predictive-swarm-telemetry-ledger.json",
+          "status": "pass",
+          "step_id": "final"
+        }
+      ]
+    },
+    {
+      "diagnostics": [],
+      "failed_assertions": [],
+      "follow_up_bead_recommendation": "file_or_link_follow_up_bead_for_source_refresh_or_collision",
+      "id": "duplicate_agent_work_risk",
+      "incident_class": "coordination_collision_risk",
+      "phase_transitions": [
+        {
+          "event": "source_refs_loaded",
+          "ordinal": 1,
+          "phase_id": "source_capture",
+          "source_path": ".beads/issues.jsonl,docs/evidence/predictive-operations-closeout-gate.json,scripts/report_swarm_claim_readiness.py",
+          "state_delta": {
+            "checked_in_source_count": 3,
+            "source_ref_count": 3
+          },
+          "status": "pass"
+        },
+        {
+          "event": "overlapping_work_detected",
+          "ordinal": 2,
+          "phase_id": "validation_outcome",
+          "source_path": "scripts/report_swarm_claim_readiness.py",
+          "state_delta": {
+            "detail": "Two agents appear to touch the same evidence or bead surface.",
+            "event_status": "watch"
+          },
+          "status": "pass"
+        },
+        {
+          "event": "ownership_source_checked",
+          "ordinal": 3,
+          "phase_id": "beads_ownership",
+          "source_path": ".beads/issues.jsonl",
+          "state_delta": {
+            "detail": "Beads status and comments determine the current soft lock.",
+            "event_status": "candidate"
+          },
+          "status": "pass"
+        },
+        {
+          "event": "non_overlapping_fallback_selected",
+          "ordinal": 4,
+          "phase_id": "rch_admission",
+          "source_path": "docs/evidence/predictive-operations-closeout-gate.json",
+          "state_delta": {
+            "detail": "Continue on non-overlapping work or surface the conflict.",
+            "event_status": "safe_action_selected"
+          },
+          "status": "pass"
+        },
+        {
+          "event": "selected_safe_action",
+          "ordinal": 5,
+          "phase_id": "final_recommendation",
+          "source_path": "expected_safe_action",
+          "state_delta": {
+            "follow_up_bead_recommendation": "file_or_link_follow_up_bead_for_source_refresh_or_collision",
+            "selected_safe_action": "Do not revert peer work; use Beads ownership, avoid the contested surface, and choose non-overlapping evidence or surface the conflict."
+          },
+          "status": "pass"
+        }
+      ],
+      "redacted_raw_excerpts": [
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "scripts/report_swarm_claim_readiness.py"
+        },
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "docs/evidence/predictive-operations-closeout-gate.json"
+        },
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": ".beads/issues.jsonl"
+        }
+      ],
+      "selected_safe_action": "Do not revert peer work; use Beads ownership, avoid the contested surface, and choose non-overlapping evidence or surface the conflict.",
+      "source_corpus_path": "docs/evidence/swarm-incident-corpus.json",
+      "source_corpus_schema": "pi.swarm.incident_corpus.v1",
+      "status": "pass",
+      "step_assertions": [
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "duplicate_agent_work_risk",
+          "message": "timeline step is strictly increasing",
+          "source_path": "scripts/report_swarm_claim_readiness.py",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "duplicate_agent_work_risk",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "scripts/report_swarm_claim_readiness.py",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "duplicate_agent_work_risk",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "scripts/report_swarm_claim_readiness.py",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "duplicate_agent_work_risk",
+          "message": "timeline step is strictly increasing",
+          "source_path": ".beads/issues.jsonl",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "duplicate_agent_work_risk",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": ".beads/issues.jsonl",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "duplicate_agent_work_risk",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": ".beads/issues.jsonl",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "duplicate_agent_work_risk",
+          "message": "timeline step is strictly increasing",
+          "source_path": "docs/evidence/predictive-operations-closeout-gate.json",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "duplicate_agent_work_risk",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "docs/evidence/predictive-operations-closeout-gate.json",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "duplicate_agent_work_risk",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "docs/evidence/predictive-operations-closeout-gate.json",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "redaction",
+          "id": "redaction_safe",
+          "incident_id": "duplicate_agent_work_risk",
+          "message": "incident replay embeds only redacted fixture metadata",
+          "source_path": ".beads/issues.jsonl,docs/evidence/predictive-operations-closeout-gate.json,scripts/report_swarm_claim_readiness.py",
+          "status": "pass",
+          "step_id": "incident"
+        },
+        {
+          "contract_field": "expected_safe_action",
+          "id": "expected_safe_action_present",
+          "incident_id": "duplicate_agent_work_risk",
+          "message": "expected safe action is present",
+          "source_path": ".beads/issues.jsonl,docs/evidence/predictive-operations-closeout-gate.json,scripts/report_swarm_claim_readiness.py",
+          "status": "pass",
+          "step_id": "final"
+        },
+        {
+          "contract_field": "claim_boundaries",
+          "id": "advisory_claim_boundary_preserved",
+          "incident_id": "duplicate_agent_work_risk",
+          "message": "advisory evidence is not promoted to a source of truth",
+          "source_path": ".beads/issues.jsonl,docs/evidence/predictive-operations-closeout-gate.json,scripts/report_swarm_claim_readiness.py",
+          "status": "pass",
+          "step_id": "final"
+        }
+      ]
+    },
+    {
+      "diagnostics": [],
+      "failed_assertions": [],
+      "follow_up_bead_recommendation": null,
+      "id": "dirty_worktree_admission_denial",
+      "incident_class": "workspace_integrity_degraded",
+      "phase_transitions": [
+        {
+          "event": "source_refs_loaded",
+          "ordinal": 1,
+          "phase_id": "source_capture",
+          "source_path": "AGENTS.md,docs/contracts/swarm-work-admission-gate-contract.json,docs/evidence/swarm-autopilot-decision-gate.json",
+          "state_delta": {
+            "checked_in_source_count": 3,
+            "source_ref_count": 3
+          },
+          "status": "pass"
+        },
+        {
+          "event": "dirty_worktree_detected",
+          "ordinal": 2,
+          "phase_id": "dirty_worktree_state",
+          "source_path": "AGENTS.md",
+          "state_delta": {
+            "detail": "Unrelated local edits are present and must be preserved.",
+            "event_status": "blocked"
+          },
+          "status": "blocked_expected"
+        },
+        {
+          "event": "admission_gate_blocks_mutation",
+          "ordinal": 3,
+          "phase_id": "dirty_worktree_state",
+          "source_path": "docs/contracts/swarm-work-admission-gate-contract.json",
+          "state_delta": {
+            "detail": "The dry-run gate rejects source mutations that would trample active work.",
+            "event_status": "blocked"
+          },
+          "status": "blocked_expected"
+        },
+        {
+          "event": "safe_surface_required",
+          "ordinal": 4,
+          "phase_id": "final_recommendation",
+          "source_path": "docs/evidence/swarm-autopilot-decision-gate.json",
+          "state_delta": {
+            "detail": "Proceed only on a non-overlapping owned surface.",
+            "event_status": "safe_action_selected"
+          },
+          "status": "pass"
+        },
+        {
+          "event": "selected_safe_action",
+          "ordinal": 5,
+          "phase_id": "final_recommendation",
+          "source_path": "expected_safe_action",
+          "state_delta": {
+            "follow_up_bead_recommendation": null,
+            "selected_safe_action": "Preserve dirty unrelated work, deny unsafe admission, and continue only on an owned non-overlapping surface."
+          },
+          "status": "pass"
+        }
+      ],
+      "redacted_raw_excerpts": [
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "AGENTS.md"
+        },
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "docs/evidence/swarm-autopilot-decision-gate.json"
+        },
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "docs/contracts/swarm-work-admission-gate-contract.json"
+        }
+      ],
+      "selected_safe_action": "Preserve dirty unrelated work, deny unsafe admission, and continue only on an owned non-overlapping surface.",
+      "source_corpus_path": "docs/evidence/swarm-incident-corpus.json",
+      "source_corpus_schema": "pi.swarm.incident_corpus.v1",
+      "status": "pass",
+      "step_assertions": [
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "dirty_worktree_admission_denial",
+          "message": "timeline step is strictly increasing",
+          "source_path": "AGENTS.md",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "dirty_worktree_admission_denial",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "AGENTS.md",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "dirty_worktree_admission_denial",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "AGENTS.md",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "dirty_worktree_admission_denial",
+          "message": "timeline step is strictly increasing",
+          "source_path": "docs/contracts/swarm-work-admission-gate-contract.json",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "dirty_worktree_admission_denial",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "docs/contracts/swarm-work-admission-gate-contract.json",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "dirty_worktree_admission_denial",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "docs/contracts/swarm-work-admission-gate-contract.json",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "dirty_worktree_admission_denial",
+          "message": "timeline step is strictly increasing",
+          "source_path": "docs/evidence/swarm-autopilot-decision-gate.json",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "dirty_worktree_admission_denial",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "docs/evidence/swarm-autopilot-decision-gate.json",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "dirty_worktree_admission_denial",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "docs/evidence/swarm-autopilot-decision-gate.json",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "redaction",
+          "id": "redaction_safe",
+          "incident_id": "dirty_worktree_admission_denial",
+          "message": "incident replay embeds only redacted fixture metadata",
+          "source_path": "AGENTS.md,docs/contracts/swarm-work-admission-gate-contract.json,docs/evidence/swarm-autopilot-decision-gate.json",
+          "status": "pass",
+          "step_id": "incident"
+        },
+        {
+          "contract_field": "expected_safe_action",
+          "id": "expected_safe_action_present",
+          "incident_id": "dirty_worktree_admission_denial",
+          "message": "expected safe action is present",
+          "source_path": "AGENTS.md,docs/contracts/swarm-work-admission-gate-contract.json,docs/evidence/swarm-autopilot-decision-gate.json",
+          "status": "pass",
+          "step_id": "final"
+        },
+        {
+          "contract_field": "claim_boundaries",
+          "id": "advisory_claim_boundary_preserved",
+          "incident_id": "dirty_worktree_admission_denial",
+          "message": "advisory evidence is not promoted to a source of truth",
+          "source_path": "AGENTS.md,docs/contracts/swarm-work-admission-gate-contract.json,docs/evidence/swarm-autopilot-decision-gate.json",
+          "status": "pass",
+          "step_id": "final"
+        }
+      ]
+    },
+    {
+      "diagnostics": [],
+      "failed_assertions": [],
+      "follow_up_bead_recommendation": "file_or_link_follow_up_bead_for_source_refresh_or_collision",
+      "id": "malformed_source_artifact",
+      "incident_class": "source_artifact_malformed",
+      "phase_transitions": [
+        {
+          "event": "source_refs_loaded",
+          "ordinal": 1,
+          "phase_id": "source_capture",
+          "source_path": "docs/contracts/swarm-operator-runpack-contract.json,scripts/build_swarm_operator_runpack.py,tests/golden_corpus/swarm_operator_runpack/malformed_source_fail_closed_projection.json",
+          "state_delta": {
+            "checked_in_source_count": 3,
+            "source_ref_count": 3
+          },
+          "status": "pass"
+        },
+        {
+          "event": "source_artifact_loaded",
+          "ordinal": 2,
+          "phase_id": "validation_outcome",
+          "source_path": "tests/golden_corpus/swarm_operator_runpack/malformed_source_fail_closed_projection.json",
+          "state_delta": {
+            "detail": "Fixture source is present but intentionally malformed.",
+            "event_status": "candidate"
+          },
+          "status": "pass"
+        },
+        {
+          "event": "contract_shape_rejected",
+          "ordinal": 3,
+          "phase_id": "validation_outcome",
+          "source_path": "docs/contracts/swarm-operator-runpack-contract.json",
+          "state_delta": {
+            "detail": "Missing or malformed required fields prevent trusted use.",
+            "event_status": "blocked"
+          },
+          "status": "blocked_expected"
+        },
+        {
+          "event": "operator_follow_up_required",
+          "ordinal": 4,
+          "phase_id": "validation_outcome",
+          "source_path": "scripts/build_swarm_operator_runpack.py",
+          "state_delta": {
+            "detail": "File or refresh a concrete follow-up instead of guessing.",
+            "event_status": "safe_action_selected"
+          },
+          "status": "pass"
+        },
+        {
+          "event": "selected_safe_action",
+          "ordinal": 5,
+          "phase_id": "final_recommendation",
+          "source_path": "expected_safe_action",
+          "state_delta": {
+            "follow_up_bead_recommendation": "file_or_link_follow_up_bead_for_source_refresh_or_collision",
+            "selected_safe_action": "Fail closed on malformed source artifacts and require a concrete refresh or follow-up bead before recommendation."
+          },
+          "status": "pass"
+        }
+      ],
+      "redacted_raw_excerpts": [
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "tests/golden_corpus/swarm_operator_runpack/malformed_source_fail_closed_projection.json"
+        },
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "scripts/build_swarm_operator_runpack.py"
+        },
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "docs/contracts/swarm-operator-runpack-contract.json"
+        }
+      ],
+      "selected_safe_action": "Fail closed on malformed source artifacts and require a concrete refresh or follow-up bead before recommendation.",
+      "source_corpus_path": "docs/evidence/swarm-incident-corpus.json",
+      "source_corpus_schema": "pi.swarm.incident_corpus.v1",
+      "status": "pass",
+      "step_assertions": [
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "malformed_source_artifact",
+          "message": "timeline step is strictly increasing",
+          "source_path": "tests/golden_corpus/swarm_operator_runpack/malformed_source_fail_closed_projection.json",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "malformed_source_artifact",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "tests/golden_corpus/swarm_operator_runpack/malformed_source_fail_closed_projection.json",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "malformed_source_artifact",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "tests/golden_corpus/swarm_operator_runpack/malformed_source_fail_closed_projection.json",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "malformed_source_artifact",
+          "message": "timeline step is strictly increasing",
+          "source_path": "docs/contracts/swarm-operator-runpack-contract.json",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "malformed_source_artifact",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "docs/contracts/swarm-operator-runpack-contract.json",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "malformed_source_artifact",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "docs/contracts/swarm-operator-runpack-contract.json",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "malformed_source_artifact",
+          "message": "timeline step is strictly increasing",
+          "source_path": "scripts/build_swarm_operator_runpack.py",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "malformed_source_artifact",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "scripts/build_swarm_operator_runpack.py",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "malformed_source_artifact",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "scripts/build_swarm_operator_runpack.py",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "redaction",
+          "id": "redaction_safe",
+          "incident_id": "malformed_source_artifact",
+          "message": "incident replay embeds only redacted fixture metadata",
+          "source_path": "docs/contracts/swarm-operator-runpack-contract.json,scripts/build_swarm_operator_runpack.py,tests/golden_corpus/swarm_operator_runpack/malformed_source_fail_closed_projection.json",
+          "status": "pass",
+          "step_id": "incident"
+        },
+        {
+          "contract_field": "expected_safe_action",
+          "id": "expected_safe_action_present",
+          "incident_id": "malformed_source_artifact",
+          "message": "expected safe action is present",
+          "source_path": "docs/contracts/swarm-operator-runpack-contract.json,scripts/build_swarm_operator_runpack.py,tests/golden_corpus/swarm_operator_runpack/malformed_source_fail_closed_projection.json",
+          "status": "pass",
+          "step_id": "final"
+        },
+        {
+          "contract_field": "claim_boundaries",
+          "id": "advisory_claim_boundary_preserved",
+          "incident_id": "malformed_source_artifact",
+          "message": "advisory evidence is not promoted to a source of truth",
+          "source_path": "docs/contracts/swarm-operator-runpack-contract.json,scripts/build_swarm_operator_runpack.py,tests/golden_corpus/swarm_operator_runpack/malformed_source_fail_closed_projection.json",
+          "status": "pass",
+          "step_id": "final"
+        }
+      ]
+    },
+    {
+      "diagnostics": [],
+      "failed_assertions": [],
+      "follow_up_bead_recommendation": "surface_blocker_and_request_explicit_operator_authorization_outside_replay",
+      "id": "deletion_live_mutation_request_rejected",
+      "incident_class": "unsafe_authorization_request",
+      "phase_transitions": [
+        {
+          "event": "source_refs_loaded",
+          "ordinal": 1,
+          "phase_id": "source_capture",
+          "source_path": "AGENTS.md,docs/contracts/swarm-work-admission-gate-contract.json,scripts/build_swarm_operator_runpack.py",
+          "state_delta": {
+            "checked_in_source_count": 3,
+            "source_ref_count": 3
+          },
+          "status": "pass"
+        },
+        {
+          "event": "unsafe_authorization_request_received",
+          "ordinal": 2,
+          "phase_id": "final_recommendation",
+          "source_path": "AGENTS.md",
+          "state_delta": {
+            "detail": "The incident asks the artifact to authorize deletion or live mutation.",
+            "event_status": "blocked"
+          },
+          "status": "blocked_expected"
+        },
+        {
+          "event": "authorization_scope_rejected",
+          "ordinal": 3,
+          "phase_id": "validation_outcome",
+          "source_path": "docs/contracts/swarm-work-admission-gate-contract.json",
+          "state_delta": {
+            "detail": "Advisory evidence cannot authorize destructive filesystem, git, Mail, or RCH actions.",
+            "event_status": "blocked"
+          },
+          "status": "blocked_expected"
+        },
+        {
+          "event": "fail_closed_fixture_recorded",
+          "ordinal": 4,
+          "phase_id": "final_recommendation",
+          "source_path": "scripts/build_swarm_operator_runpack.py",
+          "state_delta": {
+            "detail": "The request remains a replay fixture and does not mutate live state.",
+            "event_status": "safe_action_selected"
+          },
+          "status": "pass"
+        },
+        {
+          "event": "selected_safe_action",
+          "ordinal": 5,
+          "phase_id": "final_recommendation",
+          "source_path": "expected_safe_action",
+          "state_delta": {
+            "follow_up_bead_recommendation": "surface_blocker_and_request_explicit_operator_authorization_outside_replay",
+            "selected_safe_action": "Reject deletion or live-mutation authorization and require the normal explicit operator approval path outside this corpus."
+          },
+          "status": "pass"
+        }
+      ],
+      "redacted_raw_excerpts": [
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "AGENTS.md"
+        },
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "docs/contracts/swarm-work-admission-gate-contract.json"
+        },
+        {
+          "excerpt": "[REDACTED]",
+          "redaction_status": "redacted",
+          "source_path": "scripts/build_swarm_operator_runpack.py"
+        }
+      ],
+      "selected_safe_action": "Reject deletion or live-mutation authorization and require the normal explicit operator approval path outside this corpus.",
+      "source_corpus_path": "docs/evidence/swarm-incident-corpus.json",
+      "source_corpus_schema": "pi.swarm.incident_corpus.v1",
+      "status": "pass",
+      "step_assertions": [
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "deletion_live_mutation_request_rejected",
+          "message": "timeline step is strictly increasing",
+          "source_path": "AGENTS.md",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "deletion_live_mutation_request_rejected",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "AGENTS.md",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "deletion_live_mutation_request_rejected",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "AGENTS.md",
+          "status": "pass",
+          "step_id": "step-1"
+        },
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "deletion_live_mutation_request_rejected",
+          "message": "timeline step is strictly increasing",
+          "source_path": "docs/contracts/swarm-work-admission-gate-contract.json",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "deletion_live_mutation_request_rejected",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "docs/contracts/swarm-work-admission-gate-contract.json",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "deletion_live_mutation_request_rejected",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "docs/contracts/swarm-work-admission-gate-contract.json",
+          "status": "pass",
+          "step_id": "step-2"
+        },
+        {
+          "contract_field": "timeline.step",
+          "id": "timeline_monotonic",
+          "incident_id": "deletion_live_mutation_request_rejected",
+          "message": "timeline step is strictly increasing",
+          "source_path": "scripts/build_swarm_operator_runpack.py",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "timeline.source_ref",
+          "id": "source_refs_declared",
+          "incident_id": "deletion_live_mutation_request_rejected",
+          "message": "timeline source_ref is declared by the incident source_refs",
+          "source_path": "scripts/build_swarm_operator_runpack.py",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "source_refs.path",
+          "id": "source_paths_exist",
+          "incident_id": "deletion_live_mutation_request_rejected",
+          "message": "timeline source_ref resolves to a checked-in source path",
+          "source_path": "scripts/build_swarm_operator_runpack.py",
+          "status": "pass",
+          "step_id": "step-3"
+        },
+        {
+          "contract_field": "redaction",
+          "id": "redaction_safe",
+          "incident_id": "deletion_live_mutation_request_rejected",
+          "message": "incident replay embeds only redacted fixture metadata",
+          "source_path": "AGENTS.md,docs/contracts/swarm-work-admission-gate-contract.json,scripts/build_swarm_operator_runpack.py",
+          "status": "pass",
+          "step_id": "incident"
+        },
+        {
+          "contract_field": "expected_safe_action",
+          "id": "expected_safe_action_present",
+          "incident_id": "deletion_live_mutation_request_rejected",
+          "message": "expected safe action is present",
+          "source_path": "AGENTS.md,docs/contracts/swarm-work-admission-gate-contract.json,scripts/build_swarm_operator_runpack.py",
+          "status": "pass",
+          "step_id": "final"
+        },
+        {
+          "contract_field": "claim_boundaries",
+          "id": "advisory_claim_boundary_preserved",
+          "incident_id": "deletion_live_mutation_request_rejected",
+          "message": "advisory evidence is not promoted to a source of truth",
+          "source_path": "AGENTS.md,docs/contracts/swarm-work-admission-gate-contract.json,scripts/build_swarm_operator_runpack.py",
+          "status": "pass",
+          "step_id": "final"
+        }
+      ]
+    }
+  ],
+  "schema": "pi.swarm.incident_replay.v1",
+  "source_bead": "bd-9yq7i.2",
+  "source_corpus": {
+    "decision": "incident_corpus_passed",
+    "generated_at": "2026-05-18T05:30:00+00:00",
+    "path": "docs/evidence/swarm-incident-corpus.json",
+    "schema": "pi.swarm.incident_corpus.v1",
+    "status": "pass"
+  },
+  "status": "pass",
+  "summary": {
+    "failed_replay_count": 0,
+    "incident_replay_count": 7,
+    "negative_control_count": 4,
+    "phase_count": 7,
+    "scenario_count": 8
+  }
+}

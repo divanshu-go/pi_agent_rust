@@ -1,0 +1,158 @@
+{
+  "schema": "pi.swarm.incident_replay_contract.v1",
+  "evidence_schema": "pi.swarm.incident_replay.v1",
+  "purpose": "read_only_incident_replay_harness_not_source_of_truth_or_runtime_mutation",
+  "description": "Fail-closed contract for deterministic replay of the checked-in swarm incident corpus into ordered phases, step assertions, safe operator decisions, and redacted evidence outputs.",
+  "required_top_level_keys": [
+    "schema",
+    "generated_at",
+    "status",
+    "purpose",
+    "source_bead",
+    "source_corpus",
+    "required_phase_ids",
+    "phase_coverage",
+    "missing_phase_ids",
+    "required_scenario_ids",
+    "missing_scenario_ids",
+    "scenario_results",
+    "failed_replays",
+    "negative_controls",
+    "failed_negative_controls",
+    "claim_boundaries",
+    "summary",
+    "operator_next_actions",
+    "decision"
+  ],
+  "allowed_statuses": [
+    "pass",
+    "fail"
+  ],
+  "allowed_transition_statuses": [
+    "pass",
+    "blocked_expected"
+  ],
+  "required_phase_ids": [
+    "source_capture",
+    "agent_mail_degradation",
+    "rch_admission",
+    "beads_ownership",
+    "dirty_worktree_state",
+    "validation_outcome",
+    "final_recommendation"
+  ],
+  "required_scenario_ids": [
+    "healthy_baseline",
+    "agent_mail_schema_corruption",
+    "rch_saturation_local_fallback_denial",
+    "stale_evidence_blocks_reuse",
+    "duplicate_agent_work_risk",
+    "dirty_worktree_admission_denial",
+    "malformed_source_artifact",
+    "deletion_live_mutation_request_rejected"
+  ],
+  "required_phase_transition_keys": [
+    "ordinal",
+    "phase_id",
+    "event",
+    "status",
+    "source_path",
+    "state_delta"
+  ],
+  "required_step_assertion_keys": [
+    "id",
+    "incident_id",
+    "step_id",
+    "source_path",
+    "contract_field",
+    "status",
+    "message"
+  ],
+  "required_assertion_ids": [
+    "timeline_monotonic",
+    "source_refs_declared",
+    "source_paths_exist",
+    "redaction_safe",
+    "expected_safe_action_present",
+    "advisory_claim_boundary_preserved"
+  ],
+  "required_failure_diagnostic_fields": [
+    "incident_id",
+    "step_id",
+    "source_path",
+    "contract_field"
+  ],
+  "required_failure_diagnostic_fragments": [
+    "incident_id=",
+    "step_id=",
+    "source_path=",
+    "contract_field="
+  ],
+  "required_negative_control_ids": [
+    "out_of_order_events_fail_closed",
+    "missing_required_source_fails_closed",
+    "unredacted_sensitive_content_fails_closed",
+    "advisory_evidence_as_source_of_truth_fails_closed"
+  ],
+  "required_true_claim_boundary_flags": [
+    "operator_evidence_only",
+    "read_only"
+  ],
+  "required_false_claim_boundary_flags": [
+    "release_performance_claim_authorized",
+    "benchmark_or_capacity_claim_authorized",
+    "dropin_certification_claim_authorized",
+    "agent_mail_authority_authorized",
+    "rch_authority_authorized",
+    "beads_mutation_authorized",
+    "live_mutation_authorized",
+    "file_deletion_authorized"
+  ],
+  "must_requirements": [
+    {
+      "id": "SWARM-INCIDENT-REPLAY-MUST-001",
+      "description": "The replay harness consumes the checked-in incident corpus and emits deterministic healthy, degraded Agent Mail, saturated RCH, duplicate work, stale evidence, malformed source, dirty worktree, and deletion-request scenarios.",
+      "validated_by": [
+        "source_corpus",
+        "required_scenario_ids"
+      ]
+    },
+    {
+      "id": "SWARM-INCIDENT-REPLAY-MUST-002",
+      "description": "The replay reconstructs source capture, Agent Mail degradation, RCH admission, Beads ownership, dirty worktree state, validation outcome, and final recommendation phases.",
+      "validated_by": [
+        "required_phase_ids",
+        "phase_coverage"
+      ]
+    },
+    {
+      "id": "SWARM-INCIDENT-REPLAY-MUST-003",
+      "description": "Every replayed step has assertions with enough failure context for operators to identify incident id, step id, source path, and contract field.",
+      "validated_by": [
+        "required_step_assertion_keys",
+        "required_failure_diagnostic_fields",
+        "required_failure_diagnostic_fragments"
+      ]
+    },
+    {
+      "id": "SWARM-INCIDENT-REPLAY-MUST-004",
+      "description": "Negative controls fail closed for out-of-order events, missing required sources, unredacted sensitive content, and advisory evidence being treated as source of truth.",
+      "validated_by": [
+        "required_negative_control_ids"
+      ]
+    },
+    {
+      "id": "SWARM-INCIDENT-REPLAY-MUST-005",
+      "description": "The replay is read-only operator evidence and cannot authorize release performance, benchmark, drop-in, Agent Mail, RCH, Beads, file deletion, or live mutation claims.",
+      "validated_by": [
+        "required_true_claim_boundary_flags",
+        "required_false_claim_boundary_flags"
+      ]
+    }
+  ],
+  "claim_boundaries": [
+    "This contract authorizes deterministic read-only replay evidence only.",
+    "It does not authorize live Agent Mail writes, RCH job launches, Beads mutation, file deletion, git mutation, runtime policy mutation, release performance claims, capacity claims, or strict drop-in claims.",
+    "Replay output is advisory and cannot replace source systems or checked-in source artifacts."
+  ]
+}

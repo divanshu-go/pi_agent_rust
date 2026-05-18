@@ -2112,6 +2112,16 @@ artifact is `docs/evidence/swarm-incident-corpus.json`. The corpus is operator
 evidence only and does not replace release performance, drop-in certification,
 Agent Mail, RCH, Beads, git, source artifacts, or destructive-action authority.
 
+The swarm incident replay harness emits `pi.swarm.incident_replay.v1`. It
+consumes the checked-in incident corpus and replays healthy, degraded Agent Mail,
+saturated RCH, duplicate work, stale evidence, malformed source, dirty worktree,
+and deletion-request scenarios into ordered phases, per-step assertions,
+redacted excerpts, selected safe actions, and follow-up recommendations. It is
+governed by `docs/contracts/swarm-incident-replay-contract.json`; the current
+fixture artifact is `docs/evidence/swarm-incident-replay.json`. Replay output is
+read-only operator evidence and cannot replace source systems or authorize live
+Agent Mail, RCH, Beads, git, deletion, release, benchmark, or drop-in claims.
+
 For the full launch, throttling, recovery, and handoff workflow for large
 multi-agent runs, see [docs/swarm-operations-runbook.md](docs/swarm-operations-runbook.md).
 
