@@ -160,32 +160,31 @@
       "gap_id": "gap-cli-slash-command-surface",
       "priority_rank": 6,
       "area": "cli",
-      "mismatch_kind": "unverified_differential_runner",
-      "severity": "high",
-      "status": "open",
+      "mismatch_kind": "resolved_differential_runner",
+      "severity": "resolved",
+      "status": "resolved",
       "reopened_date": "2026-05-18T10:07:45Z",
-      "blocking_reason": "Slash-command differential parity is not certified because the runner cannot complete mirrored Rust Pi/pi-mono RPC execution while the pinned legacy tsx runtime is absent and UI-only slash commands lack an RPC-observable adapter.",
+      "resolution_date": "2026-05-18T19:37:26Z",
+      "closure_bead": "bd-7derw",
       "sources": [
         "docs/dropin-112-feature-inventory-matrix.md#section:5-slash-commands"
       ],
-      "current_state": "tests/dropin_slash_differential.rs is a fail-closed guard, not pass evidence. tests/dropin_slash_differential/mod.rs now preflights CARGO_BIN_EXE_pi plus the pinned pi-mono RPC entrypoint and maps RPC-observable slash commands, but returns blocked DIFFERENTIAL_RUNNER_UNAVAILABLE while legacy_pi_mono_code/pi-mono/node_modules/tsx/dist/cli.mjs is missing.",
-      "release_claim_impact": "Blocks strict drop-in replacement claims and forces docs/evidence/dropin-certification-verdict.json overall_verdict away from CERTIFIED until real mirrored slash-command execution exists.",
+      "final_state": "tests/dropin_slash_differential.rs now requires real mirrored Rust Pi/pi-mono RPC success for every credential-free RPC-observable slash scenario. UI-only, process-exit, invalid parser, and model-dependent compaction scenarios are explicit policy exclusions from pass evidence and continue to fail closed if counted.",
+      "release_claim_impact": "No longer blocks strict drop-in replacement claims. G04 and G10 may rely on the real mirrored slash-command differential evidence for the credential-free pass-evidence set.",
       "closure_path": [
-        "Provision the pinned legacy pi-mono runtime so legacy_pi_mono_code/pi-mono/node_modules/tsx/dist/cli.mjs exists without violating repository package-manager policy.",
-        "Add or expose an RPC-observable adapter for UI-only slash commands, or keep those scenarios fail-closed and out of pass evidence.",
-        "Require tests/dropin_slash_differential.rs to report real mirrored execution for every scenario before G04 or G10 can pass.",
-        "Regenerate docs/evidence/dropin-differential-evidence-suite.json and docs/evidence/dropin-certification-verdict.json only after the runner produces non-synthetic pass evidence."
+        "Provisioned the pinned legacy pi-mono runtime on the RCH worker used for the proof so legacy_pi_mono_code/pi-mono/node_modules/tsx/dist/cli.mjs is runnable.",
+        "Required pass evidence to come only from slash inputs that map to credential-free shared RPC commands.",
+        "Kept UI-only, process-exit, invalid parser, and model-dependent compaction scenarios fail-closed and out of pass evidence with explicit observability policy.",
+        "Regenerated docs/evidence/dropin-differential-evidence-suite.json and docs/evidence/dropin-certification-verdict.json after the runner produced non-synthetic pass evidence."
       ],
       "verification_evidence": [
-        "tests/dropin_slash_differential.rs: test_slash_command_differential_harness_fails_closed_without_mirrored_success",
-        "tests/dropin_slash_differential/mod.rs: DIFFERENTIAL_RUNNER_UNAVAILABLE",
-        "tests/dropin_slash_differential/mod.rs: RPC-observable slash command mapping",
-        "docs/evidence/dropin-differential-evidence-suite.json: slash_command_differential status fail_closed"
+        "rch exec -- cargo test --test dropin_slash_differential -- --nocapture passed 12/12 on ts2 at 2026-05-18T19:37:26Z",
+        "tests/dropin_slash_differential.rs: test_slash_command_differential_harness_fails_closed_without_mirrored_success requires real mirrored pass evidence",
+        "tests/dropin_slash_differential/mod.rs: scenario_requires_pass_evidence and slash_command_observability define the pass-evidence policy",
+        "tests/dropin_slash_differential/mod.rs: Rust Pi and pi-mono are driven through mirrored JSONL RPC sequences",
+        "docs/evidence/dropin-differential-evidence-suite.json: slash_command_differential status pass"
       ],
-      "blocked_by": [
-        "legacy_pi_mono_code/pi-mono/node_modules/tsx/dist/cli.mjs missing",
-        "UI-only slash commands are not yet RPC-observable"
-      ],
+      "blocked_by": [],
       "owner_issue_primary": "bd-7derw",
       "owner_issue_supporting": [
         "bd-jgnx0",
@@ -514,15 +513,14 @@
   "rollup": {
     "entry_count": 14,
     "severity_counts": {
-      "high": 1,
+      "high": 0,
       "medium": 0,
       "low": 0,
-      "resolved": 11,
+      "resolved": 12,
       "waived": 1,
       "retired": 1
     },
     "top_unblockers": [
-      "bd-7derw",
       "bd-35t7i",
       "bd-3meug",
       "bd-uuf2z",

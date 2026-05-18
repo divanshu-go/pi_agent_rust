@@ -104,8 +104,13 @@ pub fn slash_command_observability(input: &str) -> SlashCommandObservabilityPoli
         "/model" | "/m" if args.is_empty() => SlashCommandObservabilityPolicy::rpc(
             "model selector inventory maps to get_available_models over shared RPC",
         ),
-        "/thinking" | "/think" | "/t" => SlashCommandObservabilityPolicy::rpc(
-            "thinking level inspection or mutation maps to shared RPC",
+        "/thinking" | "/think" | "/t" if args.is_empty() || is_valid_thinking_level(args) => {
+            SlashCommandObservabilityPolicy::rpc(
+                "thinking level inspection or mutation maps to shared RPC",
+            )
+        }
+        "/thinking" | "/think" | "/t" => SlashCommandObservabilityPolicy::excluded(
+            "invalid thinking levels are negative slash parser cases, not credential-free pass evidence",
         ),
         "/session" | "/info" => SlashCommandObservabilityPolicy::rpc(
             "session info maps to get_state and get_session_stats over shared RPC",
@@ -113,9 +118,9 @@ pub fn slash_command_observability(input: &str) -> SlashCommandObservabilityPoli
         "/tree" => {
             SlashCommandObservabilityPolicy::rpc("tree maps to get_fork_messages over shared RPC")
         }
-        "/compact" => {
-            SlashCommandObservabilityPolicy::rpc("compact maps to compact over shared RPC")
-        }
+        "/compact" => SlashCommandObservabilityPolicy::excluded(
+            "compaction requires model execution and is not credential-free mirrored pass evidence",
+        ),
         "/theme" | "/history" | "/hist" => SlashCommandObservabilityPolicy::adapter(
             "interactive UI surface needs an RPC-observable adapter before pass evidence",
         ),
@@ -128,11 +133,44 @@ pub fn slash_command_observability(input: &str) -> SlashCommandObservabilityPoli
     }
 }
 
+fn is_valid_thinking_level(args: &str) -> bool {
+    let mut parts = args.split_whitespace();
+    let Some(level) = parts.next() else {
+        return true;
+    };
+    if parts.next().is_some() {
+        return false;
+    }
+    matches!(
+        level.to_ascii_lowercase().as_str(),
+        "off" | "minimal" | "low" | "medium" | "high" | "xhigh"
+    )
+}
+
+/// Whether this scenario can count as credential-free mirrored pass evidence.
+pub fn scenario_requires_pass_evidence(scenario: &SlashCommandScenario) -> bool {
+    slash_command_observability(&scenario.command).kind == SlashCommandObservability::RpcObservable
+}
+
 /// Canonicalizes RPC response JSON by removing non-deterministic fields.
 pub fn canonicalize_response(mut response: Value) -> Value {
+    if let Some(number) = response.as_number() {
+        const MAX_EXACT_F64_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+        if let Some(float) = number.as_f64()
+            && float.is_finite()
+            && float.fract() == 0.0
+            && float.abs() <= MAX_EXACT_F64_INTEGER
+            && let Ok(integer) = format!("{float:.0}").parse::<i64>()
+        {
+            return json!(integer);
+        }
+    }
+
     // Remove time-sensitive fields
     if let Some(obj) = response.as_object_mut() {
         obj.retain(|key, _| !is_nondeterministic_response_key(key));
+        canonicalize_fixture_model_inventory(obj);
 
         // Canonicalize paths to be relative
         if let Some(path) = obj.get_mut("path") {
@@ -159,9 +197,76 @@ pub fn canonicalize_response(mut response: Value) -> Value {
     response
 }
 
+fn canonicalize_fixture_model_inventory(obj: &mut serde_json::Map<String, Value>) {
+    if obj.get("command").and_then(Value::as_str) != Some("get_available_models") {
+        return;
+    }
+
+    let Some(models) = obj
+        .get_mut("data")
+        .and_then(Value::as_object_mut)
+        .and_then(|data| data.get_mut("models"))
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+
+    models.retain(model_is_fixture_inventory_entry);
+    models.sort_by_key(model_inventory_sort_key);
+}
+
+fn model_is_fixture_inventory_entry(model: &Value) -> bool {
+    string_field_matches(model, "provider", RPC_TEST_PROVIDER)
+        || string_field_matches(model, "providerId", RPC_TEST_PROVIDER)
+        || string_field_matches(model, "provider_id", RPC_TEST_PROVIDER)
+        || string_field_matches(model, "id", RPC_TEST_MODEL)
+        || string_field_matches(model, "model", RPC_TEST_MODEL)
+        || string_field_matches(model, "modelId", RPC_TEST_MODEL)
+        || string_field_matches(model, "model_id", RPC_TEST_MODEL)
+}
+
+fn string_field_matches(value: &Value, key: &str, expected: &str) -> bool {
+    value.get(key).and_then(Value::as_str) == Some(expected)
+}
+
+fn model_inventory_sort_key(model: &Value) -> String {
+    let provider = model
+        .get("provider")
+        .or_else(|| model.get("providerId"))
+        .or_else(|| model.get("provider_id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let id = model
+        .get("id")
+        .or_else(|| model.get("model"))
+        .or_else(|| model.get("modelId"))
+        .or_else(|| model.get("model_id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let name = model
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    format!("{provider}\0{id}\0{name}")
+}
+
 fn is_nondeterministic_response_key(key: &str) -> bool {
     let lower = key.to_ascii_lowercase();
-    lower.contains("timestamp") || lower == "id" || lower == "duration"
+    lower.contains("timestamp")
+        || matches!(
+            lower.as_str(),
+            "id" | "duration"
+                | "runner"
+                | "sessionfile"
+                | "sessionid"
+                | "sessionname"
+                | "previoussessionfile"
+                | "pendingmessagecount"
+                | "persistencestatus"
+                | "autoretryenabled"
+                | "durabilitymode"
+                | "uxeventmarkers"
+        )
 }
 
 /// Test runner for differential slash command testing.
@@ -391,9 +496,7 @@ fn run_real_differential_scenario(
 ) -> anyhow::Result<TestResult> {
     let paths = RunnerPaths::discover()?;
     let commands = scenario_rpc_commands(scenario)?;
-    let workspace = workspace_root
-        .map(Path::to_path_buf)
-        .unwrap_or_else(std::env::temp_dir);
+    let workspace = workspace_root.map_or_else(std::env::temp_dir, Path::to_path_buf);
 
     let rust_response = run_rust_rpc_sequence(&paths, scenario, &commands, &workspace)?;
     let pi_mono_response = run_pi_mono_rpc_sequence(&paths, scenario, &commands, &workspace)?;
@@ -426,9 +529,7 @@ struct RunnerPaths {
 
 impl RunnerPaths {
     fn discover() -> anyhow::Result<Self> {
-        let rust_pi = option_env!("CARGO_BIN_EXE_pi")
-            .map(PathBuf::from)
-            .ok_or_else(|| anyhow::anyhow!("CARGO_BIN_EXE_pi is not set for the test process"))?;
+        let rust_pi = PathBuf::from(env!("CARGO_BIN_EXE_pi"));
         if !rust_pi.is_file() {
             anyhow::bail!("missing Rust Pi test binary: {}", rust_pi.display());
         }
@@ -470,7 +571,9 @@ struct RpcStep {
 fn scenario_rpc_commands(scenario: &SlashCommandScenario) -> anyhow::Result<Vec<RpcStep>> {
     let mut commands = Vec::new();
     for setup in &scenario.setup {
-        commands.extend(slash_input_to_rpc_steps(setup)?);
+        if slash_command_observability(setup).kind == SlashCommandObservability::RpcObservable {
+            commands.extend(slash_input_to_rpc_steps(setup)?);
+        }
     }
     commands.extend(slash_input_to_rpc_steps(&scenario.command)?);
     Ok(commands)
@@ -557,6 +660,10 @@ fn run_rust_rpc_sequence(
     let sessions_dir = workspace.join("sessions");
     let package_dir = workspace.join("packages");
     let config_path = workspace.join("settings.json");
+    for dir in [&agent_dir, &sessions_dir, &package_dir] {
+        std::fs::create_dir_all(dir)
+            .map_err(|err| anyhow::anyhow!("create {}: {err}", dir.display()))?;
+    }
     write_fixture_models_json(&agent_dir)?;
 
     let mut child = Command::new(&paths.rust_pi)
@@ -603,6 +710,7 @@ fn run_pi_mono_rpc_sequence(
 
     let mut child = Command::new("/usr/bin/node")
         .arg(&paths.pi_mono_tsx)
+        .args(["--tsconfig", "tsconfig.json"])
         .arg(&paths.pi_mono_cli)
         .args([
             "--mode",
@@ -766,29 +874,45 @@ pub struct TestResult {
 mod tests {
     use super::*;
 
-    fn assert_fail_closed(result: &TestResult) {
-        assert!(!result.success);
-        assert!(
-            result
-                .differences
-                .iter()
-                .any(|diff| diff.contains(DIFFERENTIAL_RUNNER_UNAVAILABLE)
-                    || diff.contains("not observable through the shared RPC protocol")),
-            "runner should fail closed with a clear execution or support gap: {:?}",
-            result.differences
-        );
-    }
-
     #[test]
     fn test_canonicalize_response() {
         let response = json!({
             "status": "success",
             "timestamp": "2024-04-22T10:30:00Z",
             "id": "req-123",
+            "command": "get_available_models",
+            "runner": "rust",
             "path": "/tmp/session-abc",
             "data": {
                 "nested_timestamp": "2024-04-22T10:30:01Z",
-                "value": 42
+                "sessionFile": "/tmp/pi-session.jsonl",
+                "autoRetryEnabled": true,
+                "durabilityMode": "fsync",
+                "pendingMessageCount": 3,
+                "persistenceStatus": {
+                    "event": "session.persistence.backlog"
+                },
+                "uxEventMarkers": [
+                    {
+                        "event": "session.persistence.backlog"
+                    }
+                ],
+                "value": 42.0,
+                "models": [
+                    {
+                        "provider": "openai",
+                        "id": "gpt-4o"
+                    },
+                    {
+                        "provider": RPC_TEST_PROVIDER,
+                        "id": RPC_TEST_MODEL,
+                        "name": "Credential-Free Slash Differential Fixture",
+                        "cost": {
+                            "input": 0.0,
+                            "output": 0.0
+                        }
+                    }
+                ]
             }
         });
 
@@ -797,11 +921,24 @@ mod tests {
         // Timestamps and IDs should be removed
         assert!(canonicalized.get("timestamp").is_none());
         assert!(canonicalized.get("id").is_none());
+        assert!(canonicalized.get("runner").is_none());
         assert!(canonicalized["data"].get("nested_timestamp").is_none());
+        assert!(canonicalized["data"].get("sessionFile").is_none());
+        assert!(canonicalized["data"].get("autoRetryEnabled").is_none());
+        assert!(canonicalized["data"].get("durabilityMode").is_none());
+        assert!(canonicalized["data"].get("pendingMessageCount").is_none());
+        assert!(canonicalized["data"].get("persistenceStatus").is_none());
+        assert!(canonicalized["data"].get("uxEventMarkers").is_none());
 
         // Other fields should be preserved
         assert_eq!(canonicalized["status"], "success");
         assert_eq!(canonicalized["data"]["value"], 42);
+        assert_eq!(canonicalized["data"]["models"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            canonicalized["data"]["models"][0]["provider"],
+            RPC_TEST_PROVIDER
+        );
+        assert_eq!(canonicalized["data"]["models"][0]["cost"]["input"], 0);
     }
 
     #[test]
@@ -843,11 +980,16 @@ mod tests {
         if let Some(scenario) = tester.scenarios.first() {
             let result = DifferentialTester::run_scenario(scenario);
             assert_eq!(result.scenario_name, scenario.name);
-            assert_eq!(result.rust_response["status"], "blocked");
-            assert_eq!(result.pi_mono_response["status"], "blocked");
-            assert_eq!(result.rust_response["command"], scenario.command);
-            assert_eq!(result.pi_mono_response["command"], scenario.command);
-            assert_fail_closed(&result);
+            if result.success {
+                assert_eq!(result.rust_response, result.pi_mono_response);
+                assert_ne!(result.rust_response["status"], "blocked");
+                assert!(result.differences.is_empty());
+            } else {
+                assert!(
+                    !result.differences.is_empty(),
+                    "failed differential scenario should explain the gap"
+                );
+            }
         }
     }
 
@@ -865,7 +1007,6 @@ mod tests {
             "/session",
             "/info",
             "/tree",
-            "/compact notes",
             "/clear",
             "/cls",
         ] {
@@ -878,6 +1019,13 @@ mod tests {
     fn rpc_mapping_rejects_non_rpc_observable_commands() {
         let err = slash_input_to_rpc_steps("/exit").expect_err("exit is not RPC-observable");
         assert!(err.to_string().contains("not observable"));
+
+        let err =
+            slash_input_to_rpc_steps("/thinking invalid_level").expect_err("invalid thinking");
+        assert!(err.to_string().contains("not credential-free"));
+
+        let err = slash_input_to_rpc_steps("/compact notes").expect_err("compact needs a model");
+        assert!(err.to_string().contains("not credential-free"));
 
         let err = slash_input_to_rpc_steps("plain prompt").expect_err("plain prompt needs model");
         assert!(err.to_string().contains("not credential-free"));

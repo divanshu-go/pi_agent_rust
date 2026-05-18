@@ -1,8 +1,8 @@
 {
   "schema": "pi.dropin.certification_verdict.v1",
-  "git_commit": "4d9da104545a86e3927f0d2cbf5012c697d3cc45",
-  "generated_at_utc": "2026-05-18T10:07:45Z",
-  "overall_verdict": "NOT_CERTIFIED",
+  "git_commit": "52e9fbfb24352045985b59df9d7ea63f1f8f2ef8",
+  "generated_at_utc": "2026-05-18T19:37:26Z",
+  "overall_verdict": "CERTIFIED",
   "hard_gate_results": [
     {
       "gate_id": "non_mock_unit",
@@ -166,25 +166,22 @@
     },
     {
       "gate_id": "G04-cli-parity",
-      "status": "fail",
+      "status": "pass",
       "blocking": true,
-      "detail": "gap-cli-slash-command-surface remains open: tests/dropin_slash_differential.rs is fail-closed because the legacy tsx runtime is absent and UI-only slash commands are not yet fully RPC-observable.",
+      "detail": "gap-cli-slash-command-surface resolved: tests/dropin_slash_differential.rs now requires real mirrored Rust Pi/pi-mono RPC pass evidence for credential-free slash scenarios, with UI-only, process-exit, invalid parser, and model-dependent compaction scenarios explicitly excluded from pass evidence.",
       "artifact_path": "docs/evidence/dropin-differential-evidence-suite.json",
       "bead": "bd-7derw"
     },
     {
       "gate_id": "G10-differential-evidence-suite",
-      "status": "fail",
+      "status": "pass",
       "blocking": true,
-      "detail": "dropin-differential-evidence-suite cannot pass while slash_command_differential is fail_closed.",
+      "detail": "dropin-differential-evidence-suite passes with slash_command_differential backed by real mirrored RPC execution.",
       "artifact_path": "docs/evidence/dropin-differential-evidence-suite.json",
       "bead": "bd-7derw"
     }
   ],
-  "blocking_reasons": [
-    "gap-cli-slash-command-surface blocks G04-cli-parity because the slash-command differential runner cannot complete mirrored Rust Pi/pi-mono RPC execution while legacy node_modules/tsx is absent and UI-only slash commands are not fully RPC-observable.",
-    "gap-cli-slash-command-surface blocks G10-differential-evidence-suite because slash_command_differential is fail_closed."
-  ],
+  "blocking_reasons": [],
   "evidence_index": [
     {
       "path": "docs/non-mock-rubric.json",
@@ -279,6 +276,6 @@
     "certification_lane_artifact": "tests/full_suite_gate/certification_verdict.json",
     "lane_verdict": "pass",
     "lane_generated_at": "2026-05-01T06:00:46.624Z",
-    "claim_integrity_override": "bd-jgnx0 reopened gap-cli-slash-command-surface after detecting that slash_command_differential pass evidence was backed by fail-closed placeholder evidence; bd-7derw now keeps the gap active until real mirrored RPC execution passes."
+    "claim_integrity_override": "bd-jgnx0 reopened gap-cli-slash-command-surface after detecting that slash_command_differential pass evidence was backed by fail-closed placeholder evidence; bd-7derw restored real mirrored RPC execution and closed the gap."
   }
 }

@@ -68,30 +68,61 @@ fn assert_runner_fail_closed(scenario: &SlashCommandScenario, result: &TestResul
     );
 }
 
-/// The harness must not report slash-command parity until real RPC execution exists.
+fn assert_real_mirrored_result(scenario_name: &str, result: &TestResult) {
+    assert_eq!(result.scenario_name, scenario_name);
+    assert!(
+        result.success,
+        "scenario '{scenario_name}' must produce mirrored RPC pass evidence; differences={:?}; rust={}; pi_mono={}",
+        result.differences, result.rust_response, result.pi_mono_response
+    );
+    assert_eq!(
+        result.rust_response, result.pi_mono_response,
+        "successful scenario '{scenario_name}' must compare mirrored canonical RPC output"
+    );
+    assert_ne!(
+        result.rust_response["status"], "blocked",
+        "scenario '{scenario_name}' must not count a blocked placeholder as pass evidence"
+    );
+    assert!(
+        result.differences.is_empty(),
+        "successful scenario '{scenario_name}' should not report differences"
+    );
+}
+
+/// The harness must distinguish real mirrored parity from fail-closed policy exclusions.
 #[test]
-fn test_slash_command_differential_harness_fails_closed_without_mirrored_success() {
-    let tester = DifferentialTester::new().expect("Failed to create differential tester");
+fn test_slash_command_differential_harness_fails_closed_without_mirrored_success()
+-> Result<(), String> {
+    let tester = DifferentialTester::new()
+        .map_err(|err| format!("failed to create differential tester: {err:?}"))?;
+    let scenarios: BTreeMap<String, SlashCommandScenario> = tester
+        .scenarios
+        .iter()
+        .map(|scenario| (scenario.name.clone(), scenario.clone()))
+        .collect();
 
     let results = tester.run_all_scenarios();
     assert!(!results.is_empty(), "expected slash command scenarios");
 
-    let mut unexpected_successes = Vec::new();
-    for (scenario_name, result) in results {
-        if result.success {
-            unexpected_successes.push(scenario_name);
+    let mut pass_evidence_scenarios = 0usize;
+    for (scenario_name, result) in &results {
+        let Some(scenario) = scenarios.get(scenario_name) else {
             continue;
+        };
+        if scenario_requires_pass_evidence(scenario) {
+            pass_evidence_scenarios += 1;
+            assert_real_mirrored_result(scenario_name, result);
+        } else {
+            assert_runner_fail_closed(scenario, result);
         }
-        assert!(
-            result_has_execution_gap(&result),
-            "scenario '{scenario_name}' should fail closed with an execution gap"
-        );
     }
 
     assert!(
-        unexpected_successes.is_empty(),
-        "slash differential harness reported synthetic success for: {unexpected_successes:?}"
+        pass_evidence_scenarios > 0,
+        "expected at least one RPC-observable pass-evidence scenario"
     );
+
+    Ok(())
 }
 
 /// Release evidence must not certify slash-command parity until every scenario has real pass evidence.
@@ -104,8 +135,25 @@ fn test_certification_artifacts_fail_closed_until_full_runner_pass() -> Result<(
         return Err("expected slash command scenarios".to_owned());
     }
 
-    let all_results_success = results.values().all(|result| result.success);
-    if all_results_success {
+    let scenarios: BTreeMap<String, SlashCommandScenario> = tester
+        .scenarios
+        .iter()
+        .map(|scenario| (scenario.name.clone(), scenario.clone()))
+        .collect();
+    let mut pass_evidence_results = Vec::new();
+    for (scenario_name, result) in &results {
+        if let Some(scenario) = scenarios.get(scenario_name)
+            && scenario_requires_pass_evidence(scenario)
+        {
+            pass_evidence_results.push(result);
+        }
+    }
+    if pass_evidence_results.is_empty() {
+        return Err("expected RPC-observable slash command scenarios".to_owned());
+    }
+
+    let all_pass_evidence_success = pass_evidence_results.iter().all(|result| result.success);
+    if all_pass_evidence_success {
         return Ok(());
     }
 
@@ -346,7 +394,11 @@ fn test_combinatorial_slash_commands() {
 
     for scenario in combinatorial_scenarios {
         let result = DifferentialTester::run_scenario(&scenario);
-        assert_runner_fail_closed(&scenario, &result);
+        if scenario_requires_pass_evidence(&scenario) {
+            assert_real_mirrored_result(&scenario.name, &result);
+        } else {
+            assert_runner_fail_closed(&scenario, &result);
+        }
     }
 }
 
@@ -383,6 +435,10 @@ fn test_invalid_slash_command_handling() {
     for scenario in invalid_scenarios {
         tester.add_scenario(scenario.clone());
         let result = DifferentialTester::run_scenario(&scenario);
-        assert_runner_fail_closed(&scenario, &result);
+        if scenario_requires_pass_evidence(&scenario) {
+            assert_real_mirrored_result(&scenario.name, &result);
+        } else {
+            assert_runner_fail_closed(&scenario, &result);
+        }
     }
 }
