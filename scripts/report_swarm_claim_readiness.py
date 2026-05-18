@@ -1404,21 +1404,36 @@ def classify_agent_mail_health(payload: dict[str, Any] | None, source: str) -> d
     recovery = payload.get("recovery")
     semantic = payload.get("semantic_readiness")
     recovery_mode = recovery.get("mode") if isinstance(recovery, dict) else None
+    recovery_action = recovery.get("next_action") if isinstance(recovery, dict) else None
+    recovery_bundle = recovery.get("bundle_path") if isinstance(recovery, dict) else None
     semantic_status = semantic.get("status") if isinstance(semantic, dict) else None
+    semantic_detail = semantic.get("detail") if isinstance(semantic, dict) else None
     if status == "ok" and health_level not in {"red", "error"} and recovery_mode != "corrupt":
         classification = "available"
         detail = "Agent Mail health is available for coordination."
     else:
         classification = "degraded_agent_mail"
-        detail = (
-            f"Agent Mail health is degraded: status={status or 'unknown'}, "
-            f"health_level={health_level or 'unknown'}, recovery={recovery_mode or 'unknown'}, "
-            f"semantic_readiness={semantic_status or 'unknown'}."
-        )
+        detail_parts = [
+            f"status={status or 'unknown'}",
+            f"health_level={health_level or 'unknown'}",
+            f"recovery={recovery_mode or 'unknown'}",
+            f"semantic_readiness={semantic_status or 'unknown'}",
+        ]
+        if semantic_detail:
+            detail_parts.append(f"semantic_detail={semantic_detail}")
+        if recovery_action:
+            detail_parts.append(f"recovery_action={recovery_action}")
+        detail = f"Agent Mail health is degraded: {', '.join(detail_parts)}."
     return {
         "source": source,
         "status": status or "unknown",
         "health_level": health_level,
+        "semantic_readiness": semantic_status,
+        "semantic_readiness_detail": semantic_detail,
+        "recovery_mode": recovery_mode,
+        "recovery_action": recovery_action,
+        "recovery_bundle_path": recovery_bundle,
+        "database_url": payload.get("database_url"),
         "classification": classification,
         "detail": detail,
     }
@@ -2149,6 +2164,22 @@ def build_operator_explanations(
             ))
 
     if redundant_agent_work is not None:
+        coordination = redundant_agent_work.get("coordination")
+        if (
+            isinstance(coordination, dict)
+            and coordination.get("classification") == "degraded_agent_mail"
+        ):
+            source = str(coordination.get("source") or "agent_mail_health")
+            items.append(explanation_item(
+                source=f"agent_mail_health:{source}",
+                category="agent_mail_semantic_corruption",
+                affected="agent_mail",
+                detail=str(coordination.get("detail") or ""),
+                next_safe_action=str(
+                    coordination.get("recovery_action")
+                    or "Use Beads comments/status as the soft lock until Agent Mail is repaired."
+                ),
+            ))
         for group in redundant_agent_work.get("groups", []):
             members = [
                 str(member.get("bead_id") or "unknown")
@@ -3702,8 +3733,17 @@ def run_self_test() -> int:
             redundant_agent_mail_health={
                 "status": "error",
                 "health_level": "red",
-                "semantic_readiness": {"status": "fail"},
-                "recovery": {"mode": "corrupt"},
+                "semantic_readiness": {
+                    "status": "fail",
+                    "detail": (
+                        "sqlite schema missing required health_check tables: "
+                        "projects, agents, messages, message_recipients"
+                    ),
+                },
+                "recovery": {
+                    "mode": "corrupt",
+                    "next_action": "Run `am doctor repair --yes` or restore from archive backup",
+                },
             },
             redundant_agent_mail_health_source="fixture:agent_mail_corrupt",
         )
@@ -3718,6 +3758,27 @@ def run_self_test() -> int:
         assert_condition(
             stale_groups,
             "stale in-progress work overlapping open work should produce stale_owner_overlap",
+        )
+        assert_condition(
+            redundant["coordination"]["semantic_readiness_detail"]
+            == "sqlite schema missing required health_check tables: projects, agents, messages, message_recipients",
+            "Agent Mail corruption should preserve missing-table detail",
+        )
+        assert_condition(
+            redundant["coordination"]["recovery_action"]
+            == "Run `am doctor repair --yes` or restore from archive backup",
+            "Agent Mail corruption should preserve exact recovery action",
+        )
+        agent_mail_explanations = [
+            item
+            for item in report["operator_explanations"]["items"]
+            if item["category"] == "agent_mail_semantic_corruption"
+            and item["affected"] == "agent_mail"
+        ]
+        assert_condition(
+            agent_mail_explanations
+            and "projects, agents, messages, message_recipients" in agent_mail_explanations[0]["detail"],
+            "operator explanations should include Agent Mail schema corruption detail",
         )
         stale_action = stale_groups[0]["recommended_operator_action"]
         assert_condition(
