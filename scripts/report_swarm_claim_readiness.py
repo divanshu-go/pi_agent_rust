@@ -28,6 +28,7 @@ from typing import Any
 
 REPORT_SCHEMA = "pi.swarm.claim_readiness_report.v1"
 STALE_CLAIM_REPORT_SCHEMA = "pi.swarm.stale_claim_report.v1"
+REDUNDANT_AGENT_WORK_SCHEMA = "pi.swarm.redundant_agent_work.v1"
 HOSTCALL_QUEUE_REPORT_SCHEMA = "pi.swarm.hostcall_queue_readiness.v1"
 OPERATOR_EXPLANATIONS_SCHEMA = "pi.swarm.operator_explanations.v1"
 GOLDEN_REPORT_DIRECTORY = Path("tests/golden_corpus/swarm_claim_readiness")
@@ -72,6 +73,17 @@ DEFAULT_PROVENANCE_PATHS = (
     "git_ref",
     "bead_id",
 )
+TITLE_TOKEN_STOPWORDS = {
+    "a",
+    "add",
+    "and",
+    "for",
+    "in",
+    "of",
+    "the",
+    "to",
+    "with",
+}
 
 
 @dataclass(frozen=True)
@@ -841,6 +853,8 @@ def normalize_repo_path(value: str) -> str | None:
     candidate = value.strip().strip(".,;:)")
     while candidate.startswith("./"):
         candidate = candidate[2:]
+    if candidate.startswith("/"):
+        return None
     if not looks_like_repo_path(candidate):
         return None
     return candidate
@@ -889,6 +903,14 @@ def issue_surface_paths(issue: dict[str, Any]) -> tuple[str, ...]:
         value = issue.get(key)
         if isinstance(value, str):
             text_parts.append(value)
+    comments = issue.get("comments")
+    if isinstance(comments, list):
+        for comment in comments:
+            if isinstance(comment, dict):
+                for key in ("text", "body", "body_md"):
+                    value = comment.get(key)
+                    if isinstance(value, str):
+                        text_parts.append(value)
     text = "\n".join(text_parts)
     for match in BACKTICK_PATH_PATTERN.findall(text):
         append_surface_path(paths, match)
@@ -1201,6 +1223,424 @@ def build_stale_claim_report(
             "operator_buckets": buckets,
         },
         "items": items,
+    }
+
+
+def issue_labels(issue: dict[str, Any]) -> tuple[str, ...]:
+    labels = issue.get("labels")
+    if not isinstance(labels, list):
+        return ()
+    return tuple(
+        sorted({
+            label.strip().lower()
+            for label in labels
+            if isinstance(label, str) and label.strip()
+        })
+    )
+
+
+def issue_title_tokens(issue: dict[str, Any]) -> set[str]:
+    raw_title = issue.get("title")
+    if not isinstance(raw_title, str):
+        return set()
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", raw_title.lower())
+        if len(token) > 2 and token not in TITLE_TOKEN_STOPWORDS
+    }
+
+
+def title_similarity(left: dict[str, Any], right: dict[str, Any]) -> float:
+    left_tokens = issue_title_tokens(left)
+    right_tokens = issue_title_tokens(right)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    overlap = left_tokens & right_tokens
+    union = left_tokens | right_tokens
+    if not union:
+        return 0.0
+    return len(overlap) / len(union)
+
+
+def issue_closed_or_updated_at(issue: dict[str, Any]) -> datetime | None:
+    for key in ("closed_at", "updated_at", "created_at"):
+        timestamp = parse_iso_datetime(issue.get(key))
+        if timestamp is not None:
+            return timestamp
+    return None
+
+
+def recent_closed_issue(issue: dict[str, Any], *, now: datetime, max_age_days: int) -> bool:
+    if issue.get("status") != "closed":
+        return False
+    timestamp = issue_closed_or_updated_at(issue)
+    if timestamp is None:
+        return False
+    age_days = max(0.0, (now - timestamp).total_seconds() / 86400.0)
+    return age_days <= max_age_days
+
+
+def surface_paths_overlap(
+    left_paths: tuple[str, ...],
+    right_paths: tuple[str, ...],
+) -> tuple[str, ...]:
+    overlaps: list[str] = []
+    for left in left_paths:
+        for right in right_paths:
+            if left == right:
+                overlap = left
+            elif dirty_path_matches_surface(left, right) or dirty_path_matches_surface(right, left):
+                overlap = f"{left}<->{right}"
+            else:
+                continue
+            if overlap not in overlaps:
+                overlaps.append(overlap)
+    return tuple(overlaps)
+
+
+def owner_state_for_issue(
+    issue: dict[str, Any],
+    stale_claim_items: dict[str, dict[str, Any]],
+) -> str:
+    bead_id = str(issue.get("id") or "")
+    status = str(issue.get("status") or "")
+    if status == "open":
+        return "unclaimed_open"
+    if status == "closed":
+        return "recently_closed"
+    stale_item = stale_claim_items.get(bead_id)
+    if stale_item is not None:
+        return str(stale_item.get("classification") or "in_progress_unknown")
+    if status == "in_progress":
+        return "in_progress_unknown"
+    return status or "unknown"
+
+
+def issue_member_summary(
+    issue: dict[str, Any],
+    *,
+    stale_claim_items: dict[str, dict[str, Any]],
+    dirty_worktree_paths: tuple[str, ...],
+    path_activity: dict[str, list[str]],
+) -> dict[str, Any]:
+    surface_paths, dirty_matches = dirty_paths_for_issue(issue, dirty_worktree_paths)
+    recent_activity = {
+        path: path_activity[path]
+        for path in surface_paths
+        if path in path_activity
+    }
+    return {
+        "bead_id": str(issue.get("id") or ""),
+        "title": str(issue.get("title") or ""),
+        "status": str(issue.get("status") or ""),
+        "assignee": issue_assignee(issue),
+        "updated_at": issue.get("updated_at"),
+        "closed_at": issue.get("closed_at"),
+        "owner_state": owner_state_for_issue(issue, stale_claim_items),
+        "labels": list(issue_labels(issue)),
+        "surface_paths": list(surface_paths),
+        "dirty_worktree_paths": list(dirty_matches),
+        "recent_path_activity": recent_activity,
+    }
+
+
+def safe_duplicate_work_action(
+    risk: str,
+    bead_ids: tuple[str, ...],
+    shared_surfaces: tuple[str, ...],
+    coordination_classification: str,
+) -> str:
+    bead_list = ", ".join(bead_ids)
+    surface_text = " ".join(shared_surfaces[:6])
+    status_step = (
+        f"run `git status --short -- {surface_text}`"
+        if surface_text
+        else "run `git status --short`"
+    )
+    if risk == "already_closed_duplicate_request":
+        return (
+            f"Report-only: inspect {bead_list} with `br show` and "
+            "`git log --oneline --fixed-strings --grep=<bead-id>` before starting work; "
+            "if the request is already satisfied, close or retitle only after manual confirmation. "
+            "Do not revert or delete another agent's work."
+        )
+    if risk == "stale_owner_overlap":
+        return (
+            f"Report-only: inspect {bead_list}, {status_step}, and contact the recorded owner; "
+            f"Agent Mail state is {coordination_classification}, so use Beads comments/status as "
+            "the soft lock if mail cannot be trusted. Do not reassign, revert, or delete automatically."
+        )
+    if risk == "dirty_surface_overlap":
+        return (
+            f"Report-only: inspect {bead_list} and {status_step}; dirty files already touch this "
+            "surface, so pick a disjoint path or coordinate with the owner. Do not revert or delete "
+            "the dirty worktree changes."
+        )
+    return (
+        f"Report-only: inspect {bead_list}, {status_step}, and coordinate with assignees before "
+        "claiming overlapping work. Do not automatically reassign, revert, or delete."
+    )
+
+
+def classify_agent_mail_health(payload: dict[str, Any] | None, source: str) -> dict[str, Any]:
+    if payload is None:
+        return {
+            "source": source,
+            "status": "not_provided",
+            "health_level": None,
+            "classification": "not_provided",
+            "detail": "No Agent Mail health payload was supplied; duplicate-work detection uses Beads and git only.",
+        }
+    status = str(payload.get("status") or "")
+    health_level = payload.get("health_level")
+    recovery = payload.get("recovery")
+    semantic = payload.get("semantic_readiness")
+    recovery_mode = recovery.get("mode") if isinstance(recovery, dict) else None
+    semantic_status = semantic.get("status") if isinstance(semantic, dict) else None
+    if status == "ok" and health_level not in {"red", "error"} and recovery_mode != "corrupt":
+        classification = "available"
+        detail = "Agent Mail health is available for coordination."
+    else:
+        classification = "degraded_agent_mail"
+        detail = (
+            f"Agent Mail health is degraded: status={status or 'unknown'}, "
+            f"health_level={health_level or 'unknown'}, recovery={recovery_mode or 'unknown'}, "
+            f"semantic_readiness={semantic_status or 'unknown'}."
+        )
+    return {
+        "source": source,
+        "status": status or "unknown",
+        "health_level": health_level,
+        "classification": classification,
+        "detail": detail,
+    }
+
+
+def collect_git_path_activity(
+    repo_root: Path,
+    surface_paths: tuple[str, ...],
+    *,
+    max_paths: int = 32,
+) -> dict[str, list[str]]:
+    activity: dict[str, list[str]] = {}
+    inspected = 0
+    for path in sorted(set(surface_paths)):
+        if inspected >= max_paths:
+            break
+        if "*" in path or "{" in path or "}" in path:
+            continue
+        inspected += 1
+        output = git_output(repo_root, ["log", "--oneline", "--max-count=5", "--", path])
+        if output is None:
+            continue
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        if lines:
+            activity[path] = lines
+    return activity
+
+
+def redundant_group(
+    *,
+    risk: str,
+    issues: tuple[dict[str, Any], ...],
+    shared_surfaces: tuple[str, ...],
+    match_reason: str,
+    confidence: float,
+    stale_claim_items: dict[str, dict[str, Any]],
+    dirty_worktree_paths: tuple[str, ...],
+    path_activity: dict[str, list[str]],
+    coordination: dict[str, Any],
+) -> dict[str, Any]:
+    bead_ids = tuple(str(issue.get("id") or "") for issue in issues)
+    return {
+        "group_id": f"{risk}:{':'.join(bead_ids)}",
+        "risk": risk,
+        "confidence": round(confidence, 2),
+        "match_reason": match_reason,
+        "shared_surface_paths": list(shared_surfaces),
+        "coordination_classification": coordination["classification"],
+        "members": [
+            issue_member_summary(
+                issue,
+                stale_claim_items=stale_claim_items,
+                dirty_worktree_paths=dirty_worktree_paths,
+                path_activity=path_activity,
+            )
+            for issue in issues
+        ],
+        "evidence": {
+            "commands": [
+                *(f"br show {bead_id}" for bead_id in bead_ids if bead_id),
+                (
+                    "git status --short -- " + " ".join(shared_surfaces[:8])
+                    if shared_surfaces
+                    else "git status --short"
+                ),
+                (
+                    "git log --oneline -- " + " ".join(shared_surfaces[:4])
+                    if shared_surfaces
+                    else "git log --oneline --fixed-strings --grep=<bead-id>"
+                ),
+            ],
+            "agent_mail": coordination["detail"],
+        },
+        "recommended_operator_action": safe_duplicate_work_action(
+            risk,
+            bead_ids,
+            shared_surfaces,
+            str(coordination["classification"]),
+        ),
+    }
+
+
+def build_redundant_agent_work_report(
+    repo_root: Path,
+    *,
+    now: datetime,
+    stale_claims: dict[str, Any],
+    agent_mail_health: dict[str, Any] | None = None,
+    agent_mail_health_source: str = "not_provided",
+    dirty_worktree_paths: tuple[str, ...] | None = None,
+    path_activity: dict[str, list[str]] | None = None,
+    recent_closed_after_days: int = DEFAULT_MAX_AGE_DAYS,
+) -> dict[str, Any]:
+    rows, beads_error, beads_path = read_beads_records(repo_root)
+    warnings = [beads_error] if beads_error is not None else []
+    dirty_paths = dirty_worktree_paths
+    if dirty_paths is None:
+        dirty_paths = collect_dirty_worktree_paths(repo_root)
+
+    stale_claim_items = {
+        str(item.get("bead_id") or ""): item
+        for item in stale_claims.get("items", [])
+        if item.get("bead_id")
+    }
+    active = [
+        issue
+        for issue in rows
+        if issue.get("status") in {"open", "in_progress"}
+    ]
+    recent_closed = [
+        issue
+        for issue in rows
+        if recent_closed_issue(issue, now=now, max_age_days=recent_closed_after_days)
+    ]
+    all_surface_paths = tuple(
+        sorted({
+            surface
+            for issue in [*active, *recent_closed]
+            for surface in issue_surface_paths(issue)
+        })
+    )
+    if path_activity is None:
+        path_activity = collect_git_path_activity(repo_root, all_surface_paths)
+    coordination = classify_agent_mail_health(agent_mail_health, agent_mail_health_source)
+
+    groups: list[dict[str, Any]] = []
+    seen_group_ids: set[str] = set()
+    for left_index, left_issue in enumerate(active):
+        left_paths = issue_surface_paths(left_issue)
+        for right_issue in active[left_index + 1:]:
+            right_paths = issue_surface_paths(right_issue)
+            shared = surface_paths_overlap(left_paths, right_paths)
+            if not shared:
+                continue
+            owner_states = {
+                owner_state_for_issue(left_issue, stale_claim_items),
+                owner_state_for_issue(right_issue, stale_claim_items),
+            }
+            if owner_states & {
+                "ambiguous_missing_coordination",
+                "stale_candidate_unassigned",
+                "stale_candidate_owner_follow_up",
+                "missing_evidence",
+            }:
+                risk = "stale_owner_overlap"
+                confidence = 0.74
+                reason = "active/open beads share a surface and at least one owner state is stale or ambiguous"
+            elif any(
+                dirty_path_matches_surface(dirty, surface)
+                for dirty in dirty_paths
+                for surface in shared
+            ):
+                risk = "dirty_surface_overlap"
+                confidence = 0.68
+                reason = "active/open beads share a surface that also has dirty worktree evidence"
+            else:
+                risk = "active_surface_collision"
+                confidence = 0.86
+                reason = "active/open beads share explicit touched-path hints"
+            group = redundant_group(
+                risk=risk,
+                issues=(left_issue, right_issue),
+                shared_surfaces=shared,
+                match_reason=reason,
+                confidence=confidence,
+                stale_claim_items=stale_claim_items,
+                dirty_worktree_paths=dirty_paths,
+                path_activity=path_activity,
+                coordination=coordination,
+            )
+            if group["group_id"] not in seen_group_ids:
+                seen_group_ids.add(group["group_id"])
+                groups.append(group)
+
+    for active_issue in active:
+        active_paths = issue_surface_paths(active_issue)
+        for closed_issue in recent_closed:
+            closed_paths = issue_surface_paths(closed_issue)
+            shared = surface_paths_overlap(active_paths, closed_paths)
+            similarity = title_similarity(active_issue, closed_issue)
+            if not shared and similarity < 0.5:
+                continue
+            reason = (
+                "open/in-progress bead overlaps a recently closed bead by touched-path hint"
+                if shared
+                else f"open/in-progress bead title resembles a recently closed bead ({similarity:.2f})"
+            )
+            group = redundant_group(
+                risk="already_closed_duplicate_request",
+                issues=(active_issue, closed_issue),
+                shared_surfaces=shared,
+                match_reason=reason,
+                confidence=0.82 if shared else 0.62,
+                stale_claim_items=stale_claim_items,
+                dirty_worktree_paths=dirty_paths,
+                path_activity=path_activity,
+                coordination=coordination,
+            )
+            if group["group_id"] not in seen_group_ids:
+                seen_group_ids.add(group["group_id"])
+                groups.append(group)
+
+    risk_counts: dict[str, int] = {}
+    for group in groups:
+        risk = group["risk"]
+        risk_counts[risk] = risk_counts.get(risk, 0) + 1
+
+    status = "risks_detected" if groups else "ready"
+    if warnings and not groups:
+        status = "needs_review"
+    return {
+        "schema": REDUNDANT_AGENT_WORK_SCHEMA,
+        "status": status,
+        "policy": "report_only_no_auto_reassign_no_revert_no_delete",
+        "source_paths": {
+            "beads_ledger": beads_path,
+            "agent_mail_health": agent_mail_health_source,
+            "dirty_worktree": "git status --porcelain=v1",
+            "recent_path_commits": "git log --oneline --max-count=5 -- <path>",
+        },
+        "coordination": coordination,
+        "warnings": warnings,
+        "summary": {
+            "active_open_count": len(active),
+            "recent_closed_reference_count": len(recent_closed),
+            "risk_group_count": len(groups),
+            "high_confidence_group_count": sum(1 for group in groups if group["confidence"] >= 0.8),
+            "risk_counts": risk_counts,
+        },
+        "groups": groups,
     }
 
 
@@ -1597,6 +2037,10 @@ def blocker_explanation(category: str) -> str:
             "Coordination evidence is missing or degraded. Treat Agent Mail corruption as "
             "unknown owner state, not proof that the assignee is gone."
         ),
+        "redundant_agent_work": (
+            "Two or more Beads, dirty paths, or recent closed work appear to cover the same "
+            "surface. The report is advisory and requires manual coordination before work starts."
+        ),
         "no_data_evidence": (
             "The evidence artifact exists but reports zero, skipped, or missing measurement "
             "data, so it cannot support a green claim."
@@ -1649,6 +2093,7 @@ def build_operator_explanations(
     *,
     blocking_issues: list[dict[str, Any]],
     stale_claims: dict[str, Any],
+    redundant_agent_work: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     for issue in blocking_issues:
@@ -1693,6 +2138,21 @@ def build_operator_explanations(
                 affected=f"bead:{bead_id}",
                 detail="; ".join(str(reason) for reason in item.get("reasons", [])),
                 next_safe_action=str(item.get("recommended_operator_action") or ""),
+            ))
+
+    if redundant_agent_work is not None:
+        for group in redundant_agent_work.get("groups", []):
+            members = [
+                str(member.get("bead_id") or "unknown")
+                for member in group.get("members", [])
+            ]
+            affected = ",".join(members) if members else str(group.get("group_id") or "unknown")
+            items.append(explanation_item(
+                source=f"redundant_agent_work:{group.get('risk') or 'overlap'}",
+                category="redundant_agent_work",
+                affected=f"beads:{affected}",
+                detail=str(group.get("match_reason") or ""),
+                next_safe_action=str(group.get("recommended_operator_action") or ""),
             ))
 
     category_counts: dict[str, int] = {}
@@ -2042,6 +2502,9 @@ def build_report(
     stale_claim_activity_paths: tuple[str, ...] = DEFAULT_STALE_CLAIM_ACTIVITY_PATHS,
     stale_claim_dirty_worktree_paths: tuple[str, ...] | None = None,
     stale_claim_recent_commit_activity: dict[str, ClaimActivityEvidence] | None = None,
+    redundant_agent_mail_health: dict[str, Any] | None = None,
+    redundant_agent_mail_health_source: str = "not_provided",
+    redundant_path_activity: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     now = as_utc(now or datetime.now(timezone.utc))
     max_age = timedelta(days=max_age_days)
@@ -2057,6 +2520,15 @@ def build_report(
         recent_commit_activity=stale_claim_recent_commit_activity,
     )
     hostcall_queue_telemetry = build_hostcall_queue_report(repo_root)
+    redundant_agent_work = build_redundant_agent_work_report(
+        repo_root,
+        now=now,
+        stale_claims=stale_claims,
+        agent_mail_health=redundant_agent_mail_health,
+        agent_mail_health_source=redundant_agent_mail_health_source,
+        dirty_worktree_paths=stale_claim_dirty_worktree_paths,
+        path_activity=redundant_path_activity,
+    )
 
     blocking_issues = [
         {
@@ -2074,6 +2546,7 @@ def build_report(
     operator_explanations = build_operator_explanations(
         blocking_issues=blocking_issues,
         stale_claims=stale_claims,
+        redundant_agent_work=redundant_agent_work,
     )
 
     blocking_count = len(blocking_issues)
@@ -2091,6 +2564,7 @@ def build_report(
         "categories": category_summary(checks),
         "artifacts": [check.to_json() for check in checks],
         "stale_claims": stale_claims,
+        "redundant_agent_work": redundant_agent_work,
         "hostcall_queue_telemetry": hostcall_queue_telemetry,
         "operator_explanations": operator_explanations,
         "blocking_issues": blocking_issues,
@@ -2143,6 +2617,27 @@ def print_text_report(report: dict[str, Any]) -> None:
         if item["dirty_worktree_paths"]:
             print(f"    dirty: {', '.join(item['dirty_worktree_paths'])}")
         print(f"    action: {item['recommended_operator_action']}")
+    redundant_work = report["redundant_agent_work"]
+    print("")
+    print("redundant agent work:")
+    print(
+        f"  {redundant_work['status']}: "
+        f"{redundant_work['summary']['risk_group_count']} risk groups, "
+        f"{redundant_work['summary']['high_confidence_group_count']} high confidence, "
+        f"coordination={redundant_work['coordination']['classification']}"
+    )
+    for group in redundant_work["groups"]:
+        member_ids = ", ".join(
+            str(member.get("bead_id") or "unknown")
+            for member in group.get("members", [])
+        )
+        print(
+            f"  {group['risk']}: {member_ids} "
+            f"confidence={group['confidence']} reason={group['match_reason']}"
+        )
+        if group["shared_surface_paths"]:
+            print(f"    shared: {', '.join(group['shared_surface_paths'])}")
+        print(f"    action: {group['recommended_operator_action']}")
     hostcall_queue = report["hostcall_queue_telemetry"]
     print("")
     print("hostcall queue telemetry:")
@@ -2925,6 +3420,179 @@ def run_self_test() -> int:
             "recent commits mentioning a bead should keep old work fresh",
         )
 
+        repo_root = fixture_root()
+        make_complete_fixture(repo_root, now)
+        write_beads_ledger(
+            repo_root,
+            [
+                {
+                    "id": "bd-single",
+                    "title": "Single owner report",
+                    "description": "Surface: `src/single_owner.rs`",
+                    "status": "in_progress",
+                    "assignee": "SoloAgent",
+                    "updated_at": format_datetime(now - timedelta(hours=1)),
+                },
+            ],
+        )
+        report = build_report(
+            repo_root,
+            now=now,
+            stale_claim_dirty_worktree_paths=(),
+            redundant_path_activity={},
+        )
+        redundant = report["redundant_agent_work"]
+        assert_condition(
+            redundant["status"] == "ready",
+            "clean single-owner work should not produce redundant-work groups",
+        )
+        assert_condition(
+            redundant["summary"]["risk_group_count"] == 0,
+            "clean single-owner report should have zero redundant-work risk groups",
+        )
+
+        repo_root = fixture_root()
+        make_complete_fixture(repo_root, now)
+        write_beads_ledger(
+            repo_root,
+            [
+                {
+                    "id": "bd-left",
+                    "title": "Add shared subsystem guard",
+                    "description": "Surface: `src/shared_subsystem.rs`",
+                    "status": "in_progress",
+                    "assignee": "LeftAgent",
+                    "updated_at": format_datetime(now - timedelta(hours=1)),
+                },
+                {
+                    "id": "bd-right",
+                    "title": "Harden shared subsystem guard",
+                    "description": "Surface: `src/shared_subsystem.rs`",
+                    "status": "in_progress",
+                    "assignee": "RightAgent",
+                    "updated_at": format_datetime(now - timedelta(hours=2)),
+                },
+            ],
+        )
+        report = build_report(
+            repo_root,
+            now=now,
+            stale_claim_dirty_worktree_paths=(),
+            redundant_path_activity={
+                "src/shared_subsystem.rs": ["abc1234 bd-left shared subsystem guard"],
+            },
+            redundant_agent_mail_health={"status": "ok", "health_level": "green"},
+            redundant_agent_mail_health_source="fixture:agent_mail_green",
+        )
+        groups = report["redundant_agent_work"]["groups"]
+        assert_condition(
+            any(group["risk"] == "active_surface_collision" for group in groups),
+            "two active owners on the same surface should be a duplicate-work risk",
+        )
+        collision = next(group for group in groups if group["risk"] == "active_surface_collision")
+        assert_condition(
+            collision["confidence"] >= 0.8,
+            "explicit same-surface collision should be high confidence",
+        )
+        assert_condition(
+            all(member["owner_state"] == "active" for member in collision["members"]),
+            "fresh in-progress owners should be classified as active",
+        )
+
+        repo_root = fixture_root()
+        make_complete_fixture(repo_root, now)
+        write_beads_ledger(
+            repo_root,
+            [
+                {
+                    "id": "bd-stale-owner",
+                    "title": "Old owner same lane",
+                    "description": "Surface: `scripts/same_lane.py`",
+                    "status": "in_progress",
+                    "assignee": "StaleAgent",
+                    "updated_at": format_datetime(now - timedelta(hours=30)),
+                },
+                {
+                    "id": "bd-new-open",
+                    "title": "New request same lane",
+                    "description": "Surface: `scripts/same_lane.py`",
+                    "status": "open",
+                    "updated_at": format_datetime(now - timedelta(hours=1)),
+                },
+            ],
+        )
+        report = build_report(
+            repo_root,
+            now=now,
+            stale_claim_dirty_worktree_paths=(),
+            redundant_path_activity={},
+            redundant_agent_mail_health={
+                "status": "error",
+                "health_level": "red",
+                "semantic_readiness": {"status": "fail"},
+                "recovery": {"mode": "corrupt"},
+            },
+            redundant_agent_mail_health_source="fixture:agent_mail_corrupt",
+        )
+        redundant = report["redundant_agent_work"]
+        assert_condition(
+            redundant["coordination"]["classification"] == "degraded_agent_mail",
+            "Agent Mail corruption should be explicit degraded coordination, not a hard error",
+        )
+        stale_groups = [
+            group for group in redundant["groups"] if group["risk"] == "stale_owner_overlap"
+        ]
+        assert_condition(
+            stale_groups,
+            "stale in-progress work overlapping open work should produce stale_owner_overlap",
+        )
+        stale_action = stale_groups[0]["recommended_operator_action"]
+        assert_condition(
+            "Beads comments/status as the soft lock" in stale_action,
+            "degraded Agent Mail guidance should preserve Beads soft-lock fallback",
+        )
+        assert_condition(
+            "Do not reassign, revert, or delete automatically" in stale_action,
+            "redundant-work guidance should not tell agents to mutate ownership or discard work",
+        )
+
+        repo_root = fixture_root()
+        make_complete_fixture(repo_root, now)
+        write_beads_ledger(
+            repo_root,
+            [
+                {
+                    "id": "bd-repeat",
+                    "title": "Add repeated evidence guard",
+                    "description": "Surface: `src/repeated_guard.rs`",
+                    "status": "open",
+                    "updated_at": format_datetime(now - timedelta(hours=1)),
+                },
+                {
+                    "id": "bd-done",
+                    "title": "Add repeated evidence guard",
+                    "description": "Surface: `src/repeated_guard.rs`",
+                    "status": "closed",
+                    "closed_at": format_datetime(now - timedelta(hours=2)),
+                    "updated_at": format_datetime(now - timedelta(hours=2)),
+                    "close_reason": "Implemented in fixture",
+                },
+            ],
+        )
+        report = build_report(
+            repo_root,
+            now=now,
+            stale_claim_dirty_worktree_paths=(),
+            redundant_path_activity={},
+        )
+        assert_condition(
+            any(
+                group["risk"] == "already_closed_duplicate_request"
+                for group in report["redundant_agent_work"]["groups"]
+            ),
+            "open work overlapping a recently closed bead should be flagged as a possible duplicate",
+        )
+
         rch_explanations = build_operator_explanations(
             blocking_issues=[
                 {
@@ -3042,6 +3710,12 @@ def parse_args() -> argparse.Namespace:
         help="optional repo-relative JSONL activity source with bead IDs and timestamps",
     )
     parser.add_argument(
+        "--agent-mail-health-json",
+        type=Path,
+        default=None,
+        help="optional Agent Mail health_check JSON payload for redundant-work coordination state",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="emit machine-readable JSON report",
@@ -3076,12 +3750,25 @@ def main() -> int:
         if args.stale_claim_activity_jsonl is not None
         else DEFAULT_STALE_CLAIM_ACTIVITY_PATHS
     )
+    agent_mail_health = None
+    agent_mail_health_source = "not_provided"
+    if args.agent_mail_health_json is not None:
+        agent_mail_health_source = str(args.agent_mail_health_json)
+        agent_mail_health, health_error = load_json(args.agent_mail_health_json)
+        if health_error is not None:
+            agent_mail_health = {
+                "status": "unreadable",
+                "health_level": "unknown",
+                "error": health_error,
+            }
     report = build_report(
         repo_root,
         max_age_days=args.max_age_days,
         stale_claim_after_hours=args.stale_claim_after_hours,
         stale_claim_activity_fresh_hours=args.stale_claim_activity_fresh_hours,
         stale_claim_activity_paths=activity_paths,
+        redundant_agent_mail_health=agent_mail_health,
+        redundant_agent_mail_health_source=agent_mail_health_source,
     )
     if args.json:
         json.dump(report, sys.stdout, indent=2, sort_keys=True)
