@@ -36,6 +36,7 @@ from typing import Any
 
 
 AUDIT_SCHEMA = "pi.closeout_gate_freshness_audit.v1"
+OPERATOR_SUMMARY_SCHEMA = "pi.closeout_gate_freshness_operator_summary.v1"
 CONTRACT_GLOB = "docs/contracts/*closeout-gate-contract.json"
 EVIDENCE_GLOB = "docs/evidence/*closeout-gate*.json"
 REGISTRY_SCHEMA = "pi.closeout_evidence_registry.v1"
@@ -45,6 +46,24 @@ README_CLOSEOUT_ARTIFACT_RE = re.compile(
 )
 COMMIT_RE = re.compile(r"^[0-9a-f]{7,40}$")
 COMMIT_KEY_RE = re.compile(r"(commit|head|origin_main|origin_master|origin_legacy_mirror)")
+OPERATOR_CATEGORY_ORDER = [
+    "current_artifact",
+    "missing_contract",
+    "stale_source",
+    "missing_commit",
+    "hash_drift",
+    "readme_drift",
+    "malformed_source",
+]
+OPERATOR_CATEGORY_LABELS = {
+    "current_artifact": "Current artifact or Beads state",
+    "missing_contract": "Missing contract or required gate",
+    "stale_source": "Stale source or closeout age",
+    "missing_commit": "Missing commit reference",
+    "hash_drift": "Hash drift",
+    "readme_drift": "README or registry reference drift",
+    "malformed_source": "Malformed source artifact",
+}
 
 
 @dataclass(frozen=True)
@@ -1017,6 +1036,367 @@ def audit_closeout_registry(
     }
 
 
+def operator_finding_category(finding: dict[str, Any]) -> str:
+    check = str(finding.get("check") or "").lower()
+    message = str(finding.get("message") or "").lower()
+    if check in {
+        "json_parse",
+        "registry_parse",
+        "registry_entry_shape",
+        "registry_schema",
+        "registry_current_artifacts",
+        "registry_historical_artifacts",
+        "source_hash_path",
+        "generated_at",
+    }:
+        return "malformed_source"
+    if check in {
+        "readme_missing_artifact",
+        "readme_older_artifact",
+        "markdown_unregistered_closeout_artifact",
+        "registry_reference_paths",
+        "registry_reference_missing_file",
+        "registry_reference_drift",
+    }:
+        return "readme_drift"
+    if check in {
+        "missing_contract",
+        "registry_contract_path",
+        "registry_missing_contract_file",
+        "registry_contract_mismatch",
+        "registry_decision_gate_schema",
+        "registry_decision_schema_mismatch",
+        "required_key",
+        "required_child_bead",
+        "required_quality_gate",
+        "required_check",
+    }:
+        return "missing_contract"
+    if check in {"missing_commit", "child_commit"}:
+        return "missing_commit"
+    if check == "stale_source_hash":
+        if "source hash" in message or "sha256" in message:
+            return "hash_drift"
+        return "stale_source"
+    if check in {"source_hash_missing_path", "generated_at_stale", "generated_at_future"}:
+        return "stale_source"
+    return "current_artifact"
+
+
+def collect_operator_findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for artifact in payload.get("artifacts") or []:
+        if not isinstance(artifact, dict):
+            continue
+        artifact_path = artifact.get("path")
+        for finding in artifact.get("findings") or []:
+            if not isinstance(finding, dict):
+                continue
+            entry = dict(finding)
+            entry["source"] = "artifact"
+            if isinstance(artifact_path, str):
+                entry.setdefault("artifact_path", artifact_path)
+            findings.append(entry)
+
+    for finding in payload.get("readme_findings") or []:
+        if not isinstance(finding, dict):
+            continue
+        entry = dict(finding)
+        entry["source"] = "readme"
+        findings.append(entry)
+
+    registry = payload.get("registry")
+    if isinstance(registry, dict):
+        for finding in registry.get("findings") or []:
+            if not isinstance(finding, dict):
+                continue
+            entry = dict(finding)
+            entry["source"] = "registry"
+            findings.append(entry)
+
+    return findings
+
+
+def first_present_path(finding: dict[str, Any]) -> str:
+    for key in ("path", "artifact_path"):
+        value = finding.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return "<audit>"
+
+
+def build_operator_groups(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for finding in findings:
+        if finding.get("severity") != "fail":
+            continue
+        grouped.setdefault(operator_finding_category(finding), []).append(finding)
+
+    groups: list[dict[str, Any]] = []
+    for category in OPERATOR_CATEGORY_ORDER:
+        category_findings = grouped.get(category, [])
+        if not category_findings:
+            continue
+        checks = sorted(
+            {
+                str(finding.get("check"))
+                for finding in category_findings
+                if isinstance(finding.get("check"), str)
+            }
+        )
+        affected_paths = sorted({first_present_path(finding) for finding in category_findings})
+        examples = [
+            {
+                "check": finding.get("check"),
+                "path": first_present_path(finding),
+                "message": finding.get("message"),
+            }
+            for finding in category_findings[:3]
+        ]
+        groups.append(
+            {
+                "category": category,
+                "title": OPERATOR_CATEGORY_LABELS[category],
+                "finding_count": len(category_findings),
+                "checks": checks,
+                "affected_paths": affected_paths,
+                "examples": examples,
+            }
+        )
+    return groups
+
+
+def build_operator_actions(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not groups:
+        return [
+            {
+                "rank": 1,
+                "action_id": "continue_normal_closeout_flow",
+                "summary": "No closeout freshness failures were found.",
+                "command": "python3 scripts/check_closeout_gate_freshness.py --compact",
+                "read_only": True,
+                "mutation_surface": "none",
+            },
+            {
+                "rank": 2,
+                "action_id": "verify_runpack_freshness_when_handoff_exists",
+                "summary": "Before handing off a runpack, keep the runpack freshness guard green.",
+                "command": "python3 scripts/check_swarm_runpack_freshness.py --self-test",
+                "read_only": True,
+                "mutation_surface": "none",
+            },
+        ]
+
+    categories = {str(group.get("category")) for group in groups}
+    actions: list[dict[str, Any]] = [
+        {
+            "rank": 1,
+            "action_id": "read_operator_summary",
+            "summary": "Review the concise failure grouping before choosing work.",
+            "command": "python3 scripts/check_closeout_gate_freshness.py --operator-summary markdown",
+            "read_only": True,
+            "mutation_surface": "none",
+        },
+        {
+            "rank": 2,
+            "action_id": "inspect_full_audit_json",
+            "summary": "Inspect the stable JSON payload for exact failing checks and paths.",
+            "command": "python3 scripts/check_closeout_gate_freshness.py --compact",
+            "read_only": True,
+            "mutation_surface": "none",
+        },
+    ]
+    next_rank = 3
+
+    if "malformed_source" in categories:
+        actions.append(
+            {
+                "rank": next_rank,
+                "action_id": "validate_malformed_json_source",
+                "summary": "Confirm malformed JSON or registry shape before assigning repair work.",
+                "command_template": "python3 -m json.tool <artifact-or-registry-path>",
+                "read_only": True,
+                "mutation_surface": "none",
+            }
+        )
+        next_rank += 1
+
+    if categories & {"missing_commit", "stale_source", "hash_drift"}:
+        actions.append(
+            {
+                "rank": next_rank,
+                "action_id": "verify_git_and_hash_inputs",
+                "summary": "Confirm referenced commits and source fingerprints from the failing paths.",
+                "command_templates": [
+                    "git cat-file -e <commit>^{commit}",
+                    "sha256sum <source-path>",
+                ],
+                "read_only": True,
+                "mutation_surface": "none",
+            }
+        )
+        next_rank += 1
+
+    if "readme_drift" in categories:
+        actions.append(
+            {
+                "rank": next_rank,
+                "action_id": "inspect_markdown_references",
+                "summary": "Find stale closeout-gate references before refreshing docs.",
+                "command": "rg -n \"closeout-gate\" README.md docs",
+                "read_only": True,
+                "mutation_surface": "none",
+            }
+        )
+        next_rank += 1
+
+    actions.append(
+        {
+            "rank": next_rank,
+            "action_id": "claim_or_create_refresh_bead",
+            "summary": (
+                "If no active bead owns the failing artifact or source refresh, claim or create one "
+                "instead of editing generated evidence just to clear the audit."
+            ),
+            "read_first_commands": [
+                "br ready --json",
+                "br list --status=in_progress --json",
+            ],
+            "beads_command_template": (
+                "br create --title \"Refresh closeout freshness evidence for <artifact-or-contract>\" "
+                "--type task --priority 2"
+            ),
+            "read_only": False,
+            "mutation_surface": "beads_only_after_operator_choice",
+        }
+    )
+    return actions
+
+
+def build_operator_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    findings = collect_operator_findings(payload)
+    fail_findings = [finding for finding in findings if finding.get("severity") == "fail"]
+    groups = build_operator_groups(fail_findings)
+    categories = [str(group["category"]) for group in groups]
+    return {
+        "schema": OPERATOR_SUMMARY_SCHEMA,
+        "generated_at": payload.get("generated_at"),
+        "status": payload.get("status"),
+        "finding_count": len(fail_findings),
+        "recommended_operator_posture": (
+            "proceed_with_normal_beads_or_runpack_handoff"
+            if not fail_findings
+            else "refresh_or_surface_operator_blocker"
+        ),
+        "grouped_findings": groups,
+        "ranked_next_actions": build_operator_actions(groups),
+        "safe_read_only_commands": [
+            "python3 scripts/check_closeout_gate_freshness.py --operator-summary markdown",
+            "python3 scripts/check_closeout_gate_freshness.py --compact",
+            "br ready --json",
+            "br list --status=in_progress --json",
+            "git status --short --branch",
+        ],
+        "beads_guidance": {
+            "create_or_claim_when": (
+                "Use Beads when a failing group requires artifact regeneration, source refresh, "
+                "contract repair, or docs refresh and no active owner exists."
+            ),
+            "do_not_use_summary_as_claim_authority": True,
+            "failure_categories_requiring_owner": categories,
+        },
+        "guardrails": {
+            "advisory_only": True,
+            "does_not_replace": ["Beads", "git", "RCH", "Agent Mail", "CI", "UBS", "source files"],
+            "prohibited_posture": [
+                "file removal",
+                "history rewrite",
+                "local heavyweight Cargo fallback",
+                "live coordination writes",
+                "claiming advisory evidence as authority",
+            ],
+        },
+    }
+
+
+def format_operator_summary_text(summary: dict[str, Any]) -> str:
+    lines = [
+        f"status={summary.get('status')} findings={summary.get('finding_count')}",
+        f"posture={summary.get('recommended_operator_posture')}",
+        "safe_read_only_commands:",
+    ]
+    for command in summary.get("safe_read_only_commands") or []:
+        lines.append(f"- {command}")
+
+    lines.append("next_actions:")
+    for action in summary.get("ranked_next_actions") or []:
+        line = f"{action.get('rank')}. {action.get('action_id')}: {action.get('summary')}"
+        command = action.get("command")
+        if isinstance(command, str):
+            line = f"{line} | command={command}"
+        template = action.get("command_template")
+        if isinstance(template, str):
+            line = f"{line} | template={template}"
+        beads_template = action.get("beads_command_template")
+        if isinstance(beads_template, str):
+            line = f"{line} | beads_template={beads_template}"
+        lines.append(line)
+
+    groups = summary.get("grouped_findings") or []
+    if groups:
+        lines.append("groups:")
+    for group in groups:
+        paths = ", ".join(str(path) for path in group.get("affected_paths") or [])
+        checks = ", ".join(str(check) for check in group.get("checks") or [])
+        lines.append(
+            f"- {group.get('category')} findings={group.get('finding_count')} "
+            f"checks={checks} paths={paths}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def format_operator_summary_markdown(summary: dict[str, Any]) -> str:
+    lines = [
+        "# Closeout Freshness Operator Summary",
+        "",
+        f"- Status: `{summary.get('status')}`",
+        f"- Findings: `{summary.get('finding_count')}`",
+        f"- Posture: `{summary.get('recommended_operator_posture')}`",
+        "",
+        "## Safe Read-Only Commands",
+        "",
+    ]
+    for command in summary.get("safe_read_only_commands") or []:
+        lines.append(f"- `{command}`")
+
+    lines.extend(["", "## Next Actions", ""])
+    for action in summary.get("ranked_next_actions") or []:
+        lines.append(f"{action.get('rank')}. `{action.get('action_id')}` - {action.get('summary')}")
+        command = action.get("command")
+        if isinstance(command, str):
+            lines.append(f"   Command: `{command}`")
+        template = action.get("command_template")
+        if isinstance(template, str):
+            lines.append(f"   Template: `{template}`")
+        for template in action.get("command_templates") or []:
+            lines.append(f"   Template: `{template}`")
+        beads_template = action.get("beads_command_template")
+        if isinstance(beads_template, str):
+            lines.append(f"   Beads template: `{beads_template}`")
+
+    groups = summary.get("grouped_findings") or []
+    if groups:
+        lines.extend(["", "## Finding Groups", ""])
+        for group in groups:
+            checks = ", ".join(f"`{check}`" for check in group.get("checks") or [])
+            paths = ", ".join(f"`{path}`" for path in group.get("affected_paths") or [])
+            lines.append(
+                f"- `{group.get('category')}` ({group.get('finding_count')}): "
+                f"{checks}; paths: {paths}"
+            )
+    return "\n".join(lines) + "\n"
+
+
 def build_summary(
     repo_root: Path,
     now: datetime,
@@ -1080,6 +1460,7 @@ def build_summary(
             "finding_fail_count": fail_count,
         },
     }
+    payload["operator_summary"] = build_operator_summary(payload)
     return (0 if status == "pass" else 1), payload
 
 
@@ -1309,6 +1690,83 @@ def write_legacy_shape_fixture(root: Path, now: datetime) -> None:
     write_fixture_registry(root, entries)
 
 
+def operator_summary_validation_errors(
+    payload: dict[str, Any],
+    expected_categories: set[str],
+) -> list[str]:
+    summary = payload.get("operator_summary")
+    if not isinstance(summary, dict):
+        return ["missing operator_summary object"]
+
+    errors: list[str] = []
+    if summary.get("schema") != OPERATOR_SUMMARY_SCHEMA:
+        errors.append("operator_summary schema mismatch")
+    if summary.get("status") != payload.get("status"):
+        errors.append("operator_summary status does not mirror audit status")
+
+    groups = summary.get("grouped_findings")
+    if not isinstance(groups, list):
+        errors.append("operator_summary grouped_findings is not a list")
+        groups = []
+    categories = {
+        str(group.get("category"))
+        for group in groups
+        if isinstance(group, dict) and isinstance(group.get("category"), str)
+    }
+    missing_categories = expected_categories - categories
+    if missing_categories:
+        errors.append(f"missing operator categories: {sorted(missing_categories)}")
+    if payload.get("status") == "pass" and categories:
+        errors.append(f"passing operator summary unexpectedly has categories: {sorted(categories)}")
+
+    action_ids = {
+        str(action.get("action_id"))
+        for action in summary.get("ranked_next_actions") or []
+        if isinstance(action, dict)
+    }
+    if payload.get("status") == "fail" and "claim_or_create_refresh_bead" not in action_ids:
+        errors.append("failing operator summary lacks Beads refresh guidance")
+
+    for action in summary.get("ranked_next_actions") or []:
+        if not isinstance(action, dict):
+            continue
+        if action.get("action_id") != "claim_or_create_refresh_bead" and action.get("read_only") is not True:
+            errors.append(f"action {action.get('action_id')} must be read-only")
+
+    serialized = json.dumps(summary, sort_keys=True).lower()
+    serialized += format_operator_summary_text(summary).lower()
+    serialized += format_operator_summary_markdown(summary).lower()
+    forbidden_fragments = [
+        "rm -rf",
+        "git reset",
+        "git clean",
+        "send_message",
+        "file_reservation",
+        "acknowledge_message",
+        "cargo test --all-targets",
+        "cargo check --all-targets",
+        "cargo clippy --all-targets",
+        "rch exec -- cargo",
+    ]
+    for fragment in forbidden_fragments:
+        if fragment in serialized:
+            errors.append(f"operator summary contains forbidden fragment: {fragment}")
+    return errors
+
+
+def verify_operator_summary(
+    label: str,
+    payload: dict[str, Any],
+    expected_categories: set[str],
+) -> bool:
+    errors = operator_summary_validation_errors(payload, expected_categories)
+    if errors:
+        print(json.dumps(payload.get("operator_summary"), indent=2))
+        print(f"SELF-TEST FAIL: operator summary contract failed for {label}: {errors}")
+        return False
+    return True
+
+
 def run_self_test() -> int:
     now = datetime(2026, 5, 15, 12, 0, 0, tzinfo=timezone.utc)
     root = Path(tempfile.mkdtemp(prefix="pi-closeout-gate-freshness-"))
@@ -1321,6 +1779,8 @@ def run_self_test() -> int:
             print(json.dumps(first, indent=2))
             print("SELF-TEST FAIL: valid fixture should pass")
             return 2
+        if not verify_operator_summary("valid fixture", first, set()):
+            return 2
 
         registry_missing_artifact = load_json_object(root / REGISTRY_PATH)
         registry_missing_artifact["current_artifacts"][0]["artifact_path"] = "docs/evidence/missing-closeout-gate.json"
@@ -1329,6 +1789,8 @@ def run_self_test() -> int:
         if registry_missing_status != 1 or "registry_missing_artifact" not in json.dumps(registry_missing):
             print(json.dumps(registry_missing, indent=2))
             print("SELF-TEST FAIL: registry missing artifact should fail")
+            return 2
+        if not verify_operator_summary("registry missing artifact", registry_missing, {"current_artifact"}):
             return 2
 
         write_fixture(root, now, commit)
@@ -1352,6 +1814,8 @@ def run_self_test() -> int:
             print(json.dumps(registry_contract, indent=2))
             print("SELF-TEST FAIL: registry missing contract file should fail")
             return 2
+        if not verify_operator_summary("registry missing contract", registry_contract, {"missing_contract"}):
+            return 2
 
         write_fixture(root, now, commit)
         (root / "README.md").write_text(
@@ -1362,6 +1826,8 @@ def run_self_test() -> int:
         if markdown_registry_status != 1 or "markdown_unregistered_closeout_artifact" not in json.dumps(markdown_registry):
             print(json.dumps(markdown_registry, indent=2))
             print("SELF-TEST FAIL: Markdown reference to unregistered closeout artifact should fail")
+            return 2
+        if not verify_operator_summary("markdown registry drift", markdown_registry, {"readme_drift"}):
             return 2
 
         write_fixture(root, now, commit)
@@ -1378,12 +1844,16 @@ def run_self_test() -> int:
             print(json.dumps(stale, indent=2))
             print("SELF-TEST FAIL: stale generated_at should fail")
             return 2
+        if not verify_operator_summary("stale generated_at", stale, {"stale_source"}):
+            return 2
 
         write_fixture(root, now, "0" * 40)
         missing_commit_status, missing_commit = build_summary(root, now, max_age_days=14)
         if missing_commit_status != 1 or "missing_commit" not in json.dumps(missing_commit):
             print(json.dumps(missing_commit, indent=2))
             print("SELF-TEST FAIL: missing commit should fail")
+            return 2
+        if not verify_operator_summary("missing commit", missing_commit, {"missing_commit"}):
             return 2
 
         stale_commit = create_non_ancestor_commit(root, now)
@@ -1392,6 +1862,8 @@ def run_self_test() -> int:
         if stale_commit_status != 1 or "stale_source_hash" not in json.dumps(stale_commit_report):
             print(json.dumps(stale_commit_report, indent=2))
             print("SELF-TEST FAIL: non-ancestor commit should fail")
+            return 2
+        if not verify_operator_summary("stale commit", stale_commit_report, {"stale_source"}):
             return 2
 
         write_fixture(root, now, commit)
@@ -1407,6 +1879,8 @@ def run_self_test() -> int:
         if missing_contract_status != 1 or "missing_contract" not in json.dumps(missing_contract):
             print(json.dumps(missing_contract, indent=2))
             print("SELF-TEST FAIL: uncontracted closeout evidence should fail")
+            return 2
+        if not verify_operator_summary("missing contract", missing_contract, {"missing_contract"}):
             return 2
 
         write_fixture(root, now, commit)
@@ -1443,6 +1917,8 @@ def run_self_test() -> int:
             print(json.dumps(hash_report, indent=2))
             print("SELF-TEST FAIL: stale sha256 source fingerprint should fail")
             return 2
+        if not verify_operator_summary("hash drift", hash_report, {"hash_drift"}):
+            return 2
 
         write_fixture(root, now, commit)
         missing_child_payload = load_json_object(root / "docs/evidence/demo-closeout-gate.json")
@@ -1460,6 +1936,8 @@ def run_self_test() -> int:
         if malformed_status != 1 or "json_parse" not in json.dumps(malformed):
             print(json.dumps(malformed, indent=2))
             print("SELF-TEST FAIL: malformed closeout JSON should produce json_parse finding")
+            return 2
+        if not verify_operator_summary("malformed closeout JSON", malformed, {"malformed_source"}):
             return 2
 
         write_fixture(root, now, commit)
@@ -1510,6 +1988,8 @@ def run_self_test() -> int:
             print(json.dumps(readme, indent=2))
             print("SELF-TEST FAIL: README reference to older artifact should fail")
             return 2
+        if not verify_operator_summary("README older artifact", readme, {"readme_drift"}):
+            return 2
     except Exception as exc:
         print(f"SELF-TEST ERROR in {root}: {exc}")
         return 2
@@ -1524,6 +2004,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--max-age-days", type=int, default=14)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--compact", action="store_true", help="emit compact JSON")
+    parser.add_argument(
+        "--operator-summary",
+        choices=("json", "text", "markdown"),
+        help="emit only the operator-facing next-action summary in the requested format",
+    )
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -1541,6 +2026,15 @@ def main(argv: list[str]) -> int:
         }
         print(json.dumps(error_payload, indent=None if args.compact else 2))
         return 2
+    if args.operator_summary:
+        operator_summary = payload["operator_summary"]
+        if args.operator_summary == "json":
+            print(json.dumps(operator_summary, indent=None if args.compact else 2))
+        elif args.operator_summary == "text":
+            print(format_operator_summary_text(operator_summary), end="")
+        else:
+            print(format_operator_summary_markdown(operator_summary), end="")
+        return status
     print(json.dumps(payload, indent=None if args.compact else 2))
     return status
 
