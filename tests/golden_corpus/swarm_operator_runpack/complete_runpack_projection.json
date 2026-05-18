@@ -894,6 +894,7 @@
   "operator_next_actions": [
     "Review stale in-progress Beads before assigning more work",
     "Treat cargo/RCH admission as blocked or degraded before heavy builds",
+    "Inspect predictive telemetry ledger next bottleneck: work_queue_pressure (blocked)",
     "Inspect remote validation proof ledger before closing RCH-required beads",
     "Back off heavy cargo validation until the RCH queue forecast recovers",
     "Use activity-digest saturation evidence to narrow or redirect the swarm",
@@ -910,6 +911,643 @@
     "Review degraded swarm-scale safety scorecard dimensions before release runpack signoff",
     "Review progress SLO `build_saturated` before launching more swarm work"
   ],
+  "predictive_telemetry_ledger": {
+    "generated_at": "2026-05-09T09:00:00+00:00",
+    "guards": {
+      "advisory_only": true,
+      "does_not_replace_source_evidence": true,
+      "no_agent_mail_or_rch_mutation": true,
+      "no_live_scheduler_mutation": true,
+      "not_release_or_capacity_claim_evidence": true,
+      "read_only": true
+    },
+    "next_bottleneck_hypotheses": [
+      {
+        "confidence": "high",
+        "evidence_paths": [
+          "beads.active_count",
+          "beads.open_candidate_count",
+          "beads.stale",
+          "beads.deferred_planning"
+        ],
+        "forecast_horizon": "next_bead_selection",
+        "hypothesis_id": "next_bottleneck_work_queue_pressure",
+        "pressure_dimension": "work_queue",
+        "rank": 1,
+        "rationale": "Work-queue pressure is predicted from Beads active, open, stale, and deferred-planning evidence.",
+        "recommended_action": "Prefer ready open Beads; if none exist, refine deferred roadmap epics into concrete children before claiming work.",
+        "source_observation_id": "work_queue_pressure",
+        "status": "blocked"
+      },
+      {
+        "confidence": "high",
+        "evidence_paths": [
+          "turn_pressure_ledger.status",
+          "turn_pressure_ledger.pressure_events",
+          "turn_pressure_ledger.summary.pressure_event_count"
+        ],
+        "forecast_horizon": "current_turn",
+        "hypothesis_id": "next_bottleneck_turn_context_pressure",
+        "pressure_dimension": "turn_context",
+        "rank": 2,
+        "rationale": "Turn context pressure is predicted from the current runpack turn-pressure ledger.",
+        "recommended_action": "Use turn-pressure events to decide whether to compact, externalize tool artifacts, or pause provider/TUI-sensitive work.",
+        "source_observation_id": "turn_context_pressure",
+        "status": "blocked"
+      },
+      {
+        "confidence": "medium",
+        "evidence_paths": [
+          "agent_mail_read_state.status",
+          "agent_mail_read_state.semantic_readiness_status",
+          "agent_mail_read_state.fallback_action",
+          "beads.active_ownership"
+        ],
+        "forecast_horizon": "next_agent_claim",
+        "hypothesis_id": "next_bottleneck_coordination_pressure",
+        "pressure_dimension": "coordination",
+        "rank": 3,
+        "rationale": "Coordination pressure is predicted from Agent Mail readiness and Beads soft-lock posture.",
+        "recommended_action": "Use Beads status/comments as the coordination record until Agent Mail registration, acknowledgements, and reservations are writable again.",
+        "source_observation_id": "coordination_pressure",
+        "status": "blocked"
+      },
+      {
+        "confidence": "high",
+        "evidence_paths": [
+          "rch_admission.decision",
+          "rch_admission.queue_forecast.recommended_action",
+          "remote_validation_proof_ledger.summary"
+        ],
+        "forecast_horizon": "next_validation_command",
+        "hypothesis_id": "next_bottleneck_validation_pressure",
+        "pressure_dimension": "validation",
+        "rank": 4,
+        "rationale": "Validation pressure is predicted from RCH admission plus remote proof outcomes.",
+        "recommended_action": "Run heavy cargo through RCH only when admission and proof evidence are clean; otherwise prefer script checks, source inspection, or split validation.",
+        "source_observation_id": "validation_pressure",
+        "status": "pressured"
+      }
+    ],
+    "observation_count": 6,
+    "observations": [
+      {
+        "confidence": "high",
+        "evidence_paths": [
+          "rch_admission.decision",
+          "rch_admission.queue_forecast.recommended_action",
+          "remote_validation_proof_ledger.summary"
+        ],
+        "forecast_horizon": "next_validation_command",
+        "id": "validation_pressure",
+        "metrics": {
+          "blocked_entries": 1,
+          "decision": "backoff",
+          "degraded_entries": 0,
+          "failed_entries": 0,
+          "queue_status": "ok",
+          "recommended_action": "backoff"
+        },
+        "next_action": "Run heavy cargo through RCH only when admission and proof evidence are clean; otherwise prefer script checks, source inspection, or split validation.",
+        "pressure_dimension": "validation",
+        "rationale": "Validation pressure is predicted from RCH admission plus remote proof outcomes.",
+        "signal": "rch_or_validation_backoff",
+        "source_refs": [
+          {
+            "freshness": "current",
+            "id": "cargo_admission",
+            "path": "[WORKSPACE]/cargo.json",
+            "schema": "pi.cargo_headroom.admission.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          },
+          {
+            "freshness": "current",
+            "id": "rch_artifact_sync",
+            "path": "[WORKSPACE]/rch-artifact-sync.json",
+            "schema": "pi.rch.artifact_sync_preflight.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          }
+        ],
+        "status": "pressured"
+      },
+      {
+        "confidence": "medium",
+        "evidence_paths": [
+          "agent_mail_read_state.status",
+          "agent_mail_read_state.semantic_readiness_status",
+          "agent_mail_read_state.fallback_action",
+          "beads.active_ownership"
+        ],
+        "forecast_horizon": "next_agent_claim",
+        "id": "coordination_pressure",
+        "metrics": {
+          "agent_mail_status": "degraded",
+          "fallback_action": "use_beads_soft_lock",
+          "recovery_mode": null,
+          "semantic_readiness_status": "fail",
+          "soft_lock": "beads"
+        },
+        "next_action": "Use Beads status/comments as the coordination record until Agent Mail registration, acknowledgements, and reservations are writable again.",
+        "pressure_dimension": "coordination",
+        "rationale": "Coordination pressure is predicted from Agent Mail readiness and Beads soft-lock posture.",
+        "signal": "agent_mail_write_path_blocked",
+        "source_refs": [
+          {
+            "freshness": "current",
+            "id": "doctor_swarm",
+            "path": "[WORKSPACE]/doctor.json",
+            "schema": null,
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          },
+          {
+            "freshness": "current",
+            "id": "smoke_harness",
+            "path": "[WORKSPACE]/smoke.json",
+            "schema": "pi.swarm.smoke_harness.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          },
+          {
+            "freshness": "current",
+            "id": "beads",
+            "path": "[WORKSPACE]/beads.json",
+            "schema": null,
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          }
+        ],
+        "status": "blocked"
+      },
+      {
+        "confidence": "high",
+        "evidence_paths": [
+          "beads.active_count",
+          "beads.open_candidate_count",
+          "beads.stale",
+          "beads.deferred_planning"
+        ],
+        "forecast_horizon": "next_bead_selection",
+        "id": "work_queue_pressure",
+        "metrics": {
+          "active_count": 2,
+          "deferred_planning_count": 0,
+          "open_candidate_count": 1,
+          "stale_count": 1
+        },
+        "next_action": "Prefer ready open Beads; if none exist, refine deferred roadmap epics into concrete children before claiming work.",
+        "pressure_dimension": "work_queue",
+        "rationale": "Work-queue pressure is predicted from Beads active, open, stale, and deferred-planning evidence.",
+        "signal": "stale_in_progress_work_blocks_assignment",
+        "source_refs": [
+          {
+            "freshness": "current",
+            "id": "beads",
+            "path": "[WORKSPACE]/beads.json",
+            "schema": null,
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          }
+        ],
+        "status": "blocked"
+      },
+      {
+        "confidence": "high",
+        "evidence_paths": [
+          "turn_pressure_ledger.status",
+          "turn_pressure_ledger.pressure_events",
+          "turn_pressure_ledger.summary.pressure_event_count"
+        ],
+        "forecast_horizon": "current_turn",
+        "id": "turn_context_pressure",
+        "metrics": {
+          "dimension_status_counts": {
+            "blocked": 1,
+            "pressured": 5
+          },
+          "highest_status": "blocked",
+          "pressure_event_count": 6
+        },
+        "next_action": "Use turn-pressure events to decide whether to compact, externalize tool artifacts, or pause provider/TUI-sensitive work.",
+        "pressure_dimension": "turn_context",
+        "rationale": "Turn context pressure is predicted from the current runpack turn-pressure ledger.",
+        "signal": "turn_pressure_blocked",
+        "source_refs": [
+          {
+            "freshness": "current",
+            "id": "smoke_harness",
+            "path": "[WORKSPACE]/smoke.json",
+            "schema": "pi.swarm.smoke_harness.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          },
+          {
+            "freshness": "current",
+            "id": "tail_latency",
+            "path": "[WORKSPACE]/tail-latency.json",
+            "schema": "pi.operator_tail_latency.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          },
+          {
+            "freshness": "current",
+            "id": "flight_recorder",
+            "path": "[WORKSPACE]/flight-recorder-report.json",
+            "schema": "pi.swarm.flight_recorder.report.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          },
+          {
+            "freshness": "current",
+            "id": "session_recovery_swarm_profile",
+            "path": "[WORKSPACE]/session-recovery-profile.json",
+            "schema": "pi.session_store_v2.recovery_swarm_profile.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          }
+        ],
+        "status": "blocked"
+      },
+      {
+        "confidence": "high",
+        "evidence_paths": [
+          "bottleneck_attribution.status",
+          "bottleneck_attribution.blocked_inputs",
+          "bottleneck_attribution.historical_snapshots",
+          "bottleneck_attribution.bottlenecks"
+        ],
+        "forecast_horizon": "next_operator_handoff",
+        "id": "bottleneck_source_pressure",
+        "metrics": {
+          "blocked_input_count": 0,
+          "bottleneck_count": 4,
+          "dashboard_status": "ready",
+          "historical_snapshot_count": 0
+        },
+        "next_action": "Refresh blocked or stale diagnostic sources before trusting the next bottleneck attribution handoff.",
+        "pressure_dimension": "bottleneck_attribution",
+        "rationale": "Bottleneck-source pressure is predicted from source freshness and observed bottleneck count.",
+        "signal": "bottlenecks_observed",
+        "source_refs": [
+          {
+            "freshness": "current",
+            "id": "doctor_swarm",
+            "path": "[WORKSPACE]/doctor.json",
+            "schema": null,
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          },
+          {
+            "freshness": "current",
+            "id": "smoke_harness",
+            "path": "[WORKSPACE]/smoke.json",
+            "schema": "pi.swarm.smoke_harness.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          },
+          {
+            "freshness": "current",
+            "id": "activity_digest",
+            "path": "[WORKSPACE]/activity.json",
+            "schema": "pi.swarm.activity_digest.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          },
+          {
+            "freshness": "current",
+            "id": "cargo_admission",
+            "path": "[WORKSPACE]/cargo.json",
+            "schema": "pi.cargo_headroom.admission.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          },
+          {
+            "freshness": "current",
+            "id": "tail_latency",
+            "path": "[WORKSPACE]/tail-latency.json",
+            "schema": "pi.operator_tail_latency.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          },
+          {
+            "freshness": "current",
+            "id": "flight_recorder",
+            "path": "[WORKSPACE]/flight-recorder-report.json",
+            "schema": "pi.swarm.flight_recorder.report.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          },
+          {
+            "freshness": "current",
+            "id": "host_preflight",
+            "path": "[WORKSPACE]/host-preflight.json",
+            "schema": "pi.doctor.swarm_resource_preflight.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          },
+          {
+            "freshness": "current",
+            "id": "hostcall_swarm_profile",
+            "path": "[WORKSPACE]/hostcall-profile.json",
+            "schema": "pi.ext.hostcall_admission_swarm_profile.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          },
+          {
+            "freshness": "current",
+            "id": "session_recovery_swarm_profile",
+            "path": "[WORKSPACE]/session-recovery-profile.json",
+            "schema": "pi.session_store_v2.recovery_swarm_profile.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          },
+          {
+            "freshness": "current",
+            "id": "rpc_swarm_e2e",
+            "path": "[WORKSPACE]/rpc-swarm-e2e.json",
+            "schema": "pi.rpc.concurrent_swarm_e2e.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          },
+          {
+            "freshness": "current",
+            "id": "rch_artifact_sync",
+            "path": "[WORKSPACE]/rch-artifact-sync.json",
+            "schema": "pi.rch.artifact_sync_preflight.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          }
+        ],
+        "status": "pressured"
+      },
+      {
+        "confidence": "high",
+        "evidence_paths": [
+          "evidence_readiness.overall_status",
+          "evidence_readiness.blocking_artifacts",
+          "evidence_readiness.stale_claims",
+          "stale_evidence_renewal_queue.summary"
+        ],
+        "forecast_horizon": "next_claim_or_release_handoff",
+        "id": "evidence_freshness_pressure",
+        "metrics": {
+          "blocking_artifact_count": 0,
+          "overall_status": "ready",
+          "renewal_blocked_count": 0,
+          "renewal_item_count": 0,
+          "stale_claim_count": 0
+        },
+        "next_action": "Renew stale evidence before making claim-facing statements; keep this ledger advisory unless claim gates authorize the claim.",
+        "pressure_dimension": "evidence_freshness",
+        "rationale": "Evidence pressure is predicted from claim-readiness and stale-renewal queue summaries.",
+        "signal": "evidence_fresh",
+        "source_refs": [
+          {
+            "freshness": "current",
+            "id": "claim_readiness",
+            "path": "[WORKSPACE]/claim.json",
+            "schema": "pi.swarm.claim_readiness_report.v1",
+            "sha256": "[SHA256]",
+            "status": "ok",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          },
+          {
+            "freshness": "missing",
+            "id": "stale_evidence_renewal_queue",
+            "path": null,
+            "schema": null,
+            "sha256": null,
+            "status": "not_provided",
+            "timestamp": "2026-05-09T09:00:00+00:00"
+          }
+        ],
+        "status": "ok"
+      }
+    ],
+    "purpose": "advisory_pressure_prediction_not_release_performance_claim",
+    "schema": "pi.swarm.predictive_telemetry_ledger.v1",
+    "source_freshness": [
+      {
+        "freshness_classification": "fresh",
+        "freshness_hours": null,
+        "id": "doctor_swarm",
+        "issue": null,
+        "path": "[WORKSPACE]/doctor.json",
+        "schema": null,
+        "sha256": "[SHA256]",
+        "size_bytes": "[SIZE_BYTES]",
+        "status": "ok",
+        "timestamp": null
+      },
+      {
+        "freshness_classification": "unclassified",
+        "freshness_hours": null,
+        "id": "claim_readiness",
+        "issue": null,
+        "path": "[WORKSPACE]/claim.json",
+        "schema": "pi.swarm.claim_readiness_report.v1",
+        "sha256": "[SHA256]",
+        "size_bytes": "[SIZE_BYTES]",
+        "status": "ok",
+        "timestamp": null
+      },
+      {
+        "freshness_classification": "fresh",
+        "freshness_hours": null,
+        "id": "smoke_harness",
+        "issue": null,
+        "path": "[WORKSPACE]/smoke.json",
+        "schema": "pi.swarm.smoke_harness.v1",
+        "sha256": "[SHA256]",
+        "size_bytes": "[SIZE_BYTES]",
+        "status": "ok",
+        "timestamp": null
+      },
+      {
+        "freshness_classification": "fresh",
+        "freshness_hours": null,
+        "id": "activity_digest",
+        "issue": null,
+        "path": "[WORKSPACE]/activity.json",
+        "schema": "pi.swarm.activity_digest.v1",
+        "sha256": "[SHA256]",
+        "size_bytes": "[SIZE_BYTES]",
+        "status": "ok",
+        "timestamp": null
+      },
+      {
+        "freshness_classification": "fresh",
+        "freshness_hours": null,
+        "id": "cargo_admission",
+        "issue": null,
+        "path": "[WORKSPACE]/cargo.json",
+        "schema": "pi.cargo_headroom.admission.v1",
+        "sha256": "[SHA256]",
+        "size_bytes": "[SIZE_BYTES]",
+        "status": "ok",
+        "timestamp": null
+      },
+      {
+        "freshness_classification": "unclassified",
+        "freshness_hours": null,
+        "id": "beads",
+        "issue": null,
+        "path": "[WORKSPACE]/beads.json",
+        "schema": null,
+        "sha256": "[SHA256]",
+        "size_bytes": "[SIZE_BYTES]",
+        "status": "ok",
+        "timestamp": null
+      },
+      {
+        "freshness_classification": "unclassified",
+        "freshness_hours": null,
+        "id": "git_status",
+        "issue": null,
+        "path": "[WORKSPACE]/git-status.json",
+        "schema": "pi.swarm.git_context.v1",
+        "sha256": "[SHA256]",
+        "size_bytes": "[SIZE_BYTES]",
+        "status": "ok",
+        "timestamp": null
+      },
+      {
+        "freshness_classification": "fresh",
+        "freshness_hours": 0.0,
+        "id": "tail_latency",
+        "issue": null,
+        "path": "[WORKSPACE]/tail-latency.json",
+        "schema": "pi.operator_tail_latency.v1",
+        "sha256": "[SHA256]",
+        "size_bytes": "[SIZE_BYTES]",
+        "status": "ok",
+        "timestamp": "2026-05-09T09:00:00+00:00"
+      },
+      {
+        "freshness_classification": "fresh",
+        "freshness_hours": 0.0,
+        "id": "flight_recorder",
+        "issue": null,
+        "path": "[WORKSPACE]/flight-recorder-report.json",
+        "schema": "pi.swarm.flight_recorder.report.v1",
+        "sha256": "[SHA256]",
+        "size_bytes": "[SIZE_BYTES]",
+        "status": "ok",
+        "timestamp": "2026-05-09T09:00:00+00:00"
+      },
+      {
+        "freshness_classification": "fresh",
+        "freshness_hours": 0.0,
+        "id": "host_preflight",
+        "issue": null,
+        "path": "[WORKSPACE]/host-preflight.json",
+        "schema": "pi.doctor.swarm_resource_preflight.v1",
+        "sha256": "[SHA256]",
+        "size_bytes": "[SIZE_BYTES]",
+        "status": "ok",
+        "timestamp": "2026-05-09T09:00:00+00:00"
+      },
+      {
+        "freshness_classification": "fresh",
+        "freshness_hours": 0.0,
+        "id": "hostcall_swarm_profile",
+        "issue": null,
+        "path": "[WORKSPACE]/hostcall-profile.json",
+        "schema": "pi.ext.hostcall_admission_swarm_profile.v1",
+        "sha256": "[SHA256]",
+        "size_bytes": "[SIZE_BYTES]",
+        "status": "ok",
+        "timestamp": "2026-05-09T09:00:00+00:00"
+      },
+      {
+        "freshness_classification": "fresh",
+        "freshness_hours": 0.0,
+        "id": "session_recovery_swarm_profile",
+        "issue": null,
+        "path": "[WORKSPACE]/session-recovery-profile.json",
+        "schema": "pi.session_store_v2.recovery_swarm_profile.v1",
+        "sha256": "[SHA256]",
+        "size_bytes": "[SIZE_BYTES]",
+        "status": "ok",
+        "timestamp": "2026-05-09T09:00:00+00:00"
+      },
+      {
+        "freshness_classification": "fresh",
+        "freshness_hours": 0.0,
+        "id": "rpc_swarm_e2e",
+        "issue": null,
+        "path": "[WORKSPACE]/rpc-swarm-e2e.json",
+        "schema": "pi.rpc.concurrent_swarm_e2e.v1",
+        "sha256": "[SHA256]",
+        "size_bytes": "[SIZE_BYTES]",
+        "status": "ok",
+        "timestamp": "2026-05-09T09:00:00+00:00"
+      },
+      {
+        "freshness_classification": "fresh",
+        "freshness_hours": 0.0,
+        "id": "rch_artifact_sync",
+        "issue": null,
+        "path": "[WORKSPACE]/rch-artifact-sync.json",
+        "schema": "pi.rch.artifact_sync_preflight.v1",
+        "sha256": "[SHA256]",
+        "size_bytes": "[SIZE_BYTES]",
+        "status": "ok",
+        "timestamp": "2026-05-09T09:00:00+00:00"
+      },
+      {
+        "freshness_classification": "unclassified",
+        "freshness_hours": null,
+        "id": "progress_slo",
+        "issue": null,
+        "path": "[WORKSPACE]/progress-slo.json",
+        "schema": "pi.swarm.progress_slo.v1",
+        "sha256": "[SHA256]",
+        "size_bytes": "[SIZE_BYTES]",
+        "status": "ok",
+        "timestamp": null
+      }
+    ],
+    "source_runpack_schema": "pi.swarm.operator_runpack.v1",
+    "status": "blocked",
+    "summary": {
+      "blocked_or_stale_count": 3,
+      "highest_status": "blocked",
+      "hypothesis_count": 4,
+      "observation_status_counts": {
+        "blocked": 3,
+        "ok": 1,
+        "pressured": 2
+      },
+      "source_freshness_counts": {
+        "fresh": 11,
+        "unclassified": 4
+      }
+    }
+  },
   "progress_slo": {
     "confidence": 0.64,
     "contract_version": "1.0.0",

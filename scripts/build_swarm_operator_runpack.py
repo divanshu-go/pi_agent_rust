@@ -37,6 +37,10 @@ TAIL_LATENCY_SCHEMA = "pi.operator_tail_latency.v1"
 BOTTLENECK_ATTRIBUTION_SCHEMA = "pi.swarm.bottleneck_attribution_dashboard.v1"
 TURN_PRESSURE_LEDGER_SCHEMA = "pi.swarm.turn_pressure_ledger.v1"
 TURN_PRESSURE_LEDGER_CONTRACT_SCHEMA = "pi.swarm.turn_pressure_ledger_contract.v1"
+PREDICTIVE_TELEMETRY_LEDGER_SCHEMA = "pi.swarm.predictive_telemetry_ledger.v1"
+PREDICTIVE_TELEMETRY_LEDGER_CONTRACT_SCHEMA = (
+    "pi.swarm.predictive_telemetry_ledger_contract.v1"
+)
 TEMP_ARTIFACT_INVENTORY_SCHEMA = "pi.swarm.temp_artifact_inventory.v1"
 STALE_EVIDENCE_RENEWAL_QUEUE_SCHEMA = "pi.swarm.stale_evidence_renewal_queue.v1"
 FLIGHT_RECORDER_REPORT_SCHEMA = "pi.swarm.flight_recorder.report.v1"
@@ -135,6 +139,9 @@ SWARM_REPLAY_PREVIEW_SCHEMA = "pi.swarm.replay_preview.v1"
 RUNPACK_CONTRACT_PATH = Path("docs/contracts/swarm-operator-runpack-contract.json")
 TURN_PRESSURE_LEDGER_CONTRACT_PATH = Path(
     "docs/contracts/swarm-turn-pressure-ledger-contract.json"
+)
+PREDICTIVE_TELEMETRY_LEDGER_CONTRACT_PATH = Path(
+    "docs/contracts/predictive-swarm-telemetry-ledger-contract.json"
 )
 AUTOPILOT_INPUT_PACK_CONTRACT_PATH = Path(
     "docs/contracts/swarm-autopilot-input-pack-contract.json"
@@ -347,6 +354,51 @@ TURN_PRESSURE_LEDGER_DIMENSION_IDS = (
     "session_write_amplification",
 )
 TURN_PRESSURE_LEDGER_ALLOWED_STATUSES = ("ok", "watch", "pressured", "blocked")
+PREDICTIVE_TELEMETRY_REQUIRED_OBSERVATION_IDS = (
+    "validation_pressure",
+    "coordination_pressure",
+    "work_queue_pressure",
+    "turn_context_pressure",
+    "bottleneck_source_pressure",
+    "evidence_freshness_pressure",
+)
+PREDICTIVE_TELEMETRY_ALLOWED_STATUSES = (
+    "ok",
+    "watch",
+    "pressured",
+    "blocked",
+    "stale",
+    "missing",
+)
+PREDICTIVE_TELEMETRY_CONFIDENCE = ("high", "medium", "low")
+PREDICTIVE_OBSERVATION_SOURCE_IDS: dict[str, tuple[str, ...]] = {
+    "validation_pressure": ("cargo_admission", "rch_artifact_sync"),
+    "coordination_pressure": ("doctor_swarm", "smoke_harness", "beads"),
+    "work_queue_pressure": ("beads",),
+    "turn_context_pressure": (
+        "smoke_harness",
+        "tail_latency",
+        "flight_recorder",
+        "session_recovery_swarm_profile",
+    ),
+    "bottleneck_source_pressure": (
+        "doctor_swarm",
+        "smoke_harness",
+        "activity_digest",
+        "cargo_admission",
+        "tail_latency",
+        "flight_recorder",
+        "host_preflight",
+        "hostcall_swarm_profile",
+        "session_recovery_swarm_profile",
+        "rpc_swarm_e2e",
+        "rch_artifact_sync",
+    ),
+    "evidence_freshness_pressure": (
+        "claim_readiness",
+        "stale_evidence_renewal_queue",
+    ),
+}
 ACTION_PLAN_TO_WORK_ADMISSION_DECISION = {
     "implement_ready_work": "proceed_with_implementation",
     "create_or_refine_beads": "create_or_refine_bead",
@@ -3799,6 +3851,565 @@ def build_turn_pressure_ledger(
         },
     }
     assert_turn_pressure_ledger_contract(ledger)
+    return ledger
+
+
+def predictive_status_rank(status: str) -> int:
+    return {
+        "ok": 0,
+        "watch": 1,
+        "pressured": 2,
+        "stale": 2,
+        "missing": 3,
+        "blocked": 3,
+    }.get(status, 3)
+
+
+def highest_predictive_status(statuses: list[str]) -> str:
+    if not statuses:
+        return "ok"
+    return max(statuses, key=predictive_status_rank)
+
+
+def predictive_confidence_for_sources(*source_statuses: str | None) -> str:
+    statuses = {status for status in source_statuses if status}
+    if not statuses:
+        return "low"
+    if statuses.issubset({"ok"}):
+        return "high"
+    if statuses & {"missing", "not_provided"}:
+        return "low"
+    return "medium"
+
+
+def predictive_source_freshness(status: str | None) -> str:
+    if status == "ok":
+        return "current"
+    if status in {"missing", "not_provided"}:
+        return "missing"
+    return "degraded"
+
+
+def predictive_source_refs_for_observation(
+    runpack: dict[str, Any],
+    observation_id: str,
+) -> list[dict[str, Any]]:
+    source_statuses = {
+        str(item.get("id")): item
+        for item in runpack.get("source_statuses", [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    refs: list[dict[str, Any]] = []
+    for source_id in PREDICTIVE_OBSERVATION_SOURCE_IDS.get(observation_id, ()):
+        source = source_statuses.get(source_id, {})
+        status = proof_string(source.get("status"), "not_provided")
+        refs.append(
+            {
+                "id": source_id,
+                "path": source.get("path"),
+                "status": status,
+                "schema": source.get("schema"),
+                "sha256": source.get("sha256"),
+                "freshness": predictive_source_freshness(status),
+                "timestamp": runpack.get("generated_at"),
+            }
+        )
+    return refs
+
+
+def predictive_observation(
+    *,
+    observation_id: str,
+    status: str,
+    pressure_dimension: str,
+    signal: str,
+    confidence: str,
+    forecast_horizon: str,
+    evidence_paths: list[str],
+    metrics: dict[str, Any],
+    next_action: str,
+    rationale: str,
+) -> dict[str, Any]:
+    assert observation_id in PREDICTIVE_TELEMETRY_REQUIRED_OBSERVATION_IDS
+    assert status in PREDICTIVE_TELEMETRY_ALLOWED_STATUSES
+    assert confidence in PREDICTIVE_TELEMETRY_CONFIDENCE
+    return {
+        "id": observation_id,
+        "status": status,
+        "pressure_dimension": pressure_dimension,
+        "signal": signal,
+        "confidence": confidence,
+        "forecast_horizon": forecast_horizon,
+        "evidence_paths": evidence_paths,
+        "metrics": metrics,
+        "next_action": next_action,
+        "rationale": rationale,
+    }
+
+
+def build_validation_pressure_observation(runpack: dict[str, Any]) -> dict[str, Any]:
+    rch = runpack.get("rch_admission") if isinstance(runpack.get("rch_admission"), dict) else {}
+    proof = (
+        runpack.get("remote_validation_proof_ledger")
+        if isinstance(runpack.get("remote_validation_proof_ledger"), dict)
+        else {}
+    )
+    proof_summary = proof.get("summary") if isinstance(proof.get("summary"), dict) else {}
+    queue = rch.get("queue_forecast") if isinstance(rch.get("queue_forecast"), dict) else {}
+    decision = rch.get("decision")
+    blocked_entries = int_value(proof_summary.get("blocked_entries")) or 0
+    failed_entries = int_value(proof_summary.get("failed_entries")) or 0
+    degraded_entries = int_value(proof_summary.get("degraded_entries")) or 0
+    recommended_action = queue.get("recommended_action")
+    slot_pressure = queue.get("slot_pressure")
+    status = "ok"
+    signal = "validation_capacity_available"
+    if decision in {"deny"} or failed_entries:
+        status = "blocked"
+        signal = "validation_execution_blocked"
+    elif (
+        decision in {"backoff", "degraded"}
+        or blocked_entries
+        or recommended_action == "backoff"
+        or slot_pressure == "saturated"
+    ):
+        status = "pressured"
+        signal = "rch_or_validation_backoff"
+    elif degraded_entries or recommended_action == "split" or slot_pressure == "high":
+        status = "watch"
+        signal = "validation_watch"
+    return predictive_observation(
+        observation_id="validation_pressure",
+        status=status,
+        pressure_dimension="validation",
+        signal=signal,
+        confidence=predictive_confidence_for_sources(rch.get("status")),
+        forecast_horizon="next_validation_command",
+        evidence_paths=[
+            "rch_admission.decision",
+            "rch_admission.queue_forecast.recommended_action",
+            "remote_validation_proof_ledger.summary",
+        ],
+        metrics={
+            "decision": decision,
+            "queue_status": queue.get("status"),
+            "recommended_action": recommended_action,
+            "blocked_entries": blocked_entries,
+            "degraded_entries": degraded_entries,
+            "failed_entries": failed_entries,
+        },
+        next_action=(
+            "Run heavy cargo through RCH only when admission and proof evidence are clean; "
+            "otherwise prefer script checks, source inspection, or split validation."
+        ),
+        rationale="Validation pressure is predicted from RCH admission plus remote proof outcomes.",
+    )
+
+
+def build_coordination_pressure_observation(runpack: dict[str, Any]) -> dict[str, Any]:
+    mail = (
+        runpack.get("agent_mail_read_state")
+        if isinstance(runpack.get("agent_mail_read_state"), dict)
+        else {}
+    )
+    status_value = mail.get("status")
+    semantic = mail.get("semantic_readiness_status")
+    fallback = mail.get("fallback_action")
+    status = "ok"
+    signal = "coordination_writes_available"
+    if status_value in {"unavailable", "not_available", "missing", "error"} or semantic == "fail":
+        status = "blocked"
+        signal = "agent_mail_write_path_blocked"
+    elif status_value in {"degraded", "degraded_read_only"} or fallback == "use_beads_soft_lock":
+        status = "pressured"
+        signal = "beads_soft_lock_required"
+    elif status_value not in {None, "ok"}:
+        status = "watch"
+        signal = "coordination_watch"
+    return predictive_observation(
+        observation_id="coordination_pressure",
+        status=status,
+        pressure_dimension="coordination",
+        signal=signal,
+        confidence=predictive_confidence_for_sources(mail.get("transport_status")),
+        forecast_horizon="next_agent_claim",
+        evidence_paths=[
+            "agent_mail_read_state.status",
+            "agent_mail_read_state.semantic_readiness_status",
+            "agent_mail_read_state.fallback_action",
+            "beads.active_ownership",
+        ],
+        metrics={
+            "agent_mail_status": status_value,
+            "semantic_readiness_status": semantic,
+            "fallback_action": fallback,
+            "soft_lock": mail.get("soft_lock"),
+            "recovery_mode": mail.get("recovery_mode"),
+        },
+        next_action=(
+            "Use Beads status/comments as the coordination record until Agent Mail "
+            "registration, acknowledgements, and reservations are writable again."
+        ),
+        rationale="Coordination pressure is predicted from Agent Mail readiness and Beads soft-lock posture.",
+    )
+
+
+def build_work_queue_pressure_observation(runpack: dict[str, Any]) -> dict[str, Any]:
+    beads = runpack.get("beads") if isinstance(runpack.get("beads"), dict) else {}
+    active_count = int_value(beads.get("active_count")) or 0
+    open_count = int_value(beads.get("open_candidate_count")) or 0
+    stale = beads.get("stale") if isinstance(beads.get("stale"), list) else []
+    deferred = (
+        beads.get("deferred_planning")
+        if isinstance(beads.get("deferred_planning"), list)
+        else []
+    )
+    status = "ok"
+    signal = "ready_work_available"
+    if stale:
+        status = "blocked"
+        signal = "stale_in_progress_work_blocks_assignment"
+    elif open_count == 0 and deferred:
+        status = "watch"
+        signal = "planning_backlog_needs_children"
+    elif active_count >= 8:
+        status = "pressured"
+        signal = "many_active_beads"
+    elif open_count == 0:
+        status = "watch"
+        signal = "empty_ready_queue"
+    return predictive_observation(
+        observation_id="work_queue_pressure",
+        status=status,
+        pressure_dimension="work_queue",
+        signal=signal,
+        confidence=predictive_confidence_for_sources(beads.get("status")),
+        forecast_horizon="next_bead_selection",
+        evidence_paths=[
+            "beads.active_count",
+            "beads.open_candidate_count",
+            "beads.stale",
+            "beads.deferred_planning",
+        ],
+        metrics={
+            "active_count": active_count,
+            "open_candidate_count": open_count,
+            "stale_count": len(stale),
+            "deferred_planning_count": len(deferred),
+        },
+        next_action=(
+            "Prefer ready open Beads; if none exist, refine deferred roadmap epics "
+            "into concrete children before claiming work."
+        ),
+        rationale="Work-queue pressure is predicted from Beads active, open, stale, and deferred-planning evidence.",
+    )
+
+
+def build_turn_context_pressure_observation(runpack: dict[str, Any]) -> dict[str, Any]:
+    ledger = (
+        runpack.get("turn_pressure_ledger")
+        if isinstance(runpack.get("turn_pressure_ledger"), dict)
+        else {}
+    )
+    summary = ledger.get("summary") if isinstance(ledger.get("summary"), dict) else {}
+    status_value = ledger.get("status")
+    status = status_value if status_value in PREDICTIVE_TELEMETRY_ALLOWED_STATUSES else "missing"
+    return predictive_observation(
+        observation_id="turn_context_pressure",
+        status=status,
+        pressure_dimension="turn_context",
+        signal="turn_pressure_" + str(status_value or "missing"),
+        confidence=predictive_confidence_for_sources("ok" if ledger else "missing"),
+        forecast_horizon="current_turn",
+        evidence_paths=[
+            "turn_pressure_ledger.status",
+            "turn_pressure_ledger.pressure_events",
+            "turn_pressure_ledger.summary.pressure_event_count",
+        ],
+        metrics={
+            "pressure_event_count": int_value(summary.get("pressure_event_count")) or 0,
+            "dimension_status_counts": summary.get("dimension_status_counts") or {},
+            "highest_status": summary.get("highest_status"),
+        },
+        next_action=(
+            "Use turn-pressure events to decide whether to compact, externalize tool "
+            "artifacts, or pause provider/TUI-sensitive work."
+        ),
+        rationale="Turn context pressure is predicted from the current runpack turn-pressure ledger.",
+    )
+
+
+def build_bottleneck_source_pressure_observation(runpack: dict[str, Any]) -> dict[str, Any]:
+    dashboard = (
+        runpack.get("bottleneck_attribution")
+        if isinstance(runpack.get("bottleneck_attribution"), dict)
+        else {}
+    )
+    blocked = dashboard.get("blocked_inputs") if isinstance(dashboard.get("blocked_inputs"), list) else []
+    historical = (
+        dashboard.get("historical_snapshots")
+        if isinstance(dashboard.get("historical_snapshots"), list)
+        else []
+    )
+    bottlenecks = dashboard.get("bottlenecks") if isinstance(dashboard.get("bottlenecks"), list) else []
+    status = "ok"
+    signal = "bottleneck_sources_clear"
+    if blocked:
+        status = "blocked"
+        signal = "bottleneck_inputs_blocked"
+    elif historical:
+        status = "stale"
+        signal = "bottleneck_inputs_stale"
+    elif dashboard.get("status") == "degraded" or bottlenecks:
+        status = "pressured"
+        signal = "bottlenecks_observed"
+    return predictive_observation(
+        observation_id="bottleneck_source_pressure",
+        status=status,
+        pressure_dimension="bottleneck_attribution",
+        signal=signal,
+        confidence=predictive_confidence_for_sources("ok" if dashboard else "missing"),
+        forecast_horizon="next_operator_handoff",
+        evidence_paths=[
+            "bottleneck_attribution.status",
+            "bottleneck_attribution.blocked_inputs",
+            "bottleneck_attribution.historical_snapshots",
+            "bottleneck_attribution.bottlenecks",
+        ],
+        metrics={
+            "dashboard_status": dashboard.get("status"),
+            "blocked_input_count": len(blocked),
+            "historical_snapshot_count": len(historical),
+            "bottleneck_count": len(bottlenecks),
+        },
+        next_action=(
+            "Refresh blocked or stale diagnostic sources before trusting the next "
+            "bottleneck attribution handoff."
+        ),
+        rationale="Bottleneck-source pressure is predicted from source freshness and observed bottleneck count.",
+    )
+
+
+def build_evidence_freshness_pressure_observation(runpack: dict[str, Any]) -> dict[str, Any]:
+    readiness = (
+        runpack.get("evidence_readiness")
+        if isinstance(runpack.get("evidence_readiness"), dict)
+        else {}
+    )
+    renewal = (
+        runpack.get("stale_evidence_renewal_queue")
+        if isinstance(runpack.get("stale_evidence_renewal_queue"), dict)
+        else {}
+    )
+    renewal_summary = (
+        renewal.get("summary") if isinstance(renewal.get("summary"), dict) else {}
+    )
+    blocking = (
+        readiness.get("blocking_artifacts")
+        if isinstance(readiness.get("blocking_artifacts"), list)
+        else []
+    )
+    stale_claims = (
+        readiness.get("stale_claims")
+        if isinstance(readiness.get("stale_claims"), list)
+        else []
+    )
+    stale_claim_summary = (
+        readiness.get("stale_claims")
+        if isinstance(readiness.get("stale_claims"), dict)
+        else {}
+    )
+    stale_claim_count = len(stale_claims) or int_value(
+        stale_claim_summary.get("stale_count")
+    ) or 0
+    renewal_count = int_value(renewal_summary.get("renewal_item_count")) or 0
+    blocked_count = int_value(renewal_summary.get("blocked_count")) or 0
+    status = "ok"
+    signal = "evidence_fresh"
+    if blocking or blocked_count:
+        status = "blocked"
+        signal = "claim_evidence_blocked"
+    elif stale_claim_count or renewal_count:
+        status = "stale"
+        signal = "claim_evidence_stale"
+    elif readiness.get("overall_status") not in {None, "ready"}:
+        status = "pressured"
+        signal = "claim_readiness_degraded"
+    return predictive_observation(
+        observation_id="evidence_freshness_pressure",
+        status=status,
+        pressure_dimension="evidence_freshness",
+        signal=signal,
+        confidence=predictive_confidence_for_sources(readiness.get("status")),
+        forecast_horizon="next_claim_or_release_handoff",
+        evidence_paths=[
+            "evidence_readiness.overall_status",
+            "evidence_readiness.blocking_artifacts",
+            "evidence_readiness.stale_claims",
+            "stale_evidence_renewal_queue.summary",
+        ],
+        metrics={
+            "overall_status": readiness.get("overall_status"),
+            "blocking_artifact_count": len(blocking),
+            "stale_claim_count": stale_claim_count,
+            "renewal_item_count": renewal_count,
+            "renewal_blocked_count": blocked_count,
+        },
+        next_action=(
+            "Renew stale evidence before making claim-facing statements; keep this "
+            "ledger advisory unless claim gates authorize the claim."
+        ),
+        rationale="Evidence pressure is predicted from claim-readiness and stale-renewal queue summaries.",
+    )
+
+
+def build_next_bottleneck_hypotheses(
+    observations: list[dict[str, Any]],
+    max_items: int,
+) -> list[dict[str, Any]]:
+    ranked = sorted(
+        observations,
+        key=lambda item: (
+            predictive_status_rank(str(item.get("status") or "blocked")),
+            {"high": 3, "medium": 2, "low": 1}.get(str(item.get("confidence")), 0),
+            str(item.get("id") or ""),
+        ),
+        reverse=True,
+    )
+    hypotheses: list[dict[str, Any]] = []
+    for rank, observation in enumerate(ranked, start=1):
+        if observation.get("status") == "ok" and hypotheses:
+            continue
+        hypotheses.append(
+            {
+                "rank": rank,
+                "hypothesis_id": f"next_bottleneck_{observation.get('id')}",
+                "source_observation_id": observation.get("id"),
+                "status": observation.get("status"),
+                "pressure_dimension": observation.get("pressure_dimension"),
+                "confidence": observation.get("confidence"),
+                "forecast_horizon": observation.get("forecast_horizon"),
+                "rationale": observation.get("rationale"),
+                "recommended_action": observation.get("next_action"),
+                "evidence_paths": observation.get("evidence_paths") or [],
+            }
+        )
+        if len(hypotheses) >= max_items:
+            break
+    return hypotheses
+
+
+def build_predictive_source_freshness(runpack: dict[str, Any]) -> list[dict[str, Any]]:
+    source_statuses = (
+        runpack.get("source_statuses")
+        if isinstance(runpack.get("source_statuses"), list)
+        else []
+    )
+    dashboard = (
+        runpack.get("bottleneck_attribution")
+        if isinstance(runpack.get("bottleneck_attribution"), dict)
+        else {}
+    )
+    classifications = (
+        dashboard.get("input_classification")
+        if isinstance(dashboard.get("input_classification"), list)
+        else []
+    )
+    classification_by_id = {
+        item.get("id"): item
+        for item in classifications
+        if isinstance(item, dict) and item.get("id")
+    }
+    source_status_by_id = {
+        item.get("id"): item
+        for item in source_statuses
+        if isinstance(item, dict) and item.get("id")
+    }
+    ordered_ids = list(source_status_by_id)
+    for source_id in classification_by_id:
+        if source_id not in source_status_by_id:
+            ordered_ids.append(source_id)
+    rows: list[dict[str, Any]] = []
+    for source_id in ordered_ids:
+        source = source_status_by_id.get(source_id, {})
+        classification = classification_by_id.get(source_id, {})
+        rows.append(
+            {
+                "id": source_id,
+                "path": source.get("path"),
+                "status": source.get("status") or classification.get("status"),
+                "schema": source.get("schema") or classification.get("schema"),
+                "timestamp": classification.get("timestamp"),
+                "freshness_hours": classification.get("freshness_hours"),
+                "freshness_classification": classification.get("classification")
+                or "unclassified",
+                "issue": source.get("issue") or classification.get("issue"),
+                "size_bytes": source.get("size_bytes"),
+                "sha256": source.get("sha256"),
+            }
+        )
+    return rows
+
+
+def build_predictive_telemetry_ledger(
+    runpack: dict[str, Any],
+    *,
+    generated_at: datetime,
+    max_items: int,
+) -> dict[str, Any]:
+    observations = [
+        build_validation_pressure_observation(runpack),
+        build_coordination_pressure_observation(runpack),
+        build_work_queue_pressure_observation(runpack),
+        build_turn_context_pressure_observation(runpack),
+        build_bottleneck_source_pressure_observation(runpack),
+        build_evidence_freshness_pressure_observation(runpack),
+    ]
+    for observation in observations:
+        observation["source_refs"] = predictive_source_refs_for_observation(
+            runpack,
+            proof_string(observation.get("id")),
+        )
+    statuses = [str(item.get("status") or "blocked") for item in observations]
+    status = highest_predictive_status(statuses)
+    hypotheses = build_next_bottleneck_hypotheses(observations, max_items)
+    source_freshness = build_predictive_source_freshness(runpack)
+    ledger = {
+        "schema": PREDICTIVE_TELEMETRY_LEDGER_SCHEMA,
+        "generated_at": generated_at.isoformat(),
+        "status": status,
+        "purpose": "advisory_pressure_prediction_not_release_performance_claim",
+        "source_runpack_schema": runpack.get("schema"),
+        "source_freshness": source_freshness,
+        "observation_count": len(observations),
+        "observations": observations,
+        "next_bottleneck_hypotheses": hypotheses,
+        "summary": {
+            "observation_status_counts": dict(sorted(Counter(statuses).items())),
+            "highest_status": status,
+            "hypothesis_count": len(hypotheses),
+            "blocked_or_stale_count": sum(
+                1 for item in observations if item.get("status") in {"blocked", "stale"}
+            ),
+            "source_freshness_counts": dict(
+                sorted(
+                    Counter(
+                        str(item.get("freshness_classification") or "unknown")
+                        for item in source_freshness
+                    ).items()
+                )
+            ),
+        },
+        "guards": {
+            "advisory_only": True,
+            "read_only": True,
+            "no_live_scheduler_mutation": True,
+            "no_agent_mail_or_rch_mutation": True,
+            "not_release_or_capacity_claim_evidence": True,
+            "does_not_replace_source_evidence": True,
+        },
+    }
+    assert_predictive_telemetry_ledger_contract(ledger)
     return ledger
 
 
@@ -8997,6 +9608,12 @@ def derive_status(runpack: dict[str, Any]) -> str:
         status = "degraded"
     if runpack["bottleneck_attribution"].get("status") != "ready":
         status = "degraded"
+    predictive_ledger = runpack.get("predictive_telemetry_ledger")
+    if isinstance(predictive_ledger, dict) and predictive_ledger.get("status") in {
+        "blocked",
+        "missing",
+    }:
+        status = "degraded"
     scorecard = runpack.get("swarm_scale_safety_scorecard")
     if isinstance(scorecard, dict) and scorecard.get("overall_status") != "ready":
         status = "degraded"
@@ -9109,6 +9726,11 @@ def build_runpack(args: argparse.Namespace) -> dict[str, Any]:
         stale_after_hours=args.stale_after_hours,
         max_items=args.max_items,
     )
+    runpack["predictive_telemetry_ledger"] = build_predictive_telemetry_ledger(
+        runpack,
+        generated_at=generated_at,
+        max_items=args.max_items,
+    )
     runpack["swarm_scale_safety_scorecard"] = build_swarm_scale_safety_scorecard(runpack)
     runpack["status"] = derive_status(runpack)
     runpack["operator_next_actions"] = operator_next_actions(runpack)
@@ -9141,6 +9763,19 @@ def operator_next_actions(runpack: dict[str, Any]) -> list[str]:
         )
     if runpack["rch_admission"].get("decision") in {"backoff", "degraded", "deny"}:
         actions.append("Treat cargo/RCH admission as blocked or degraded before heavy builds")
+    predictive_ledger = runpack.get("predictive_telemetry_ledger")
+    if isinstance(predictive_ledger, dict):
+        hypotheses = (
+            predictive_ledger.get("next_bottleneck_hypotheses")
+            if isinstance(predictive_ledger.get("next_bottleneck_hypotheses"), list)
+            else []
+        )
+        if hypotheses:
+            first = hypotheses[0]
+            actions.append(
+                "Inspect predictive telemetry ledger next bottleneck: "
+                f"{first.get('source_observation_id')} ({first.get('status')})"
+            )
     proof_ledger = runpack.get("remote_validation_proof_ledger")
     if isinstance(proof_ledger, dict):
         proof_summary = proof_ledger.get("summary")
@@ -9494,6 +10129,22 @@ def render_markdown(runpack: dict[str, Any]) -> str:
                 f"- `{dimension.get('id')}`: `{dimension.get('status')}` "
                 f"({dimension.get('signal')})"
             )
+    if isinstance(runpack.get("predictive_telemetry_ledger"), dict):
+        ledger = runpack["predictive_telemetry_ledger"]
+        lines.extend(["", "## Predictive Telemetry Ledger"])
+        lines.append(f"- Schema: `{ledger.get('schema')}`")
+        lines.append(f"- Status: `{ledger.get('status')}`")
+        for observation in ledger.get("observations", []):
+            lines.append(
+                f"- `{observation.get('id')}`: `{observation.get('status')}` "
+                f"({observation.get('signal')})"
+            )
+        for hypothesis in ledger.get("next_bottleneck_hypotheses", []):
+            lines.append(
+                f"- Hypothesis `{hypothesis.get('rank')}`: "
+                f"`{hypothesis.get('source_observation_id')}` "
+                f"({hypothesis.get('confidence')})"
+            )
     if isinstance(runpack.get("temp_artifact_inventory"), dict):
         inventory = runpack["temp_artifact_inventory"]
         lines.extend(["", "## Temp Artifact Inventory"])
@@ -9607,6 +10258,21 @@ def write_work_admission_gate_output(
             f"refusing to overwrite existing work admission gate: {output_path}"
         )
     output_path.write_text(json_dumps(gate, pretty=True), encoding="utf-8")
+
+
+def write_predictive_telemetry_ledger_output(
+    args: argparse.Namespace,
+    ledger: dict[str, Any],
+) -> None:
+    output_path = getattr(args, "out_predictive_telemetry_ledger_json", None)
+    if output_path is None:
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        raise RunpackError(
+            f"refusing to overwrite existing predictive telemetry ledger: {output_path}"
+        )
+    output_path.write_text(json_dumps(ledger, pretty=True), encoding="utf-8")
 
 
 def artifact_path(value: Path | None) -> str | None:
@@ -9880,6 +10546,9 @@ def assert_runpack_contract(runpack: dict[str, Any]) -> None:
     turn_pressure = runpack.get("turn_pressure_ledger")
     assert isinstance(turn_pressure, dict)
     assert_turn_pressure_ledger_contract(turn_pressure)
+    predictive_ledger = runpack.get("predictive_telemetry_ledger")
+    assert isinstance(predictive_ledger, dict)
+    assert_predictive_telemetry_ledger_contract(predictive_ledger)
     for field in contract.get("required_source_status_fields", []):
         for source in runpack.get("source_statuses", []):
             if isinstance(source, dict) and source.get("status") == "ok":
@@ -9896,6 +10565,67 @@ def assert_runpack_contract(runpack: dict[str, Any]) -> None:
     action_text = "\n".join(str(action) for action in actions)
     for fragment in contract.get("required_next_action_fragments", []):
         assert fragment in action_text, f"missing next-action fragment: {fragment}"
+
+
+def assert_predictive_telemetry_ledger_contract(ledger: dict[str, Any]) -> None:
+    repo_root = Path(__file__).resolve().parent.parent
+    contract_path = repo_root / PREDICTIVE_TELEMETRY_LEDGER_CONTRACT_PATH
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise AssertionError(
+            f"missing predictive telemetry ledger contract: {contract_path}"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"predictive telemetry ledger contract is malformed JSON: {contract_path}: {exc}"
+        ) from exc
+    assert contract.get("schema") == PREDICTIVE_TELEMETRY_LEDGER_CONTRACT_SCHEMA
+    assert contract.get("ledger_schema") == PREDICTIVE_TELEMETRY_LEDGER_SCHEMA
+    assert ledger.get("schema") == contract["ledger_schema"]
+    assert ledger.get("purpose") == contract.get("purpose")
+    assert ledger.get("status") in set(contract.get("allowed_statuses", []))
+    for key in contract.get("required_top_level_keys", []):
+        assert key in ledger, f"predictive telemetry ledger missing key: {key}"
+    source_freshness = ledger.get("source_freshness")
+    assert isinstance(source_freshness, list) and source_freshness
+    for item in source_freshness:
+        assert isinstance(item, dict)
+        for key in contract.get("required_source_freshness_keys", []):
+            assert key in item, f"predictive source freshness missing key: {key}"
+    observations = ledger.get("observations")
+    assert isinstance(observations, list) and observations
+    observation_ids = {
+        item.get("id")
+        for item in observations
+        if isinstance(item, dict)
+    }
+    required_observations = set(contract.get("required_observation_ids", []))
+    assert observation_ids.issuperset(required_observations), (
+        "missing predictive observations: "
+        f"{sorted(required_observations - observation_ids)}"
+    )
+    for item in observations:
+        assert isinstance(item, dict)
+        for key in contract.get("required_observation_keys", []):
+            assert key in item, f"predictive observation missing key: {key}"
+        assert item.get("status") in set(contract.get("allowed_statuses", []))
+        assert item.get("confidence") in set(contract.get("allowed_confidence", []))
+        assert isinstance(item.get("source_refs"), list) and item.get("source_refs")
+        assert isinstance(item.get("evidence_paths"), list) and item.get("evidence_paths")
+        assert isinstance(item.get("metrics"), dict)
+        assert item.get("next_action")
+    hypotheses = ledger.get("next_bottleneck_hypotheses")
+    assert isinstance(hypotheses, list) and hypotheses
+    for item in hypotheses:
+        assert isinstance(item, dict)
+        for key in contract.get("required_hypothesis_keys", []):
+            assert key in item, f"predictive hypothesis missing key: {key}"
+        assert item.get("source_observation_id") in observation_ids
+    guards = ledger.get("guards")
+    assert isinstance(guards, dict)
+    for key in contract.get("required_true_guards", []):
+        assert guards.get(key) is True, f"predictive guard not true: {key}"
 
 
 def assert_autopilot_input_pack_contract(input_pack: dict[str, Any]) -> None:
@@ -18537,6 +19267,8 @@ def run_self_test() -> int:
         capture_dir=workspace / "capture",
         out_json=workspace / "runpack.json",
         out_md=workspace / "runpack.md",
+        out_predictive_telemetry_ledger_json=None,
+        print_predictive_telemetry_ledger=False,
         operator_runpack_json=None,
         out_autopilot_input_pack_json=None,
         out_autopilot_plan_json=None,
@@ -19463,6 +20195,253 @@ def run_self_test() -> int:
             "entries_per_turn"
         ] == 80.0
         assert turn_pressure["summary"]["pressure_event_count"] == 6
+        predictive_ledger = runpack["predictive_telemetry_ledger"]
+        assert predictive_ledger["schema"] == PREDICTIVE_TELEMETRY_LEDGER_SCHEMA
+        assert predictive_ledger["purpose"] == (
+            "advisory_pressure_prediction_not_release_performance_claim"
+        )
+        assert predictive_ledger["status"] == "blocked"
+        assert predictive_ledger["guards"]["no_agent_mail_or_rch_mutation"] is True
+        assert predictive_ledger["guards"]["not_release_or_capacity_claim_evidence"] is True
+        predictive_observations = {
+            observation["id"]: observation
+            for observation in predictive_ledger["observations"]
+        }
+        assert set(predictive_observations) == set(
+            PREDICTIVE_TELEMETRY_REQUIRED_OBSERVATION_IDS
+        )
+        assert predictive_observations["validation_pressure"]["status"] == "pressured"
+        assert predictive_observations["coordination_pressure"]["status"] == "blocked"
+        assert predictive_observations["work_queue_pressure"]["status"] == "blocked"
+        assert predictive_observations["turn_context_pressure"]["status"] == "blocked"
+        assert predictive_observations["validation_pressure"]["source_refs"][0][
+            "path"
+        ] == str(cargo_path)
+        assert predictive_ledger["next_bottleneck_hypotheses"]
+        assert any(
+            "Inspect predictive telemetry ledger" in action
+            for action in runpack["operator_next_actions"]
+        )
+        assert predictive_ledger["guards"]["advisory_only"] is True
+        assert predictive_ledger["guards"]["read_only"] is True
+        predictive_output_args = argparse.Namespace(
+            out_predictive_telemetry_ledger_json=workspace
+            / "predictive-telemetry-ledger.json"
+        )
+        write_predictive_telemetry_ledger_output(
+            predictive_output_args,
+            predictive_ledger,
+        )
+        assert predictive_output_args.out_predictive_telemetry_ledger_json.exists()
+
+        def predictive_fixture_runpack(**overrides: Any) -> dict[str, Any]:
+            source_statuses = [
+                {
+                    "id": source_id,
+                    "path": f"{source_id}.json",
+                    "status": "ok",
+                    "schema": "fixture.schema.v1",
+                    "issue": None,
+                    "size_bytes": 64,
+                    "sha256": source_id.encode("utf-8").hex()[:64].ljust(64, "0"),
+                }
+                for source_ids in PREDICTIVE_OBSERVATION_SOURCE_IDS.values()
+                for source_id in source_ids
+            ]
+            fixture = {
+                "schema": RUNPACK_SCHEMA,
+                "generated_at": generated_at,
+                "source_statuses": source_statuses,
+                "rch_admission": {
+                    "status": "ok",
+                    "decision": "admit",
+                    "queue_forecast": {
+                        "status": "ok",
+                        "recommended_action": "proceed",
+                        "slot_pressure": "available",
+                    },
+                },
+                "remote_validation_proof_ledger": {
+                    "summary": {
+                        "blocked_entries": 0,
+                        "degraded_entries": 0,
+                        "failed_entries": 0,
+                    }
+                },
+                "agent_mail_read_state": {
+                    "status": "ok",
+                    "transport_status": "ok",
+                    "semantic_readiness_status": "ok",
+                    "fallback_action": None,
+                },
+                "beads": {
+                    "status": "ok",
+                    "active_count": 0,
+                    "open_candidate_count": 1,
+                    "stale": [],
+                    "deferred_planning": [],
+                },
+                "turn_pressure_ledger": {
+                    "status": "ok",
+                    "summary": {
+                        "pressure_event_count": 0,
+                        "dimension_status_counts": {"ok": 6},
+                        "highest_status": "ok",
+                    },
+                    "pressure_events": [],
+                },
+                "bottleneck_attribution": {
+                    "status": "ready",
+                    "blocked_inputs": [],
+                    "historical_snapshots": [],
+                    "bottlenecks": [],
+                },
+                "evidence_readiness": {
+                    "status": "ok",
+                    "overall_status": "ready",
+                    "blocking_artifacts": [],
+                    "stale_claims": {"stale_count": 0},
+                },
+                "stale_evidence_renewal_queue": {
+                    "status": "ok",
+                    "summary": {"renewal_item_count": 0, "blocked_count": 0},
+                },
+            }
+            fixture.update(overrides)
+            return fixture
+
+        def predictive_ledger_for_fixture(**overrides: Any) -> dict[str, Any]:
+            return build_predictive_telemetry_ledger(
+                predictive_fixture_runpack(**overrides),
+                generated_at=parse_utc(generated_at),
+                max_items=8,
+            )
+
+        healthy_predictive = predictive_ledger_for_fixture()
+        assert healthy_predictive["status"] == "ok"
+        healthy_by_id = {item["id"]: item for item in healthy_predictive["observations"]}
+        assert healthy_by_id["validation_pressure"]["source_refs"][0]["path"] == (
+            "cargo_admission.json"
+        )
+        rch_saturated_predictive = predictive_ledger_for_fixture(
+            rch_admission={
+                "status": "ok",
+                "decision": "admit",
+                "queue_forecast": {
+                    "status": "ok",
+                    "recommended_action": "backoff",
+                    "slot_pressure": "saturated",
+                },
+            }
+        )
+        rch_saturated_by_id = {
+            item["id"]: item for item in rch_saturated_predictive["observations"]
+        }
+        assert rch_saturated_by_id["validation_pressure"]["status"] == "pressured"
+        mail_degraded_predictive = predictive_ledger_for_fixture(
+            agent_mail_read_state={
+                "status": "degraded",
+                "transport_status": "reachable",
+                "semantic_readiness_status": "fail",
+                "fallback_action": "use_beads_soft_lock",
+                "soft_lock": "beads",
+            }
+        )
+        mail_degraded_by_id = {
+            item["id"]: item for item in mail_degraded_predictive["observations"]
+        }
+        assert mail_degraded_by_id["coordination_pressure"]["status"] == "blocked"
+        stale_evidence_predictive = predictive_ledger_for_fixture(
+            evidence_readiness={
+                "status": "ok",
+                "overall_status": "ready",
+                "blocking_artifacts": [],
+                "stale_claims": {"stale_count": 2},
+            }
+        )
+        stale_evidence_by_id = {
+            item["id"]: item for item in stale_evidence_predictive["observations"]
+        }
+        assert stale_evidence_by_id["evidence_freshness_pressure"]["status"] == "stale"
+        mixed_conflict_predictive = predictive_ledger_for_fixture(
+            rch_admission={
+                "status": "ok",
+                "decision": "deny",
+                "queue_forecast": {
+                    "status": "ok",
+                    "recommended_action": "backoff",
+                    "slot_pressure": "saturated",
+                },
+            },
+            remote_validation_proof_ledger={
+                "summary": {
+                    "blocked_entries": 1,
+                    "degraded_entries": 1,
+                    "failed_entries": 1,
+                }
+            },
+            agent_mail_read_state={
+                "status": "not_available",
+                "transport_status": "missing",
+                "semantic_readiness_status": "fail",
+                "fallback_action": "use_beads_soft_lock",
+            },
+            beads={
+                "status": "ok",
+                "active_count": 1,
+                "open_candidate_count": 0,
+                "stale": [{"id": "bd-stale"}],
+                "deferred_planning": [],
+            },
+            turn_pressure_ledger={
+                "status": "blocked",
+                "summary": {
+                    "pressure_event_count": 2,
+                    "dimension_status_counts": {"blocked": 2},
+                    "highest_status": "blocked",
+                },
+                "pressure_events": [{"dimension_id": "normal_turn_baseline"}],
+            },
+            bottleneck_attribution={
+                "status": "degraded",
+                "blocked_inputs": ["tail_latency"],
+                "historical_snapshots": [],
+                "bottlenecks": [{"surface": "queue_pressure"}],
+            },
+            evidence_readiness={
+                "status": "ok",
+                "overall_status": "blocked",
+                "blocking_artifacts": [{"id": "dropin_verdict"}],
+                "stale_claims": {"stale_count": 1},
+            },
+        )
+        assert mixed_conflict_predictive["status"] == "blocked"
+        assert (
+            mixed_conflict_predictive["next_bottleneck_hypotheses"][0][
+                "source_observation_id"
+            ]
+            in PREDICTIVE_TELEMETRY_REQUIRED_OBSERVATION_IDS
+        )
+        missing_observation_predictive = json.loads(json_dumps(healthy_predictive))
+        missing_observation_predictive["observations"] = [
+            item
+            for item in missing_observation_predictive["observations"]
+            if item["id"] != "validation_pressure"
+        ]
+        try:
+            assert_predictive_telemetry_ledger_contract(missing_observation_predictive)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("predictive ledger must fail closed on missing observations")
+        bad_guard_predictive = json.loads(json_dumps(healthy_predictive))
+        bad_guard_predictive["guards"]["advisory_only"] = False
+        try:
+            assert_predictive_telemetry_ledger_contract(bad_guard_predictive)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("predictive ledger must fail closed on disabled guards")
         for source in runpack["source_statuses"]:
             assert source["size_bytes"] is not None
             assert len(source["sha256"]) == 64
@@ -19472,6 +20451,7 @@ def run_self_test() -> int:
         assert "Tail latency telemetry" in markdown
         assert "Bottleneck Attribution" in markdown
         assert "Turn Pressure Ledger" in markdown
+        assert "Predictive Telemetry Ledger" in markdown
         assert "Context intelligence" in markdown
         assert "Progress SLO" in markdown
         assert "Resume Commands" in markdown
@@ -21564,6 +22544,13 @@ def run_self_test() -> int:
         assert clean_runpack["beads"]["active_count"] == 0
         assert clean_runpack["agent_mail_read_state"]["status"] == "degraded"
         assert clean_runpack["validation_outputs"]["status"] == "not_provided"
+        clean_predictive_observations = {
+            observation["id"]: observation
+            for observation in clean_runpack["predictive_telemetry_ledger"]["observations"]
+        }
+        assert clean_predictive_observations["work_queue_pressure"][
+            "signal"
+        ] == "empty_ready_queue"
         clean_pressure_dimensions = {
             dimension["id"]: dimension
             for dimension in clean_runpack["turn_pressure_ledger"]["dimensions"]
@@ -21604,6 +22591,16 @@ def run_self_test() -> int:
             "rpc_swarm_e2e"
             in stale_runpack["bottleneck_attribution"]["historical_snapshots"]
         )
+        stale_freshness = {
+            item["id"]: item
+            for item in stale_runpack["predictive_telemetry_ledger"]["source_freshness"]
+        }
+        assert stale_freshness["rpc_swarm_e2e"][
+            "freshness_classification"
+        ] == "historical_snapshot"
+        assert stale_runpack["predictive_telemetry_ledger"]["summary"][
+            "source_freshness_counts"
+        ]["historical_snapshot"] >= 1
         bad_rpc_schema_path = write_json(
             workspace / "bad-rpc-swarm-e2e.json",
             {"schema": "pi.rpc.concurrent_swarm_e2e.v0", "generated_at": generated_at},
@@ -21793,6 +22790,11 @@ def parse_args() -> argparse.Namespace:
         "--out-work-admission-gate-json",
         type=Path,
         help="write pi.swarm.work_admission_gate.v1 JSON; refuses to overwrite",
+    )
+    parser.add_argument(
+        "--out-predictive-telemetry-ledger-json",
+        type=Path,
+        help="write pi.swarm.predictive_telemetry_ledger.v1 JSON; refuses to overwrite",
     )
     parser.add_argument(
         "--run-autopilot-e2e",
@@ -22015,6 +23017,11 @@ def parse_args() -> argparse.Namespace:
         "--print-work-admission-gate",
         action="store_true",
         help="print the fail-closed swarm work admission gate JSON",
+    )
+    parser.add_argument(
+        "--print-predictive-telemetry-ledger",
+        action="store_true",
+        help="print the advisory predictive swarm telemetry ledger JSON",
     )
     parser.add_argument("--self-test", action="store_true", help="run fixture-backed self-test")
     return parser.parse_args()
@@ -22371,6 +23378,12 @@ def main() -> int:
             write_work_admission_gate_output(args, work_admission_gate)
             if args.print_work_admission_gate:
                 print(json_dumps(work_admission_gate, pretty=True))
+        write_predictive_telemetry_ledger_output(
+            args,
+            runpack["predictive_telemetry_ledger"],
+        )
+        if args.print_predictive_telemetry_ledger:
+            print(json_dumps(runpack["predictive_telemetry_ledger"], pretty=True))
     except (RunpackError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -22381,6 +23394,7 @@ def main() -> int:
         and not args.out_autopilot_plan_json
         and not args.out_action_plan_json
         and not args.out_work_admission_gate_json
+        and not args.out_predictive_telemetry_ledger_json
         and not args.out_context_intelligence_final_gate_json
         and not args.out_runtime_intelligence_final_gate_json
         and not args.out_fourth_wave_final_gate_json
@@ -22393,6 +23407,7 @@ def main() -> int:
         and not args.print_autopilot_plan
         and not args.print_action_plan
         and not args.print_work_admission_gate
+        and not args.print_predictive_telemetry_ledger
         and not args.print_context_intelligence_final_gate
         and not args.print_runtime_intelligence_final_gate
         and not args.print_fourth_wave_final_gate

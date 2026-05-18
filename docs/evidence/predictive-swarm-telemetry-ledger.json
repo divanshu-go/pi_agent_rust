@@ -1,0 +1,306 @@
+{
+  "schema": "pi.swarm.predictive_telemetry_ledger.v1",
+  "generated_at": "2026-05-09T09:00:00+00:00",
+  "status": "blocked",
+  "purpose": "advisory_pressure_prediction_not_release_performance_claim",
+  "source_runpack_schema": "pi.swarm.operator_runpack.v1",
+  "source_freshness": [
+    {
+      "id": "cargo_admission",
+      "path": "cargo.json",
+      "status": "ok",
+      "schema": "pi.cargo_headroom.admission.v1",
+      "timestamp": "2026-05-09T09:00:00+00:00",
+      "freshness_hours": 0,
+      "freshness_classification": "fresh",
+      "issue": null,
+      "size_bytes": 512,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": "agent_mail_status",
+      "path": "agent-mail-status.json",
+      "status": "ok",
+      "schema": "pi.agent_mail.robot_status.v1",
+      "timestamp": "2026-05-09T09:00:00+00:00",
+      "freshness_hours": 0,
+      "freshness_classification": "fresh",
+      "issue": "schema health fixture reports write-path corruption",
+      "size_bytes": 512,
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "id": "rpc_swarm_e2e",
+      "path": "stale-rpc-swarm-e2e.json",
+      "status": "ok",
+      "schema": "pi.rpc.concurrent_swarm_e2e.v1",
+      "timestamp": "2026-05-07T09:00:00+00:00",
+      "freshness_hours": 48,
+      "freshness_classification": "historical_snapshot",
+      "issue": "source is older than stale_after_hours=24",
+      "size_bytes": 256,
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  ],
+  "observation_count": 6,
+  "observations": [
+    {
+      "id": "validation_pressure",
+      "status": "pressured",
+      "pressure_dimension": "validation",
+      "signal": "rch_or_validation_backoff",
+      "confidence": "high",
+      "forecast_horizon": "next_validation_command",
+      "source_refs": [
+        {
+          "id": "cargo_admission",
+          "path": "cargo.json",
+          "status": "ok",
+          "schema": "pi.cargo_headroom.admission.v1",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "freshness": "current",
+          "timestamp": "2026-05-09T09:00:00+00:00"
+        }
+      ],
+      "evidence_paths": [
+        "rch_admission.decision",
+        "rch_admission.queue_forecast.recommended_action",
+        "remote_validation_proof_ledger.summary"
+      ],
+      "metrics": {
+        "decision": "backoff",
+        "recommended_action": "backoff",
+        "blocked_entries": 1,
+        "degraded_entries": 0,
+        "failed_entries": 0
+      },
+      "next_action": "Back off or split heavy cargo validation before adding more RCH load.",
+      "rationale": "Validation pressure is predicted from RCH admission plus remote proof outcomes."
+    },
+    {
+      "id": "coordination_pressure",
+      "status": "blocked",
+      "pressure_dimension": "coordination",
+      "signal": "agent_mail_write_path_blocked",
+      "confidence": "medium",
+      "forecast_horizon": "next_agent_claim",
+      "source_refs": [
+        {
+          "id": "doctor_swarm",
+          "path": "doctor.json",
+          "status": "ok",
+          "schema": null,
+          "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "freshness": "current",
+          "timestamp": "2026-05-09T09:00:00+00:00"
+        }
+      ],
+      "evidence_paths": [
+        "agent_mail_read_state.status",
+        "agent_mail_read_state.semantic_readiness_status",
+        "agent_mail_read_state.fallback_action",
+        "beads.active_ownership"
+      ],
+      "metrics": {
+        "agent_mail_status": "degraded",
+        "semantic_readiness_status": "fail",
+        "fallback_action": "use_beads_soft_lock",
+        "soft_lock": "beads",
+        "recovery_mode": "schema_repair_required"
+      },
+      "next_action": "Use Beads status/comments as the coordination record until Agent Mail writes are healthy.",
+      "rationale": "Coordination pressure is predicted from Agent Mail readiness and Beads soft-lock posture."
+    },
+    {
+      "id": "work_queue_pressure",
+      "status": "blocked",
+      "pressure_dimension": "work_queue",
+      "signal": "stale_in_progress_work_blocks_assignment",
+      "confidence": "high",
+      "forecast_horizon": "next_bead_selection",
+      "source_refs": [
+        {
+          "id": "beads",
+          "path": "beads.json",
+          "status": "ok",
+          "schema": null,
+          "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "freshness": "current",
+          "timestamp": "2026-05-09T09:00:00+00:00"
+        }
+      ],
+      "evidence_paths": [
+        "beads.active_count",
+        "beads.open_candidate_count",
+        "beads.stale",
+        "beads.deferred_planning"
+      ],
+      "metrics": {
+        "active_count": 1,
+        "open_candidate_count": 0,
+        "stale_count": 1,
+        "deferred_planning_count": 0
+      },
+      "next_action": "Review stale in-progress Beads before assigning overlapping work.",
+      "rationale": "Work-queue pressure is predicted from Beads active, open, stale, and deferred-planning evidence."
+    },
+    {
+      "id": "turn_context_pressure",
+      "status": "blocked",
+      "pressure_dimension": "turn_context",
+      "signal": "turn_pressure_blocked",
+      "confidence": "high",
+      "forecast_horizon": "current_turn",
+      "source_refs": [
+        {
+          "id": "smoke_harness",
+          "path": "smoke.json",
+          "status": "ok",
+          "schema": "pi.swarm.smoke_harness.v1",
+          "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "freshness": "current",
+          "timestamp": "2026-05-09T09:00:00+00:00"
+        }
+      ],
+      "evidence_paths": [
+        "turn_pressure_ledger.status",
+        "turn_pressure_ledger.pressure_events",
+        "turn_pressure_ledger.summary.pressure_event_count"
+      ],
+      "metrics": {
+        "pressure_event_count": 2,
+        "dimension_status_counts": {
+          "blocked": 2
+        },
+        "highest_status": "blocked"
+      },
+      "next_action": "Review turn-pressure dimensions before increasing prompt, tool, or session load.",
+      "rationale": "Turn context pressure is predicted from the current runpack turn-pressure ledger."
+    },
+    {
+      "id": "bottleneck_source_pressure",
+      "status": "stale",
+      "pressure_dimension": "bottleneck_attribution",
+      "signal": "bottleneck_inputs_stale",
+      "confidence": "high",
+      "forecast_horizon": "next_operator_handoff",
+      "source_refs": [
+        {
+          "id": "rpc_swarm_e2e",
+          "path": "stale-rpc-swarm-e2e.json",
+          "status": "ok",
+          "schema": "pi.rpc.concurrent_swarm_e2e.v1",
+          "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "freshness": "current",
+          "timestamp": "2026-05-09T09:00:00+00:00"
+        }
+      ],
+      "evidence_paths": [
+        "bottleneck_attribution.status",
+        "bottleneck_attribution.blocked_inputs",
+        "bottleneck_attribution.historical_snapshots",
+        "bottleneck_attribution.bottlenecks"
+      ],
+      "metrics": {
+        "dashboard_status": "degraded",
+        "blocked_input_count": 0,
+        "historical_snapshot_count": 1,
+        "bottleneck_count": 1
+      },
+      "next_action": "Refresh blocked or stale diagnostic sources before trusting the next bottleneck attribution handoff.",
+      "rationale": "Bottleneck-source pressure is predicted from source freshness and observed bottleneck count."
+    },
+    {
+      "id": "evidence_freshness_pressure",
+      "status": "stale",
+      "pressure_dimension": "evidence_freshness",
+      "signal": "claim_evidence_stale",
+      "confidence": "high",
+      "forecast_horizon": "next_claim_or_release_handoff",
+      "source_refs": [
+        {
+          "id": "claim_readiness",
+          "path": "claim.json",
+          "status": "ok",
+          "schema": "pi.swarm.claim_readiness_report.v1",
+          "sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+          "freshness": "current",
+          "timestamp": "2026-05-09T09:00:00+00:00"
+        }
+      ],
+      "evidence_paths": [
+        "evidence_readiness.overall_status",
+        "evidence_readiness.blocking_artifacts",
+        "evidence_readiness.stale_claims",
+        "stale_evidence_renewal_queue.summary"
+      ],
+      "metrics": {
+        "overall_status": "ready",
+        "blocking_artifact_count": 0,
+        "stale_claim_count": 2,
+        "renewal_item_count": 0,
+        "renewal_blocked_count": 0
+      },
+      "next_action": "Renew stale evidence before making claim-facing statements; keep this ledger advisory unless claim gates authorize the claim.",
+      "rationale": "Evidence pressure is predicted from claim-readiness and stale-renewal queue summaries."
+    }
+  ],
+  "next_bottleneck_hypotheses": [
+    {
+      "rank": 1,
+      "hypothesis_id": "next_bottleneck_work_queue_pressure",
+      "source_observation_id": "work_queue_pressure",
+      "status": "blocked",
+      "pressure_dimension": "work_queue",
+      "confidence": "high",
+      "forecast_horizon": "next_bead_selection",
+      "rationale": "Work-queue pressure is predicted from Beads active, open, stale, and deferred-planning evidence.",
+      "recommended_action": "Review stale in-progress Beads before assigning overlapping work.",
+      "evidence_paths": [
+        "beads.active_count",
+        "beads.open_candidate_count",
+        "beads.stale",
+        "beads.deferred_planning"
+      ]
+    },
+    {
+      "rank": 2,
+      "hypothesis_id": "next_bottleneck_coordination_pressure",
+      "source_observation_id": "coordination_pressure",
+      "status": "blocked",
+      "pressure_dimension": "coordination",
+      "confidence": "medium",
+      "forecast_horizon": "next_agent_claim",
+      "rationale": "Coordination pressure is predicted from Agent Mail readiness and Beads soft-lock posture.",
+      "recommended_action": "Use Beads status/comments as the coordination record until Agent Mail writes are healthy.",
+      "evidence_paths": [
+        "agent_mail_read_state.status",
+        "agent_mail_read_state.semantic_readiness_status",
+        "agent_mail_read_state.fallback_action",
+        "beads.active_ownership"
+      ]
+    }
+  ],
+  "summary": {
+    "observation_status_counts": {
+      "blocked": 3,
+      "pressured": 1,
+      "stale": 2
+    },
+    "highest_status": "blocked",
+    "hypothesis_count": 2,
+    "blocked_or_stale_count": 5,
+    "source_freshness_counts": {
+      "fresh": 2,
+      "historical_snapshot": 1
+    }
+  },
+  "guards": {
+    "advisory_only": true,
+    "read_only": true,
+    "no_live_scheduler_mutation": true,
+    "no_agent_mail_or_rch_mutation": true,
+    "not_release_or_capacity_claim_evidence": true,
+    "does_not_replace_source_evidence": true
+  }
+}

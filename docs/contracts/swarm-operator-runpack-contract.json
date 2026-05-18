@@ -2,6 +2,7 @@
   "schema": "pi.swarm.operator_runpack_contract.v1",
   "runpack_schema": "pi.swarm.operator_runpack.v1",
   "scorecard_schema": "pi.swarm.safety_scorecard.v1",
+  "predictive_telemetry_ledger_schema": "pi.swarm.predictive_telemetry_ledger.v1",
   "autopilot_handoff_schema": "pi.swarm.autopilot_handoff.v1",
   "purpose": "operator_handoff_not_release_performance_claim",
   "minimum_redacted_count": 1,
@@ -23,6 +24,7 @@
     "temp_artifact_inventory",
     "turn_pressure_ledger",
     "bottleneck_attribution",
+    "predictive_telemetry_ledger",
     "swarm_scale_safety_scorecard",
     "redaction_summary",
     "operator_next_actions"
@@ -82,6 +84,16 @@
     "bottleneck_attribution.input_classification",
     "bottleneck_attribution.bottlenecks",
     "bottleneck_attribution.operator_notes",
+    "predictive_telemetry_ledger.schema",
+    "predictive_telemetry_ledger.status",
+    "predictive_telemetry_ledger.source_freshness",
+    "predictive_telemetry_ledger.observations",
+    "predictive_telemetry_ledger.next_bottleneck_hypotheses",
+    "predictive_telemetry_ledger.summary.highest_status",
+    "predictive_telemetry_ledger.guards.advisory_only",
+    "predictive_telemetry_ledger.guards.read_only",
+    "predictive_telemetry_ledger.guards.no_agent_mail_or_rch_mutation",
+    "predictive_telemetry_ledger.guards.not_release_or_capacity_claim_evidence",
     "swarm_scale_safety_scorecard.overall_status",
     "swarm_scale_safety_scorecard.dimensions",
     "swarm_scale_safety_scorecard.green_requires_all_required_evidence",
@@ -151,6 +163,7 @@
     "Back off heavy cargo validation",
     "Use activity-digest saturation evidence",
     "Review turn pressure ledger",
+    "Inspect predictive telemetry ledger",
     "Account for dirty files",
     "Review degraded swarm-scale safety scorecard"
   ],
@@ -292,6 +305,15 @@
       "id": "RUNPACK-MUST-013",
       "description": "Runpack output embeds the remote-validation proof ledger so operators can inspect whether each cargo/RCH gate ran remotely, refused local fallback, or carried artifact retrieval warnings before closing beads.",
       "validated_by": [
+        "required_top_level_keys",
+        "required_summary_paths"
+      ]
+    },
+    {
+      "id": "RUNPACK-MUST-014",
+      "description": "Runpack output embeds a read-only predictive telemetry ledger that fuses existing source evidence into ordered pressure observations and next-bottleneck hypotheses without becoming release, capacity, Agent Mail, RCH, or scheduler authority.",
+      "validated_by": [
+        "predictive_telemetry_ledger_schema",
         "required_top_level_keys",
         "required_summary_paths"
       ]

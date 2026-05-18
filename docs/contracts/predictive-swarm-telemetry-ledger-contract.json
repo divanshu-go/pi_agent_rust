@@ -1,0 +1,115 @@
+{
+  "schema": "pi.swarm.predictive_telemetry_ledger_contract.v1",
+  "ledger_schema": "pi.swarm.predictive_telemetry_ledger.v1",
+  "purpose": "advisory_pressure_prediction_not_release_performance_claim",
+  "required_top_level_keys": [
+    "schema",
+    "generated_at",
+    "status",
+    "purpose",
+    "source_runpack_schema",
+    "source_freshness",
+    "observation_count",
+    "observations",
+    "next_bottleneck_hypotheses",
+    "summary",
+    "guards"
+  ],
+  "required_source_freshness_keys": [
+    "id",
+    "path",
+    "status",
+    "schema",
+    "timestamp",
+    "freshness_hours",
+    "freshness_classification",
+    "issue"
+  ],
+  "required_observation_ids": [
+    "validation_pressure",
+    "coordination_pressure",
+    "work_queue_pressure",
+    "turn_context_pressure",
+    "bottleneck_source_pressure",
+    "evidence_freshness_pressure"
+  ],
+  "required_observation_keys": [
+    "id",
+    "status",
+    "pressure_dimension",
+    "signal",
+    "confidence",
+    "forecast_horizon",
+    "source_refs",
+    "evidence_paths",
+    "metrics",
+    "next_action",
+    "rationale"
+  ],
+  "required_hypothesis_keys": [
+    "rank",
+    "hypothesis_id",
+    "source_observation_id",
+    "status",
+    "pressure_dimension",
+    "confidence",
+    "forecast_horizon",
+    "rationale",
+    "recommended_action",
+    "evidence_paths"
+  ],
+  "allowed_statuses": [
+    "ok",
+    "watch",
+    "pressured",
+    "blocked",
+    "stale",
+    "missing"
+  ],
+  "allowed_confidence": [
+    "high",
+    "medium",
+    "low"
+  ],
+  "required_true_guards": [
+    "advisory_only",
+    "read_only",
+    "no_live_scheduler_mutation",
+    "no_agent_mail_or_rch_mutation",
+    "not_release_or_capacity_claim_evidence",
+    "does_not_replace_source_evidence"
+  ],
+  "must_requirements": [
+    {
+      "id": "PREDICTIVE-LEDGER-MUST-001",
+      "description": "The ledger is advisory, read-only, and explicitly not release performance or capacity evidence.",
+      "validated_by": [
+        "purpose",
+        "guards"
+      ]
+    },
+    {
+      "id": "PREDICTIVE-LEDGER-MUST-002",
+      "description": "The ledger emits the six stable pressure observations used by operators to forecast validation, coordination, work-queue, turn-context, source-freshness, and bottleneck-attribution pressure.",
+      "validated_by": [
+        "required_observation_ids",
+        "required_observation_keys"
+      ]
+    },
+    {
+      "id": "PREDICTIVE-LEDGER-MUST-003",
+      "description": "Every next-bottleneck hypothesis points back to a concrete observation and evidence paths instead of relying on live sampling or model judgment.",
+      "validated_by": [
+        "required_hypothesis_keys"
+      ]
+    },
+    {
+      "id": "PREDICTIVE-LEDGER-MUST-004",
+      "description": "The ledger preserves source paths, timestamps, freshness classification, and stale or missing-source issues so operators can audit prediction inputs.",
+      "validated_by": [
+        "source_freshness",
+        "required_source_freshness_keys"
+      ]
+    }
+  ]
+}
