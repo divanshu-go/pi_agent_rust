@@ -1,0 +1,139 @@
+{
+  "schema": "pi.closeout_evidence_registry.v1",
+  "claim_boundary": "This registry indexes advisory closeout evidence only. It is not a release manifest, performance evidence bundle, Beads source of truth, Agent Mail authority, or permission to mutate source files.",
+  "current_artifacts": [
+    {
+      "path": "docs/evidence/adaptive-execution-closeout-gate.json",
+      "contract_path": "docs/contracts/adaptive-execution-closeout-gate-contract.json",
+      "decision_gate_schema": "pi.swarm.adaptive_execution.closeout_gate.v1",
+      "source_bead_or_epic": "bd-63x3v.8",
+      "reference_paths": [],
+      "advisory_claim_boundary": "Advisory closeout evidence only; does not replace Beads, git, RCH, Agent Mail, CI, UBS, release certification, or source files."
+    },
+    {
+      "path": "docs/evidence/context-intelligence-closeout-gate.json",
+      "contract_path": "docs/contracts/context-intelligence-closeout-gate-contract.json",
+      "decision_gate_schema": "pi.context_intelligence.closeout_gate.v1",
+      "source_bead_or_epic": "bd-ircr3",
+      "reference_paths": [
+        "README.md",
+        "docs/context-intelligence.md"
+      ],
+      "advisory_claim_boundary": "Advisory closeout evidence only; does not replace Beads, git, RCH, Agent Mail, CI, UBS, release certification, or source files."
+    },
+    {
+      "path": "docs/evidence/extension-compatibility-closeout-gate.json",
+      "contract_path": "docs/contracts/extension-compatibility-closeout-gate-contract.json",
+      "decision_gate_schema": "pi.ext.compatibility_closeout_gate.v1",
+      "source_bead_or_epic": "bd-d7v9g",
+      "reference_paths": [],
+      "advisory_claim_boundary": "Advisory closeout evidence only; does not replace Beads, git, RCH, Agent Mail, CI, UBS, release certification, or source files."
+    },
+    {
+      "path": "docs/evidence/fourth-wave-self-healing-closeout-gate.json",
+      "contract_path": "docs/contracts/fourth-wave-self-healing-closeout-gate-contract.json",
+      "decision_gate_schema": "pi.swarm.fourth_wave_self_healing.closeout_gate.v1",
+      "source_bead_or_epic": "bd-63x3v.7",
+      "reference_paths": [
+        "README.md",
+        "docs/swarm-operations-runbook.md"
+      ],
+      "advisory_claim_boundary": "Advisory closeout evidence only; does not replace Beads, git, RCH, Agent Mail, CI, UBS, release certification, or source files."
+    },
+    {
+      "path": "docs/evidence/ninth-wave-incident-replay-proof-memory-closeout-gate.json",
+      "contract_path": "docs/contracts/ninth-wave-incident-replay-proof-memory-closeout-gate-contract.json",
+      "decision_gate_schema": "pi.swarm.incident_replay_proof_memory.closeout_gate.v1",
+      "source_bead_or_epic": "bd-9yq7i",
+      "reference_paths": [
+        "README.md",
+        "docs/swarm-operations-runbook.md"
+      ],
+      "advisory_claim_boundary": "Advisory closeout evidence only; does not replace Beads, git, RCH, Agent Mail, CI, UBS, release certification, or source files."
+    },
+    {
+      "path": "docs/evidence/predictive-operations-closeout-gate.json",
+      "contract_path": "docs/contracts/predictive-operations-closeout-gate-contract.json",
+      "decision_gate_schema": "pi.swarm.predictive_operations.closeout_gate.v1",
+      "source_bead_or_epic": "bd-63x3v.11",
+      "reference_paths": [
+        "README.md",
+        "docs/swarm-operations-runbook.md"
+      ],
+      "advisory_claim_boundary": "Advisory closeout evidence only; does not replace Beads, git, RCH, Agent Mail, CI, UBS, release certification, or source files."
+    },
+    {
+      "path": "docs/evidence/proof-carrying-swarm-test-fabric-closeout-gate.json",
+      "contract_path": "docs/contracts/proof-carrying-swarm-test-fabric-closeout-gate-contract.json",
+      "decision_gate_schema": "pi.swarm.proof_carrying_test_fabric.closeout_gate.v1",
+      "source_bead_or_epic": "bd-zeccr",
+      "reference_paths": [
+        "README.md",
+        "docs/swarm-operations-runbook.md"
+      ],
+      "advisory_claim_boundary": "Advisory closeout evidence only; does not replace Beads, git, RCH, Agent Mail, CI, UBS, release certification, or source files."
+    },
+    {
+      "path": "docs/evidence/runtime-intelligence-closeout-gate.json",
+      "contract_path": "docs/contracts/runtime-intelligence-closeout-gate-contract.json",
+      "decision_gate_schema": "pi.runtime_intelligence.closeout_gate.v1",
+      "source_bead_or_epic": "bd-h66tp",
+      "reference_paths": [
+        "README.md",
+        "docs/swarm-operations-runbook.md"
+      ],
+      "advisory_claim_boundary": "Advisory closeout evidence only; does not replace Beads, git, RCH, Agent Mail, CI, UBS, release certification, or source files."
+    },
+    {
+      "path": "docs/evidence/seventh-wave-runtime-autonomy-closeout-gate.json",
+      "contract_path": "docs/contracts/seventh-wave-runtime-autonomy-closeout-gate-contract.json",
+      "decision_gate_schema": "pi.swarm.runtime_autonomy.closeout_gate.v1",
+      "source_bead_or_epic": "bd-63x3v.10",
+      "reference_paths": [
+        "README.md"
+      ],
+      "advisory_claim_boundary": "Advisory closeout evidence only; does not replace Beads, git, RCH, Agent Mail, CI, UBS, release certification, or source files."
+    },
+    {
+      "path": "docs/evidence/sixth-wave-validation-hardening-closeout-gate.json",
+      "contract_path": "docs/contracts/sixth-wave-validation-hardening-closeout-gate-contract.json",
+      "decision_gate_schema": "pi.swarm.validation_hardening.closeout_gate.v1",
+      "source_bead_or_epic": "bd-63x3v.9",
+      "reference_paths": [
+        "README.md"
+      ],
+      "advisory_claim_boundary": "Advisory closeout evidence only; does not replace Beads, git, RCH, Agent Mail, CI, UBS, release certification, or source files."
+    },
+    {
+      "path": "docs/evidence/swarm-progress-slo-closeout-gate.json",
+      "contract_path": "docs/contracts/swarm-progress-slo-closeout-gate-contract.json",
+      "decision_gate_schema": "pi.swarm.progress_slo.closeout_gate.v1",
+      "source_bead_or_epic": "bd-wzri8",
+      "reference_paths": [
+        "README.md",
+        "docs/swarm-operations-runbook.md"
+      ],
+      "advisory_claim_boundary": "Advisory closeout evidence only; does not replace Beads, git, RCH, Agent Mail, CI, UBS, release certification, or source files."
+    },
+    {
+      "path": "docs/evidence/swarm-replay-closeout-gate.json",
+      "contract_path": "docs/contracts/swarm-replay-closeout-gate-contract.json",
+      "decision_gate_schema": "pi.swarm.replay_closeout_gate.v1",
+      "source_bead_or_epic": "bd-in57w",
+      "reference_paths": [],
+      "advisory_claim_boundary": "Advisory closeout evidence only; does not replace Beads, git, RCH, Agent Mail, CI, UBS, release certification, or source files."
+    },
+    {
+      "path": "docs/evidence/validation-broker-closeout-gate.json",
+      "contract_path": "docs/contracts/validation-broker-closeout-gate-contract.json",
+      "decision_gate_schema": "pi.validation_broker.closeout_gate.v1",
+      "source_bead_or_epic": "bd-gusp4",
+      "reference_paths": [
+        "README.md",
+        "docs/swarm-operations-runbook.md"
+      ],
+      "advisory_claim_boundary": "Advisory closeout evidence only; does not replace Beads, git, RCH, Agent Mail, CI, UBS, release certification, or source files."
+    }
+  ],
+  "historical_artifacts": []
+}
