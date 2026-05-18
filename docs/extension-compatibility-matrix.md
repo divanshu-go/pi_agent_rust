@@ -22,7 +22,7 @@ capability-gated hostcall interface.
 | `node:events` | Full | `EventEmitter` class with `on`, `once`, `off`, `emit`, `removeListener`, `removeAllListeners`, `listenerCount`, `listeners`, `prependListener` |
 | `node:util` | Full | `inspect`, `promisify`, `callbackify`, `format`, `deprecate`, `inherits`, `debuglog`, `stripVTControlCharacters`, `types.*`, `TextEncoder`, `TextDecoder` |
 | `node:child_process` | Full | `spawn`, `spawnSync`, `execSync`, `exec`, `execFile`, `execFileSync`, `fork` (stub) |
-| `node:crypto` | Partial | `randomBytes`, `randomUUID`, `createHash` (SHA-256, SHA-1, MD5), `createHmac`, `timingSafeEqual`, `getHashes` |
+| `node:crypto` | Partial | `randomBytes`, `randomUUID`, `createHash` (SHA-256/SHA-384/SHA-512, SHA-1, MD5), `createHmac`, `timingSafeEqual`, `getHashes`, `pbkdf2`/`scrypt`, Ed25519 `sign`/`verify` |
 | `node:http` | Partial | `request`, `get`, `createServer` (stub), `STATUS_CODES`, `METHODS`, `IncomingMessage`, `ClientRequest` -- routes through `pi.http()` hostcall |
 | `node:url` | Partial | `URL` (globalThis), `URLSearchParams`, `parse`, `format`, `resolve`, `fileURLToPath`, `pathToFileURL` |
 | `node:stream` | Partial | `Readable`, `Writable`, `Transform`, `PassThrough`, `Duplex`, `pipeline`, `finished` |
@@ -63,12 +63,12 @@ routes `readFileSync` and `statSync` calls through the hostcall boundary
 |-----|---------------|-------|
 | `randomBytes(n)` | Real | Uses QuickJS random source |
 | `randomUUID()` | Real | v4 UUID generation |
-| `createHash(algo)` | Real | SHA-256, SHA-1, MD5 via pure-JS |
-| `createHmac(algo, key)` | Real | HMAC-SHA256, HMAC-SHA1 |
+| `createHash(algo)` | Real | SHA-256, SHA-384, SHA-512, SHA-1, MD5 via native hostcall |
+| `createHmac(algo, key)` | Real | HMAC-SHA256, HMAC-SHA384, HMAC-SHA512, HMAC-SHA1, HMAC-MD5 |
 | `timingSafeEqual(a, b)` | Real | Constant-time comparison |
 | `getHashes()` | Real | Returns supported algorithm list |
 | `pbkdf2`/`scrypt` | Real | Key derivation via native hostcall |
-| `sign`/`verify` | Missing | Asymmetric crypto not implemented |
+| `sign`/`verify` | Partial | Ed25519 with PKCS#8 private and SPKI public keys; RSA/ECDSA fail closed |
 | `createCipher`/`createDecipher` | Missing | Symmetric encryption not implemented |
 
 ### `node:child_process` Detail

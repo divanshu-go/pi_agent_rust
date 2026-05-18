@@ -41,7 +41,7 @@ for the API subset that extensions actually use.
 | `node:path` | `join`, `resolve`, `dirname`, `basename`, `extname`, `sep`, `posix`, `win32` | Full | POSIX semantics |
 | `node:fs` | `readFileSync`, `writeFileSync`, `statSync`, `mkdirSync`, `readdirSync`, `unlinkSync`, `rmSync`, `copyFileSync`, `renameSync`, `appendFileSync`, `accessSync`, `existsSync`, `realpathSync` | 33 tests | Rooted to extension dir by default |
 | `node:fs/promises` | `readFile`, `writeFile`, `stat`, `mkdir`, `readdir`, `unlink`, `rm`, `access`, `copyFile`, `rename` | Included above | Async versions of fs shim |
-| `node:crypto` | `createHash`, `createHmac`, `randomUUID`, `randomBytes`, `randomInt`, `timingSafeEqual`, `getHashes` | 29 tests | SHA-256, SHA-512, SHA-1, MD5 |
+| `node:crypto` | `createHash`, `createHmac`, `randomUUID`, `randomBytes`, `randomInt`, `timingSafeEqual`, `getHashes`, Ed25519 `sign`/`verify` | 56 tests | SHA-256/SHA-384/SHA-512, SHA-1, MD5, HMAC, KDFs; ciphers and RSA/ECDSA fail closed |
 | `node:buffer` | `Buffer.from`, `Buffer.alloc`, `Buffer.concat`, `Buffer.isBuffer`, `Buffer.byteLength`, `.toString()`, `.slice()`, `.subarray()`, `.compare()`, `.equals()`, `.indexOf()`, `.copy()` | 41 tests | Full Buffer protocol |
 | `node:child_process` | `spawnSync`, `execSync`, `execFileSync`, `spawn`, `exec`, `execFile` | 53 tests | Capability-gated (`exec`) |
 | `node:http` | `request`, `get`, `createServer`, `STATUS_CODES`, `METHODS`, `Agent` | 40 tests | `createServer` throws (sandbox) |

@@ -2,9 +2,11 @@
 //!
 //! Registers native functions on the QuickJS global object that provide real
 //! cryptographic operations (SHA-256, SHA-384, SHA-512, SHA-1, MD5, HMAC, random bytes,
-//! UUID generation, constant-time comparison) to the `node:crypto` JS module.
+//! UUID generation, Ed25519 signing/verification, constant-time comparison) to the `node:crypto`
+//! JS module.
 
 use pbkdf2::pbkdf2_hmac;
+use ring::signature::{Ed25519KeyPair, UnparsedPublicKey};
 use rquickjs::prelude::Func;
 use scrypt::{Params as ScryptParams, scrypt};
 use sha2::{Digest, Sha256, Sha384};
@@ -29,6 +31,7 @@ pub fn register_crypto_hostcalls(global: &rquickjs::Object<'_>) -> rquickjs::Res
     register_timing_safe_equal_hostcall(global)?;
     register_pbkdf2_hostcall(global)?;
     register_scrypt_hostcall(global)?;
+    register_ed25519_hostcalls(global)?;
     Ok(())
 }
 
@@ -412,6 +415,57 @@ fn register_scrypt_hostcall(global: &rquickjs::Object<'_>) -> rquickjs::Result<(
     )
 }
 
+fn register_ed25519_hostcalls(global: &rquickjs::Object<'_>) -> rquickjs::Result<()> {
+    // __pi_crypto_ed25519_sign_native(pkcs8_private_key, data, encoding) -> signature string
+    global.set(
+        "__pi_crypto_ed25519_sign_native",
+        Func::from(
+            |private_key: rquickjs::TypedArray<'_, u8>,
+             data: rquickjs::TypedArray<'_, u8>,
+             encoding: String|
+             -> rquickjs::Result<String> {
+                let private_key_bytes = private_key.as_bytes().ok_or_else(|| {
+                    rquickjs::Error::new_from_js("buffer", "Detached private key buffer")
+                })?;
+                let data_bytes = data.as_bytes().ok_or_else(|| {
+                    rquickjs::Error::new_from_js("buffer", "Detached data buffer")
+                })?;
+                let key_pair = Ed25519KeyPair::from_pkcs8(private_key_bytes)
+                    .or_else(|_| Ed25519KeyPair::from_pkcs8_maybe_unchecked(private_key_bytes))
+                    .map_err(|_| {
+                        rquickjs::Error::new_from_js("key", "invalid Ed25519 PKCS#8 private key")
+                    })?;
+                let signature = key_pair.sign(data_bytes);
+                Ok(encode_output(signature.as_ref(), &encoding))
+            },
+        ),
+    )?;
+
+    // __pi_crypto_ed25519_verify_native(spki_public_key, data, signature) -> bool
+    global.set(
+        "__pi_crypto_ed25519_verify_native",
+        Func::from(
+            |public_key: rquickjs::TypedArray<'_, u8>,
+             data: rquickjs::TypedArray<'_, u8>,
+             signature: rquickjs::TypedArray<'_, u8>|
+             -> rquickjs::Result<bool> {
+                let public_key_bytes = public_key.as_bytes().ok_or_else(|| {
+                    rquickjs::Error::new_from_js("buffer", "Detached public key buffer")
+                })?;
+                let data_bytes = data.as_bytes().ok_or_else(|| {
+                    rquickjs::Error::new_from_js("buffer", "Detached data buffer")
+                })?;
+                let signature_bytes = signature.as_bytes().ok_or_else(|| {
+                    rquickjs::Error::new_from_js("buffer", "Detached signature buffer")
+                })?;
+                let raw_public_key = ed25519_public_key_from_spki(public_key_bytes)?;
+                let verifier = UnparsedPublicKey::new(&ring::signature::ED25519, raw_public_key);
+                Ok(verifier.verify(data_bytes, signature_bytes).is_ok())
+            },
+        ),
+    )
+}
+
 /// Encode bytes as hex or base64 string.
 fn encode_output(bytes: &[u8], encoding: &str) -> String {
     match encoding {
@@ -425,13 +479,15 @@ fn encode_output(bytes: &[u8], encoding: &str) -> String {
 
 /// Convert bytes to lowercase hex string.
 fn hex_lower(bytes: &[u8]) -> String {
-    const HEX: [char; 16] = [
-        '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
-    ];
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len() * 2);
     for &byte in bytes {
-        output.push(HEX[usize::from(byte >> 4)]);
-        output.push(HEX[usize::from(byte & 0x0f)]);
+        output.push(char::from(
+            HEX.get(usize::from(byte >> 4)).copied().unwrap_or(b'?'),
+        ));
+        output.push(char::from(
+            HEX.get(usize::from(byte & 0x0f)).copied().unwrap_or(b'?'),
+        ));
     }
     output
 }
@@ -448,6 +504,24 @@ fn hex_decode(hex: &str) -> Vec<u8> {
         }
     }
     bytes
+}
+
+fn ed25519_public_key_from_spki(der: &[u8]) -> rquickjs::Result<&[u8]> {
+    const ED25519_SPKI_PREFIX: &[u8] = &[
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+    ];
+    if der.len() == 32 {
+        return Ok(der);
+    }
+    if der.len() == ED25519_SPKI_PREFIX.len() + 32 && der.starts_with(ED25519_SPKI_PREFIX) {
+        if let Some(raw) = der.get(ED25519_SPKI_PREFIX.len()..) {
+            return Ok(raw);
+        }
+    }
+    Err(rquickjs::Error::new_from_js(
+        "key",
+        "invalid Ed25519 SPKI public key",
+    ))
 }
 
 fn map_entropy_error(api: &'static str, err: getrandom::Error) -> rquickjs::Error {
@@ -548,6 +622,61 @@ function toUint8Array(input) {
   if (input instanceof Uint8Array) return input;
   if (typeof input === 'string') return new TextEncoder().encode(input);
   return new TextEncoder().encode(String(input ?? ''));
+}
+
+function base64ToBytes(input) {
+  const binary = globalThis.atob(String(input));
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
+}
+
+function decodePemKey(input, label, apiName) {
+  const text = String(input ?? '');
+  const begin = `-----BEGIN ${label}-----`;
+  const end = `-----END ${label}-----`;
+  const start = text.indexOf(begin);
+  const finish = text.indexOf(end);
+  if (start < 0 || finish < 0 || finish <= start) {
+    throw new Error(`${apiName}: Ed25519 ${label} PEM is required`);
+  }
+  const body = text
+    .slice(start + begin.length, finish)
+    .replace(/\s+/g, '');
+  if (body.length === 0) {
+    throw new Error(`${apiName}: empty Ed25519 ${label} PEM`);
+  }
+  return base64ToBytes(body);
+}
+
+function keyMaterialToDer(key, label, apiName) {
+  let material = key;
+  if (material && typeof material === 'object' && !(material instanceof Uint8Array)) {
+    if (!Object.prototype.hasOwnProperty.call(material, 'key')) {
+      throw new Error(`${apiName}: unsupported Ed25519 key object`);
+    }
+    if (material.format && material.format !== 'pem' && material.format !== 'der') {
+      throw new Error(`${apiName}: unsupported Ed25519 key format '${material.format}'`);
+    }
+    material = material.key;
+  }
+  if (material instanceof Uint8Array) {
+    return material;
+  }
+  if (typeof material === 'string') {
+    return decodePemKey(material, label, apiName);
+  }
+  throw new Error(`${apiName}: Ed25519 ${label} key must be PEM text or DER bytes`);
+}
+
+function normalizeSignVerifyAlgorithm(algorithm, apiName) {
+  if (algorithm === null || algorithm === undefined) {
+    return 'ed25519';
+  }
+  const name = normalizeDigestName(algorithm);
+  throw new Error(`${apiName}: unsupported algorithm '${name}'; only Ed25519 with null/undefined algorithm is supported`);
 }
 
 function normalizeDigestName(input) {
@@ -810,8 +939,20 @@ export function scrypt(password, salt, keylen, options, callback) {
 export function generateKeyPairSync() { unsupportedCryptoApi('generateKeyPairSync'); }
 export function publicEncrypt() { unsupportedCryptoApi('publicEncrypt'); }
 export function privateDecrypt() { unsupportedCryptoApi('privateDecrypt'); }
-export function sign() { unsupportedCryptoApi('sign'); }
-export function verify() { unsupportedCryptoApi('verify'); }
+export function sign(algorithm, data, key) {
+  normalizeSignVerifyAlgorithm(algorithm, 'sign');
+  const signNative = requireCryptoHostcall('__pi_crypto_ed25519_sign_native', 'sign');
+  const keyDer = keyMaterialToDer(key, 'PRIVATE KEY', 'sign');
+  const hex = signNative(keyDer, toUint8Array(data), 'hex');
+  return hexToBuffer(hex);
+}
+
+export function verify(algorithm, data, key, signature) {
+  normalizeSignVerifyAlgorithm(algorithm, 'verify');
+  const verifyNative = requireCryptoHostcall('__pi_crypto_ed25519_verify_native', 'verify');
+  const keyDer = keyMaterialToDer(key, 'PUBLIC KEY', 'verify');
+  return verifyNative(keyDer, toUint8Array(data), toUint8Array(signature));
+}
 
 export default {
   randomUUID, createHash, createHmac, randomBytes,

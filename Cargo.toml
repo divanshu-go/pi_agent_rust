@@ -213,6 +213,7 @@ pbkdf2 = { version = "0.12.2", features = ["hmac"] }
 scrypt = { version = "0.11.0", default-features = false }
 getrandom = "0.4.1"
 regex = "1.12.3"
+ring = "0.17.14"
 semver = "1.0.27"
 crc32c = "0.6"
 ast-grep-core = "0.40"

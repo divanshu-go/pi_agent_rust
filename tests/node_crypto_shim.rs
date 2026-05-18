@@ -71,7 +71,9 @@ const {{
   pbkdf2,
   scryptSync,
   createCipheriv,
+  createDecipheriv,
   sign,
+  verify,
 }} = crypto;
 
 export default function activate(pi) {{
@@ -707,11 +709,11 @@ fn create_cipheriv_unimplemented_throws() {
 }
 
 #[test]
-fn sign_unimplemented_throws() {
+fn create_decipheriv_unimplemented_throws() {
     let result = eval_crypto(
         r#"(() => {
         try {
-            sign("sha256", new Uint8Array([1, 2, 3]), {});
+            createDecipheriv("aes-256-gcm", randomBytes(32), randomBytes(16));
             return "no-throw";
         } catch (e) {
             return "threw:" + e.message;
@@ -719,8 +721,81 @@ fn sign_unimplemented_throws() {
     })()"#,
     );
     assert!(
-        result.contains("sign is not implemented"),
-        "Expected sign() to fail loudly, got: {result}"
+        result.contains("createDecipheriv is not implemented"),
+        "Expected createDecipheriv to fail loudly, got: {result}"
+    );
+}
+
+#[test]
+fn sign_ed25519_pkcs8_matches_node_vector() {
+    let result = eval_crypto(
+        r#"(() => {
+        const privateKey = `-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEIKdNGarTy3x3BLKmHN/4JHUxgXyGLoYEwCQk5lMDT0Wc
+-----END PRIVATE KEY-----`;
+        return sign(null, "hello", privateKey).toString("hex");
+    })()"#,
+    );
+    assert_eq!(
+        result,
+        "eb5553cfbe1b7a3acf1c13577e7c1685dddb4193dd089d62123261ba4d1adf7086762ed6b53c4708ee984f6e4b6cd7788fb066d552a97ca5c25fb00efd6d3f05",
+        "Ed25519 signature must match Node.js for the fixed PKCS#8 key"
+    );
+}
+
+#[test]
+fn verify_ed25519_spki_accepts_node_vector() {
+    let result = eval_crypto(
+        r#"(() => {
+        const publicKey = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAnXpFnYYkKVmCrFuByPcsUZW6Wno7zMOjk9xlzkYRpoo=
+-----END PUBLIC KEY-----`;
+        const signature = Uint8Array.from("eb5553cfbe1b7a3acf1c13577e7c1685dddb4193dd089d62123261ba4d1adf7086762ed6b53c4708ee984f6e4b6cd7788fb066d552a97ca5c25fb00efd6d3f05".match(/../g).map((byte) => parseInt(byte, 16)));
+        return verify(null, "hello", publicKey, signature);
+    })()"#,
+    );
+    assert_eq!(
+        result, "true",
+        "Ed25519 verify must accept the Node.js vector"
+    );
+}
+
+#[test]
+fn verify_ed25519_spki_rejects_bad_signature() {
+    let result = eval_crypto(
+        r#"(() => {
+        const publicKey = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAnXpFnYYkKVmCrFuByPcsUZW6Wno7zMOjk9xlzkYRpoo=
+-----END PUBLIC KEY-----`;
+        const signature = Uint8Array.from("eb5553cfbe1b7a3acf1c13577e7c1685dddb4193dd089d62123261ba4d1adf7086762ed6b53c4708ee984f6e4b6cd7788fb066d552a97ca5c25fb00efd6d3f05".match(/../g).map((byte) => parseInt(byte, 16)));
+        signature[0] ^= 1;
+        return verify(null, "hello", publicKey, signature);
+    })()"#,
+    );
+    assert_eq!(
+        result, "false",
+        "Ed25519 verify must reject modified signatures"
+    );
+}
+
+#[test]
+fn sign_rejects_digest_algorithms_for_ed25519_subset() {
+    let result = eval_crypto(
+        r#"(() => {
+        const privateKey = `-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEIKdNGarTy3x3BLKmHN/4JHUxgXyGLoYEwCQk5lMDT0Wc
+-----END PRIVATE KEY-----`;
+        try {
+            sign("sha256", "hello", privateKey);
+            return "no-throw";
+        } catch (e) {
+            return "threw:" + e.message;
+        }
+    })()"#,
+    );
+    assert!(
+        result.contains("only Ed25519"),
+        "Expected sign() to fail closed for digest algorithms, got: {result}"
     );
 }
 

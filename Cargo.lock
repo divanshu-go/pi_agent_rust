@@ -4288,6 +4288,7 @@ dependencies = [
  "proptest",
  "regex",
  "rich_rust",
+ "ring",
  "rquickjs",
  "scrypt",
  "semver",
