@@ -19,7 +19,7 @@
 #![allow(clippy::items_after_statements)]
 
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -1037,6 +1037,96 @@ fn perf_sli_workflow_mapping_covers_scenario_matrix_workflows() {
             "perf_sli_matrix workflow_sli_mapping missing scenario workflow {workflow_id}"
         );
     }
+}
+
+#[test]
+fn perf_sli_responsiveness_workflows_keep_primary_latency_sli() {
+    let perf = load_json(PERF_SLI_MATRIX_PATH);
+    let primary_sli_ids: HashSet<String> = perf["metric_hierarchy"]["primary"]
+        .as_array()
+        .expect("perf_sli_matrix metric_hierarchy.primary array")
+        .iter()
+        .filter_map(|entry| entry.as_str().map(ToOwned::to_owned))
+        .collect();
+    assert!(
+        !primary_sli_ids.is_empty(),
+        "metric_hierarchy.primary must define release-deciding latency SLIs"
+    );
+
+    let workflow_mapping: HashMap<String, HashSet<String>> = perf["workflow_sli_mapping"]
+        .as_array()
+        .expect("perf_sli_matrix workflow_sli_mapping array")
+        .iter()
+        .filter_map(|entry| {
+            let workflow_id = entry["workflow_id"].as_str()?;
+            let sli_ids = entry["sli_ids"]
+                .as_array()
+                .expect("workflow_sli_mapping rows must define sli_ids")
+                .iter()
+                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                .collect();
+            Some((workflow_id.to_owned(), sli_ids))
+        })
+        .collect();
+
+    let responsiveness_markers = [
+        "swarm",
+        "performance",
+        "responsiv",
+        "latency",
+        "smooth",
+        "fast",
+    ];
+    let mut missing_workflow_mappings = Vec::new();
+
+    for row in perf["scenario_sli_matrix"]
+        .as_array()
+        .expect("perf_sli_matrix scenario_sli_matrix array")
+    {
+        let workflow_id = row["scenario_id"].as_str().unwrap_or("unknown");
+        let user_outcome = row["user_outcome"].as_str().unwrap_or("");
+        let is_responsiveness_workflow = responsiveness_markers.iter().any(|needle| {
+            contains_ascii_case_insensitive(workflow_id, needle)
+                || contains_ascii_case_insensitive(user_outcome, needle)
+        });
+        if !is_responsiveness_workflow {
+            continue;
+        }
+
+        let scenario_sli_ids: HashSet<String> = row["sli_ids"]
+            .as_array()
+            .expect("scenario_sli_matrix rows must define sli_ids")
+            .iter()
+            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+            .collect();
+        assert!(
+            !scenario_sli_ids.is_disjoint(&primary_sli_ids),
+            "responsiveness workflow {workflow_id} must include at least one primary latency SLI in scenario_sli_matrix"
+        );
+
+        let Some(mapped_sli_ids) = workflow_mapping.get(workflow_id) else {
+            missing_workflow_mappings.push(workflow_id.to_owned());
+            continue;
+        };
+        assert!(
+            !mapped_sli_ids.is_disjoint(&primary_sli_ids),
+            "responsiveness workflow {workflow_id} must include at least one primary latency SLI in workflow_sli_mapping"
+        );
+    }
+
+    assert!(
+        missing_workflow_mappings.is_empty(),
+        "workflow_sli_mapping missing responsiveness workflows: {}",
+        missing_workflow_mappings.join(", ")
+    );
+}
+
+fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
+    !needle.is_empty()
+        && haystack
+            .as_bytes()
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
 #[test]
