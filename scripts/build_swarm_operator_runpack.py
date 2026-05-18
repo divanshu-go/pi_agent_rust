@@ -395,6 +395,9 @@ VALIDATION_PROOF_MEMORY_SOURCE_PATHS = (
     VALIDATION_PROOF_MEMORY_DEFAULT_EXAMPLES_PATH,
     REMOTE_VALIDATION_CONTRACT_PATH,
     REMOTE_VALIDATION_PROOF_REUSE_GATE_CONTRACT_PATH,
+    Path("scripts/check_closeout_gate_freshness.py"),
+    Path("scripts/check_swarm_runpack_freshness.py"),
+    Path("docs/contracts/closeout-evidence-registry.json"),
     Path("docs/evidence/swarm-incident-corpus.json"),
     Path("docs/evidence/swarm-incident-replay.json"),
     Path("docs/evidence/validation-scheduler-plan.json"),
@@ -8343,12 +8346,112 @@ def validation_proof_memory_freshness(
     }
 
 
+def validation_proof_memory_check_result(
+    *,
+    check_id: str,
+    command: list[str],
+    payload_status: str | None = None,
+    returncode: int = 0,
+    stderr: str = "",
+) -> dict[str, Any]:
+    status = "pass" if returncode == 0 and payload_status in {None, "pass", "ok"} else "fail"
+    return {
+        "id": check_id,
+        "status": status,
+        "payload_status": payload_status,
+        "returncode": returncode,
+        "command": command,
+        "stderr": stderr[:CAPTURE_SNIPPET_MAX_CHARS] if stderr else None,
+        "read_only": True,
+    }
+
+
+def validation_proof_memory_readonly_freshness_inputs(root: Path) -> dict[str, Any]:
+    closeout_command = [
+        sys.executable,
+        "scripts/check_closeout_gate_freshness.py",
+        "--compact",
+    ]
+    closeout = subprocess.run(
+        closeout_command,
+        cwd=root,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=120,
+    )
+    closeout_payload_status: str | None = None
+    with contextlib.suppress(json.JSONDecodeError):
+        payload = json.loads(closeout.stdout)
+        if isinstance(payload, dict):
+            closeout_payload_status = proof_string(payload.get("status")) or None
+
+    runpack_command = [
+        sys.executable,
+        "scripts/check_swarm_runpack_freshness.py",
+        "--self-test",
+    ]
+    runpack = subprocess.run(
+        runpack_command,
+        cwd=root,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=120,
+    )
+    checks = [
+        validation_proof_memory_check_result(
+            check_id="closeout_gate_freshness",
+            command=["python3", "scripts/check_closeout_gate_freshness.py", "--compact"],
+            payload_status=closeout_payload_status,
+            returncode=closeout.returncode,
+            stderr=closeout.stderr,
+        ),
+        validation_proof_memory_check_result(
+            check_id="swarm_runpack_freshness_self_test",
+            command=["python3", "scripts/check_swarm_runpack_freshness.py", "--self-test"],
+            returncode=runpack.returncode,
+            stderr=runpack.stderr,
+        ),
+    ]
+    status = "pass" if all(check["status"] == "pass" for check in checks) else "fail"
+    return {
+        "status": status,
+        "checks": checks,
+        "advisory_only": True,
+        "read_only": True,
+        "does_not_mutate_rch_agent_mail_beads_or_git": True,
+    }
+
+
+def validation_proof_memory_freshness_input_reasons(
+    freshness_inputs: dict[str, Any],
+) -> list[str]:
+    reasons: list[str] = []
+    if freshness_inputs.get("status") not in {"pass", "ok"}:
+        reasons.append("freshness_inputs_not_passing")
+    checks = proof_list(freshness_inputs.get("checks"))
+    if not checks:
+        reasons.append("freshness_inputs_missing_checks")
+    for check in checks:
+        if not isinstance(check, dict):
+            reasons.append("freshness_input_malformed")
+            continue
+        check_id = proof_string(check.get("id"), "unknown_freshness_check")
+        if check.get("status") not in {"pass", "ok"}:
+            reasons.append(f"{check_id}_not_passing")
+    return sorted(set(reasons))
+
+
 def validation_proof_memory_classification(
     *,
     entry: dict[str, Any],
     ledger: dict[str, Any],
     context: dict[str, Any],
     freshness: dict[str, Any],
+    freshness_inputs: dict[str, Any],
 ) -> tuple[str, list[str]]:
     reasons = proof_reuse_entry_invalidation_reasons(
         entry,
@@ -8357,6 +8460,9 @@ def validation_proof_memory_classification(
     )
     if freshness.get("status") == "stale":
         reasons.append("stale_proof")
+    freshness_input_reasons = validation_proof_memory_freshness_input_reasons(
+        freshness_inputs
+    )
     classification = proof_dict(entry.get("evidence_classification"))
     coverage = proof_dict(classification.get("coverage"))
     runner = proof_dict(entry.get("runner"))
@@ -8382,6 +8488,8 @@ def validation_proof_memory_classification(
         or coverage.get("authoritative_for_bead") is not True
     ):
         return "not_authoritative", sorted(set(reasons))
+    if freshness_input_reasons:
+        return "stale", sorted(set(reasons + freshness_input_reasons))
     if not reasons:
         return "reusable", []
     return "not_authoritative", sorted(set(reasons))
@@ -8410,6 +8518,7 @@ def build_validation_proof_memory_record(
     context: dict[str, Any],
     generated_at: datetime,
     stale_after_hours: int,
+    freshness_inputs: dict[str, Any],
 ) -> dict[str, Any]:
     freshness = validation_proof_memory_freshness(
         ledger=ledger,
@@ -8422,6 +8531,7 @@ def build_validation_proof_memory_record(
         ledger=ledger,
         context=context,
         freshness=freshness,
+        freshness_inputs=freshness_inputs,
     )
     source_git = proof_dict(ledger.get("git"))
     entry_classification = proof_dict(entry.get("evidence_classification"))
@@ -8483,6 +8593,7 @@ def build_validation_proof_memory_record(
         "env_fingerprint": proof_reuse_context_env(context),
         "output_artifact_hash": validation_proof_memory_artifact_hash(entry),
         "freshness": freshness,
+        "freshness_inputs": freshness_inputs,
         "reuse_eligibility": {
             "classification": classification,
             "reusable": classification == "reusable",
@@ -8521,6 +8632,7 @@ def validation_proof_memory_fixture_records(
     entry: dict[str, Any],
     generated_at: datetime,
     stale_after_hours: int,
+    freshness_inputs: dict[str, Any],
 ) -> list[dict[str, Any]]:
     base_context = validation_proof_memory_entry_context(ledger, entry)
     entry_id = proof_string(entry.get("entry_id"))
@@ -8536,6 +8648,7 @@ def validation_proof_memory_fixture_records(
                 context=base_context,
                 generated_at=parse_utc("2026-05-14T23:00:00Z"),
                 stale_after_hours=stale_after_hours,
+                freshness_inputs=freshness_inputs,
             )
         )
         stale_context = json.loads(json_dumps(base_context))
@@ -8550,6 +8663,7 @@ def validation_proof_memory_fixture_records(
                 context=stale_context,
                 generated_at=generated_at,
                 stale_after_hours=stale_after_hours,
+                freshness_inputs=freshness_inputs,
             )
         )
         dirty_context = json.loads(json_dumps(base_context))
@@ -8564,6 +8678,7 @@ def validation_proof_memory_fixture_records(
                 context=dirty_context,
                 generated_at=parse_utc("2026-05-14T23:00:00Z"),
                 stale_after_hours=stale_after_hours,
+                freshness_inputs=freshness_inputs,
             )
         )
         command_context = json.loads(json_dumps(base_context))
@@ -8578,6 +8693,7 @@ def validation_proof_memory_fixture_records(
                 context=command_context,
                 generated_at=parse_utc("2026-05-14T23:00:00Z"),
                 stale_after_hours=stale_after_hours,
+                freshness_inputs=freshness_inputs,
             )
         )
         coverage_ledger = json.loads(json_dumps(ledger))
@@ -8595,6 +8711,7 @@ def validation_proof_memory_fixture_records(
                 context=coverage_context,
                 generated_at=parse_utc("2026-05-14T23:00:00Z"),
                 stale_after_hours=stale_after_hours,
+                freshness_inputs=freshness_inputs,
             )
         )
         non_authoritative_entry = json.loads(json_dumps(entry))
@@ -8611,6 +8728,7 @@ def validation_proof_memory_fixture_records(
                 context=base_context,
                 generated_at=parse_utc("2026-05-14T23:00:00Z"),
                 stale_after_hours=stale_after_hours,
+                freshness_inputs=freshness_inputs,
             )
         )
         return records
@@ -8625,6 +8743,7 @@ def validation_proof_memory_fixture_records(
                 context=base_context,
                 generated_at=generated_at,
                 stale_after_hours=stale_after_hours,
+                freshness_inputs=freshness_inputs,
             )
         )
         return records
@@ -8639,6 +8758,7 @@ def validation_proof_memory_fixture_records(
                 context=base_context,
                 generated_at=generated_at,
                 stale_after_hours=stale_after_hours,
+                freshness_inputs=freshness_inputs,
             )
         )
         return records
@@ -8651,11 +8771,15 @@ def build_validation_proof_memory_index_summary(
     sources: list[SourcePayload] | None = None,
     stale_after_hours: int = DEFAULT_STALE_AFTER_HOURS,
     examples_path: Path | None = None,
+    freshness_inputs: dict[str, Any] | None = None,
+    assert_contract: bool = True,
 ) -> dict[str, Any]:
     if sources is None:
         sources = validation_proof_memory_load_sources(
             [examples_path or VALIDATION_PROOF_MEMORY_DEFAULT_EXAMPLES_PATH]
         )
+    if freshness_inputs is None:
+        freshness_inputs = validation_proof_memory_readonly_freshness_inputs(repo_root())
     generated_dt = parse_utc(generated_at)
     records: list[dict[str, Any]] = []
     source_ledgers: list[dict[str, Any]] = []
@@ -8674,6 +8798,7 @@ def build_validation_proof_memory_index_summary(
                         entry=entry,
                         generated_at=generated_dt,
                         stale_after_hours=stale_after_hours,
+                        freshness_inputs=freshness_inputs,
                     )
                 )
     classification_counts = dict(
@@ -8750,6 +8875,7 @@ def build_validation_proof_memory_index_summary(
             repo_root(),
             VALIDATION_PROOF_MEMORY_SOURCE_PATHS,
         ),
+        "freshness_inputs": freshness_inputs,
         "required_fixture_ids": list(VALIDATION_PROOF_MEMORY_REQUIRED_FIXTURE_IDS),
         "missing_fixture_ids": missing_fixture_ids,
         "required_classifications": list(
@@ -8766,6 +8892,7 @@ def build_validation_proof_memory_index_summary(
                 for item in source_ledgers
             ),
             "classification_counts": classification_counts,
+            "freshness_input_status": freshness_inputs.get("status"),
             "reusable_count": classification_counts.get("reusable", 0),
             "reusable_record_count": classification_counts.get("reusable", 0),
             "fail_closed_count": sum(
@@ -8797,10 +8924,12 @@ def build_validation_proof_memory_index_summary(
             "does_not_authorize_dropin_claims": True,
             "does_not_authorize_strict_dropin_claims": True,
             "requires_fresh_authoritative_remote_proof_for_reuse": True,
+            "requires_passing_closeout_and_runpack_freshness_for_reuse": True,
             "raw_logs_or_provider_content_embedded": False,
         },
     }
-    assert_validation_proof_memory_index_contract(summary)
+    if assert_contract:
+        assert_validation_proof_memory_index_contract(summary)
     return summary
 
 
@@ -8857,6 +8986,10 @@ def assert_validation_proof_memory_index_contract(summary: dict[str, Any]) -> No
         )
         if record.get("classification") == "reusable":
             assert proof_dict(record.get("reuse_eligibility")).get("reusable") is True
+            assert proof_dict(record.get("freshness_inputs")).get("status") == "pass", (
+                "reusable proof-memory record requires passing closeout/runpack freshness "
+                f"inputs: {record.get('fixture_id')}"
+            )
         else:
             assert proof_dict(record.get("reuse_eligibility")).get("reusable") is False
     fixture_coverage = proof_dict(summary.get("required_fixture_coverage"))
@@ -34785,10 +34918,38 @@ def run_self_test() -> int:
             in lockfile_gate["invalidation_reasons"]
         )
 
+        passing_freshness_inputs = {
+            "status": "pass",
+            "checks": [
+                {
+                    "id": "closeout_gate_freshness",
+                    "status": "pass",
+                    "command": [
+                        "python3",
+                        "scripts/check_closeout_gate_freshness.py",
+                        "--compact",
+                    ],
+                    "read_only": True,
+                },
+                {
+                    "id": "swarm_runpack_freshness_self_test",
+                    "status": "pass",
+                    "command": [
+                        "python3",
+                        "scripts/check_swarm_runpack_freshness.py",
+                        "--self-test",
+                    ],
+                    "read_only": True,
+                },
+            ],
+            "advisory_only": True,
+            "read_only": True,
+        }
         proof_memory_index = build_validation_proof_memory_index_summary(
             generated_at=generated_at,
             sources=validation_proof_memory_load_sources([]),
             stale_after_hours=24,
+            freshness_inputs=passing_freshness_inputs,
         )
         assert proof_memory_index["schema"] == VALIDATION_PROOF_MEMORY_INDEX_SCHEMA
         assert proof_memory_index["status"] == "pass"
@@ -34804,6 +34965,27 @@ def run_self_test() -> int:
         }["reusable_remote_proof"]
         assert reusable_memory["reuse_eligibility"]["reusable"] is True
         assert reusable_memory["reuse_eligibility"]["invalidation_reasons"] == []
+        assert reusable_memory["freshness_inputs"]["status"] == "pass"
+        degraded_freshness_inputs = json.loads(json_dumps(passing_freshness_inputs))
+        degraded_freshness_inputs["status"] = "fail"
+        degraded_freshness_inputs["checks"][0]["status"] = "fail"
+        degraded_proof_memory = build_validation_proof_memory_index_summary(
+            generated_at=generated_at,
+            sources=validation_proof_memory_load_sources([]),
+            stale_after_hours=24,
+            freshness_inputs=degraded_freshness_inputs,
+            assert_contract=False,
+        )
+        degraded_reusable = {
+            record["fixture_id"]: record
+            for record in degraded_proof_memory["records"]
+        }["reusable_remote_proof"]
+        assert degraded_reusable["reuse_eligibility"]["reusable"] is False
+        assert degraded_reusable["classification"] == "stale"
+        assert (
+            "closeout_gate_freshness_not_passing"
+            in degraded_reusable["reuse_eligibility"]["invalidation_reasons"]
+        )
         assert all(
             control["passes_fail_closed"]
             for control in proof_memory_index["negative_controls"]
