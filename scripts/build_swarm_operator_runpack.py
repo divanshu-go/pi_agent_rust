@@ -72,6 +72,7 @@ OPERATOR_WORK_RECOMMENDATION_SCHEMA = "pi.swarm.operator_work_recommendation.v1"
 OPERATOR_WORK_RECOMMENDATION_CONTRACT_SCHEMA = (
     "pi.swarm.operator_work_recommendation_contract.v1"
 )
+SEMANTIC_ROUTE_PLAN_SCHEMA = "pi.validation.semantic_route_plan.v1"
 REMOTE_VALIDATION_PROOF_REUSE_GATE_CONTRACT_SCHEMA = (
     "pi.validation.proof_reuse_gate_contract.v1"
 )
@@ -273,6 +274,7 @@ WORK_ADMISSION_GATE_GOLDEN = "work_admission_gate_projection.json"
 AUTOPILOT_DECISION_GATE_GOLDEN = "autopilot_decision_gate_projection.json"
 MALFORMED_SOURCE_GOLDEN = "malformed_source_fail_closed_projection.json"
 STRUCTURED_INPUT_FUZZ_GOLDEN = "structured_input_fuzz_projection.json"
+SEMANTIC_ROUTE_RUNPACK_GOLDEN = "semantic_route_runpack_projection.json"
 UPDATE_GOLDEN_ENV = "UPDATE_SWARM_OPERATOR_RUNPACK_GOLDEN"
 DEFAULT_MAX_ITEMS = 8
 DEFAULT_STALE_AFTER_HOURS = 24
@@ -2320,6 +2322,15 @@ def source_payloads(args: argparse.Namespace) -> list[SourcePayload]:
                 expected_schema=STALE_EVIDENCE_RENEWAL_QUEUE_SCHEMA,
             )
         )
+    semantic_route_plan_json = getattr(args, "semantic_route_plan_json", None)
+    if semantic_route_plan_json is not None:
+        sources.append(
+            load_json_source(
+                "semantic_route_plan",
+                semantic_route_plan_json,
+                expected_schema=SEMANTIC_ROUTE_PLAN_SCHEMA,
+            )
+        )
     return sources
 
 
@@ -3097,6 +3108,137 @@ def summarize_context_intelligence(
         "redaction_summary": data.get("redaction_summary"),
         "degraded_reasons": bounded(degraded_reasons, max_items),
         "recommended_actions": bounded(recommended_actions, max_items),
+    }
+
+
+def summarize_semantic_route_plan_source(
+    source: SourcePayload,
+    max_items: int,
+) -> dict[str, Any]:
+    payload = source.payload if isinstance(source.payload, dict) else {}
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    classification = (
+        payload.get("changed_path_classification")
+        if isinstance(payload.get("changed_path_classification"), dict)
+        else {}
+    )
+    obligations = (
+        payload.get("proof_obligations")
+        if isinstance(payload.get("proof_obligations"), dict)
+        else {}
+    )
+    cache_heat = payload.get("cache_heat") if isinstance(payload.get("cache_heat"), dict) else {}
+    coalescing = (
+        payload.get("coalescing_advice")
+        if isinstance(payload.get("coalescing_advice"), dict)
+        else {}
+    )
+    coordination_risk = (
+        payload.get("coordination_risk")
+        if isinstance(payload.get("coordination_risk"), dict)
+        else {}
+    )
+    coordination = (
+        payload.get("coordination_admission")
+        if isinstance(payload.get("coordination_admission"), dict)
+        else {}
+    )
+    inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
+    claim_boundaries = (
+        payload.get("claim_boundaries")
+        if isinstance(payload.get("claim_boundaries"), dict)
+        else {}
+    )
+    commands = []
+    for item in (payload.get("would_run_order") or []) + (payload.get("deferred_or_blocked") or []):
+        if not isinstance(item, dict):
+            continue
+        commands.append(
+            {
+                "rank": item.get("rank"),
+                "group_id": item.get("group_id"),
+                "action": item.get("action", "would_run"),
+                "command": item.get("command"),
+                "requires_rch": item.get("requires_rch"),
+                "local_fallback_rejection_reason": item.get(
+                    "local_fallback_rejection_reason"
+                ),
+            }
+        )
+    recommended_order = [
+        {
+            "rank": item.get("rank"),
+            "group_id": item.get("group_id"),
+            "requires_rch": item.get("requires_rch"),
+        }
+        for item in coalescing.get("recommended_order") or []
+        if isinstance(item, dict)
+    ]
+    risk_factors = [
+        {
+            "id": item.get("id"),
+            "severity": item.get("severity"),
+            "recommended_action": item.get("recommended_action"),
+            "affected_paths": item.get("affected_paths") or [],
+        }
+        for item in coordination_risk.get("risk_factors") or []
+        if isinstance(item, dict)
+    ]
+    return {
+        "status": source.status,
+        "schema": payload.get("schema"),
+        "source_path": source.path,
+        "route_status": payload.get("status"),
+        "decision": payload.get("decision"),
+        "source_bead": payload.get("source_bead"),
+        "profile_id": classification.get("profile_id"),
+        "changed_paths": bounded(
+            [path for path in inputs.get("changed_paths") or [] if isinstance(path, str)],
+            max_items,
+        ),
+        "bucket_counts": classification.get("bucket_counts") or {},
+        "required_group_ids": bounded(obligations.get("required_group_ids") or [], max_items),
+        "summary": {
+            "required_group_count": summary.get("required_group_count"),
+            "would_run_count": summary.get("would_run_count"),
+            "deferred_or_blocked_count": summary.get("deferred_or_blocked_count"),
+            "heavy_group_count": summary.get("heavy_group_count"),
+            "coordination_status": summary.get("coordination_status"),
+            "proof_memory_route_decision": summary.get("proof_memory_route_decision"),
+        },
+        "cache_heat": {
+            "status": cache_heat.get("status"),
+            "route_heat_level": cache_heat.get("route_heat_level"),
+            "heavy_group_ids": bounded(cache_heat.get("heavy_group_ids") or [], max_items),
+            "shared_rch_env_present": bool(cache_heat.get("shared_rch_env")),
+            "proof_memory_cache_hint": cache_heat.get("proof_memory_cache_hint"),
+        },
+        "coalescing_advice": {
+            "status": coalescing.get("status"),
+            "recommended_order": bounded(recommended_order, max_items),
+            "advisory_only": coalescing.get("advisory_only") is True,
+            "local_fallback_policy": coalescing.get("local_fallback_policy"),
+        },
+        "coordination_admission": {
+            "status": coordination.get("status"),
+            "recommended_action": coordination.get("recommended_action"),
+            "thread_id_hint": coordination.get("thread_id_hint"),
+            "reservation_reason_hint": coordination.get("reservation_reason_hint"),
+            "reservation_paths": bounded(coordination.get("reservation_paths") or [], max_items),
+            "risk_level": coordination_risk.get("risk_level"),
+            "risk_factors": bounded(risk_factors, max_items),
+        },
+        "command_templates": bounded(commands, max_items),
+        "guards": {
+            "advisory_only": True,
+            "no_command_execution": claim_boundaries.get("does_not_execute_commands") is True,
+            "no_rch_launch": claim_boundaries.get("does_not_launch_rch") is True,
+            "no_agent_mail_mutation": claim_boundaries.get("does_not_mutate_agent_mail") is True,
+            "no_beads_mutation": claim_boundaries.get("does_not_mutate_beads") is True,
+            "no_git_mutation": claim_boundaries.get("does_not_mutate_git") is True,
+            "no_file_deletion": claim_boundaries.get("does_not_delete_files") is True,
+            "not_release_or_dropin_claim_evidence": True,
+        },
     }
 
 
@@ -13677,6 +13819,11 @@ def build_runpack(args: argparse.Namespace) -> dict[str, Any]:
                 args.max_items,
             )
         )
+    if "semantic_route_plan" in by_id:
+        runpack["semantic_route_plan"] = summarize_semantic_route_plan_source(
+            by_id["semantic_route_plan"],
+            args.max_items,
+        )
     runpack["temp_artifact_inventory"] = build_temp_artifact_inventory(
         runpack,
         capture_summary=capture_summary,
@@ -13797,6 +13944,19 @@ def operator_next_actions(runpack: dict[str, Any]) -> list[str]:
                 "Follow validation scheduler plan before running cargo gates: "
                 f"{summary.get('blocked_group_count')} blocked groups, "
                 f"{summary.get('deferred_group_count')} deferred groups"
+            )
+    semantic_route = runpack.get("semantic_route_plan")
+    if isinstance(semantic_route, dict):
+        coordination = (
+            semantic_route.get("coordination_admission")
+            if isinstance(semantic_route.get("coordination_admission"), dict)
+            else {}
+        )
+        if semantic_route.get("route_status") in {"blocked", "degraded"}:
+            actions.append(
+                "Inspect semantic route plan before claiming or validating: "
+                f"{semantic_route.get('route_status')} / "
+                f"{coordination.get('recommended_action')}"
             )
     proof_ledger = runpack.get("remote_validation_proof_ledger")
     if isinstance(proof_ledger, dict):
@@ -14089,6 +14249,18 @@ def render_markdown(runpack: dict[str, Any]) -> str:
             f"({summary.get('would_run_count')} commands admitted, "
             f"{summary.get('deferred_group_count')} groups deferred)"
         )
+    semantic_route = runpack.get("semantic_route_plan")
+    if isinstance(semantic_route, dict):
+        coordination = (
+            semantic_route.get("coordination_admission")
+            if isinstance(semantic_route.get("coordination_admission"), dict)
+            else {}
+        )
+        lines.append(
+            f"- Semantic route plan: `{semantic_route.get('route_status')}` "
+            f"({coordination.get('recommended_action')}, "
+            f"heat `{semantic_route.get('cache_heat', {}).get('route_heat_level')}`)"
+        )
     turn_pressure = runpack.get("turn_pressure_ledger")
     if isinstance(turn_pressure, dict):
         summary = (
@@ -14216,6 +14388,35 @@ def render_markdown(runpack: dict[str, Any]) -> str:
             lines.append(
                 f"- Defer `{item.get('group_id')}`: `{item.get('action')}` "
                 f"({', '.join(item.get('reasons') or [])})"
+            )
+    if isinstance(runpack.get("semantic_route_plan"), dict):
+        plan = runpack["semantic_route_plan"]
+        lines.extend(["", "## Semantic Route Plan"])
+        lines.append(f"- Schema: `{plan.get('schema')}`")
+        lines.append(f"- Status: `{plan.get('route_status')}`")
+        lines.append(f"- Decision: `{plan.get('decision')}`")
+        lines.append(f"- Profile: `{plan.get('profile_id')}`")
+        heat = plan.get("cache_heat") if isinstance(plan.get("cache_heat"), dict) else {}
+        lines.append(
+            f"- Cache heat: `{heat.get('route_heat_level')}` "
+            f"(heavy groups `{len(heat.get('heavy_group_ids') or [])}`)"
+        )
+        coordination = (
+            plan.get("coordination_admission")
+            if isinstance(plan.get("coordination_admission"), dict)
+            else {}
+        )
+        lines.append(
+            "- Coordination admission: "
+            f"`{coordination.get('status')}` / "
+            f"`{coordination.get('recommended_action')}`"
+        )
+        for group_id in plan.get("required_group_ids") or []:
+            lines.append(f"- Required proof group: `{group_id}`")
+        for command in plan.get("command_templates") or []:
+            lines.append(
+                f"- Route command `{command.get('group_id')}`: "
+                f"`{command.get('command')}`"
             )
     if isinstance(runpack.get("temp_artifact_inventory"), dict):
         inventory = runpack["temp_artifact_inventory"]
@@ -34652,6 +34853,7 @@ def run_self_test() -> int:
         validation_outputs=[validation_path],
         validation_broker_json=None,
         progress_slo_json=progress_slo_path,
+        semantic_route_plan_json=None,
         capture_manifest={
             "schema": RUNPACK_CAPTURE_SCHEMA,
             "mode": "current",
@@ -36447,6 +36649,250 @@ def run_self_test() -> int:
         assert "Git Context" in markdown
         assert_runpack_contract(runpack)
         assert_runpack_golden(runpack, workspace)
+
+        def semantic_route_fixture(
+            *,
+            case_id: str,
+            route_status: str,
+            decision: str,
+            coordination_status: str,
+            recommended_action: str,
+            route_heat_level: str,
+        ) -> dict[str, Any]:
+            requires_rch = route_heat_level != "low"
+            command = (
+                "rch exec -- env CARGO_TARGET_DIR=/data/tmp/pi_agent_rust_cargo/${USER:-agent}/target "
+                "TMPDIR=/data/tmp/pi_agent_rust_cargo/${USER:-agent}/tmp cargo check --all-targets"
+                if requires_rch
+                else "python3 scripts/build_swarm_operator_runpack.py --self-test"
+            )
+            group_id = "all_targets_check" if requires_rch else "fast_script_checks"
+            return {
+                "schema": SEMANTIC_ROUTE_PLAN_SCHEMA,
+                "generated_at": generated_at,
+                "status": route_status,
+                "decision": decision,
+                "purpose": "read_only_semantic_validation_route_planning",
+                "source_bead": f"bd-semantic-{case_id}",
+                "inputs": {
+                    "changed_paths": [
+                        (
+                            "src/providers/openai.rs"
+                            if requires_rch
+                            else "docs/swarm-operations-runbook.md"
+                        )
+                    ],
+                },
+                "changed_path_classification": {
+                    "profile_id": "source_only" if requires_rch else "docs_scripts_evidence_only",
+                    "bucket_counts": (
+                        {"provider": 1} if requires_rch else {"scripts_docs_evidence": 1}
+                    ),
+                },
+                "proof_obligations": {
+                    "required_group_ids": [group_id],
+                    "heavy_group_count": 1 if requires_rch else 0,
+                },
+                "proof_memory_assessment": {
+                    "route_decision": (
+                        "reuse_available"
+                        if route_status == "ready"
+                        else "refresh_validation"
+                    ),
+                },
+                "cache_heat": {
+                    "status": "ready",
+                    "route_heat_level": route_heat_level,
+                    "heavy_group_ids": [group_id] if requires_rch else [],
+                    "shared_rch_env": (
+                        {
+                            "CARGO_TARGET_DIR": (
+                                "/data/tmp/pi_agent_rust_cargo/"
+                                "${USER:-agent}/target"
+                            )
+                        }
+                        if requires_rch
+                        else {}
+                    ),
+                    "proof_memory_cache_hint": {
+                        "decision": (
+                            "reuse_available"
+                            if route_status == "ready"
+                            else "refresh_validation"
+                        ),
+                        "authority_boundary": (
+                            "Cache hints may influence ordering only; "
+                            "proof-memory reuse remains governed by "
+                            "proof_memory_assessment."
+                        ),
+                    },
+                },
+                "coalescing_advice": {
+                    "status": "ready",
+                    "recommended_order": [
+                        {
+                            "rank": 1,
+                            "group_id": group_id,
+                            "requires_rch": requires_rch,
+                        }
+                    ],
+                    "advisory_only": True,
+                    "local_fallback_policy": "Heavy cargo validation remains RCH-only and must not fail open into local cargo.",
+                },
+                "coordination_risk": {
+                    "status": coordination_status,
+                    "risk_level": (
+                        "blocking"
+                        if coordination_status == "blocked"
+                        else ("medium" if coordination_status == "degraded" else "low")
+                    ),
+                    "risk_factors": [
+                        {
+                            "id": f"{case_id}_coordination_fixture",
+                            "severity": "blocking" if coordination_status == "blocked" else "degraded",
+                            "recommended_action": recommended_action,
+                            "affected_paths": (
+                                ["src/providers/openai.rs"] if requires_rch else []
+                            ),
+                        }
+                    ]
+                    if coordination_status != "ready"
+                    else [],
+                },
+                "coordination_admission": {
+                    "status": coordination_status,
+                    "recommended_action": recommended_action,
+                    "thread_id_hint": f"bd-semantic-{case_id}",
+                    "reservation_reason_hint": f"bd-semantic-{case_id}",
+                    "reservation_paths": [
+                        (
+                            "src/providers/openai.rs"
+                            if requires_rch
+                            else "docs/swarm-operations-runbook.md"
+                        )
+                    ],
+                },
+                "would_run_order": [
+                    {
+                        "rank": 1,
+                        "group_id": group_id,
+                        "action": "would_run",
+                        "command": command,
+                        "requires_rch": requires_rch,
+                        "local_fallback_rejection_reason": (
+                            "RCH-required validation must not fail open into "
+                            "a local cargo build."
+                            if requires_rch
+                            else None
+                        ),
+                    }
+                ]
+                if route_status != "blocked"
+                else [],
+                "deferred_or_blocked": [
+                    {
+                        "rank": 1,
+                        "group_id": group_id,
+                        "action": "block",
+                        "command": command,
+                        "requires_rch": requires_rch,
+                        "local_fallback_rejection_reason": (
+                            "RCH-required validation must not fail open into "
+                            "a local cargo build."
+                            if requires_rch
+                            else None
+                        ),
+                    }
+                ]
+                if route_status == "blocked"
+                else [],
+                "negative_controls": [],
+                "summary": {
+                    "required_group_count": 1,
+                    "would_run_count": 0 if route_status == "blocked" else 1,
+                    "deferred_or_blocked_count": 1 if route_status == "blocked" else 0,
+                    "heavy_group_count": 1 if requires_rch else 0,
+                    "coordination_status": coordination_status,
+                    "proof_memory_route_decision": (
+                        "reuse_available"
+                        if route_status == "ready"
+                        else "refresh_validation"
+                    ),
+                },
+                "claim_boundaries": {
+                    "does_not_execute_commands": True,
+                    "does_not_launch_rch": True,
+                    "does_not_mutate_agent_mail": True,
+                    "does_not_mutate_beads": True,
+                    "does_not_mutate_git": True,
+                    "does_not_delete_files": True,
+                },
+            }
+
+        semantic_projection: dict[str, Any] = {
+            "schema": "pi.swarm.semantic_route_runpack_projection_golden.v1",
+            "cases": {},
+        }
+        for semantic_case in (
+            {
+                "case_id": "healthy",
+                "route_status": "ready",
+                "decision": "route_plan_ready",
+                "coordination_status": "ready",
+                "recommended_action": "safe_to_claim",
+                "route_heat_level": "high",
+            },
+            {
+                "case_id": "degraded",
+                "route_status": "degraded",
+                "decision": "route_plan_degraded_use_manual_validation",
+                "coordination_status": "degraded",
+                "recommended_action": "claim_with_beads_soft_lock",
+                "route_heat_level": "low",
+            },
+            {
+                "case_id": "blocked",
+                "route_status": "blocked",
+                "decision": "route_plan_blocked_refresh_sources",
+                "coordination_status": "blocked",
+                "recommended_action": "defer_due_to_collision",
+                "route_heat_level": "high",
+            },
+        ):
+            semantic_path = write_json(
+                workspace / f"semantic-route-{semantic_case['case_id']}.json",
+                semantic_route_fixture(**semantic_case),
+            )
+            semantic_args = argparse.Namespace(
+                **{
+                    **vars(args),
+                    "semantic_route_plan_json": semantic_path,
+                    "out_json": None,
+                    "out_md": None,
+                }
+            )
+            semantic_runpack = build_runpack(semantic_args)
+            semantic_summary = semantic_runpack["semantic_route_plan"]
+            assert semantic_summary["route_status"] == semantic_case["route_status"]
+            assert (
+                semantic_summary["coordination_admission"]["recommended_action"]
+                == semantic_case["recommended_action"]
+            )
+            assert semantic_summary["guards"]["advisory_only"] is True
+            assert semantic_summary["guards"]["no_command_execution"] is True
+            assert any(
+                source.get("id") == "semantic_route_plan" and source.get("status") == "ok"
+                for source in semantic_runpack["source_statuses"]
+            )
+            assert "Semantic Route Plan" in render_markdown(semantic_runpack)
+            assert_runpack_contract(semantic_runpack)
+            semantic_projection["cases"][semantic_case["case_id"]] = semantic_summary
+        assert_named_golden(
+            semantic_projection,
+            workspace,
+            golden_filename=SEMANTIC_ROUTE_RUNPACK_GOLDEN,
+            label="semantic route runpack",
+        )
         validation_broker_args = argparse.Namespace(
             **{
                 **vars(args),
@@ -39471,6 +39917,11 @@ def parse_args() -> argparse.Namespace:
         "--stale-evidence-renewal-json",
         type=Path,
         help="optional pi.swarm.stale_evidence_renewal_queue.v1 JSON to summarize and feed the dry-run action plan",
+    )
+    parser.add_argument(
+        "--semantic-route-plan-json",
+        type=Path,
+        help="optional pi.validation.semantic_route_plan.v1 JSON to summarize in the operator runpack",
     )
     parser.add_argument(
         "--operator-runpack-json",

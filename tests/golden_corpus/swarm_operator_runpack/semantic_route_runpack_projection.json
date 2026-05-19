@@ -1,0 +1,262 @@
+{
+  "cases": {
+    "blocked": {
+      "bucket_counts": {
+        "provider": 1
+      },
+      "cache_heat": {
+        "heavy_group_ids": [
+          "all_targets_check"
+        ],
+        "proof_memory_cache_hint": {
+          "authority_boundary": "Cache hints may influence ordering only; proof-memory reuse remains governed by proof_memory_assessment.",
+          "decision": "refresh_validation"
+        },
+        "route_heat_level": "high",
+        "shared_rch_env_present": true,
+        "status": "ready"
+      },
+      "changed_paths": [
+        "src/providers/openai.rs"
+      ],
+      "coalescing_advice": {
+        "advisory_only": true,
+        "local_fallback_policy": "Heavy cargo validation remains RCH-only and must not fail open into local cargo.",
+        "recommended_order": [
+          {
+            "group_id": "all_targets_check",
+            "rank": 1,
+            "requires_rch": true
+          }
+        ],
+        "status": "ready"
+      },
+      "command_templates": [
+        {
+          "action": "block",
+          "command": "rch exec -- env CARGO_TARGET_DIR=[PI_AGENT_CARGO_TMP]/${USER:-agent}/target TMPDIR=[PI_AGENT_CARGO_TMP]/${USER:-agent}/tmp cargo check --all-targets",
+          "group_id": "all_targets_check",
+          "local_fallback_rejection_reason": "RCH-required validation must not fail open into a local cargo build.",
+          "rank": 1,
+          "requires_rch": true
+        }
+      ],
+      "coordination_admission": {
+        "recommended_action": "defer_due_to_collision",
+        "reservation_paths": [
+          "src/providers/openai.rs"
+        ],
+        "reservation_reason_hint": "bd-semantic-blocked",
+        "risk_factors": [
+          {
+            "affected_paths": [
+              "src/providers/openai.rs"
+            ],
+            "id": "blocked_coordination_fixture",
+            "recommended_action": "defer_due_to_collision",
+            "severity": "blocking"
+          }
+        ],
+        "risk_level": "blocking",
+        "status": "blocked",
+        "thread_id_hint": "bd-semantic-blocked"
+      },
+      "decision": "route_plan_blocked_refresh_sources",
+      "guards": {
+        "advisory_only": true,
+        "no_agent_mail_mutation": true,
+        "no_beads_mutation": true,
+        "no_command_execution": true,
+        "no_file_deletion": true,
+        "no_git_mutation": true,
+        "no_rch_launch": true,
+        "not_release_or_dropin_claim_evidence": true
+      },
+      "profile_id": "source_only",
+      "required_group_ids": [
+        "all_targets_check"
+      ],
+      "route_status": "blocked",
+      "schema": "pi.validation.semantic_route_plan.v1",
+      "source_bead": "bd-semantic-blocked",
+      "source_path": "[WORKSPACE]/semantic-route-blocked.json",
+      "status": "ok",
+      "summary": {
+        "coordination_status": "blocked",
+        "deferred_or_blocked_count": 1,
+        "heavy_group_count": 1,
+        "proof_memory_route_decision": "refresh_validation",
+        "required_group_count": 1,
+        "would_run_count": 0
+      }
+    },
+    "degraded": {
+      "bucket_counts": {
+        "scripts_docs_evidence": 1
+      },
+      "cache_heat": {
+        "heavy_group_ids": [],
+        "proof_memory_cache_hint": {
+          "authority_boundary": "Cache hints may influence ordering only; proof-memory reuse remains governed by proof_memory_assessment.",
+          "decision": "refresh_validation"
+        },
+        "route_heat_level": "low",
+        "shared_rch_env_present": false,
+        "status": "ready"
+      },
+      "changed_paths": [
+        "docs/swarm-operations-runbook.md"
+      ],
+      "coalescing_advice": {
+        "advisory_only": true,
+        "local_fallback_policy": "Heavy cargo validation remains RCH-only and must not fail open into local cargo.",
+        "recommended_order": [
+          {
+            "group_id": "fast_script_checks",
+            "rank": 1,
+            "requires_rch": false
+          }
+        ],
+        "status": "ready"
+      },
+      "command_templates": [
+        {
+          "action": "would_run",
+          "command": "python3 scripts/build_swarm_operator_runpack.py --self-test",
+          "group_id": "fast_script_checks",
+          "local_fallback_rejection_reason": null,
+          "rank": 1,
+          "requires_rch": false
+        }
+      ],
+      "coordination_admission": {
+        "recommended_action": "claim_with_beads_soft_lock",
+        "reservation_paths": [
+          "docs/swarm-operations-runbook.md"
+        ],
+        "reservation_reason_hint": "bd-semantic-degraded",
+        "risk_factors": [
+          {
+            "affected_paths": [],
+            "id": "degraded_coordination_fixture",
+            "recommended_action": "claim_with_beads_soft_lock",
+            "severity": "degraded"
+          }
+        ],
+        "risk_level": "medium",
+        "status": "degraded",
+        "thread_id_hint": "bd-semantic-degraded"
+      },
+      "decision": "route_plan_degraded_use_manual_validation",
+      "guards": {
+        "advisory_only": true,
+        "no_agent_mail_mutation": true,
+        "no_beads_mutation": true,
+        "no_command_execution": true,
+        "no_file_deletion": true,
+        "no_git_mutation": true,
+        "no_rch_launch": true,
+        "not_release_or_dropin_claim_evidence": true
+      },
+      "profile_id": "docs_scripts_evidence_only",
+      "required_group_ids": [
+        "fast_script_checks"
+      ],
+      "route_status": "degraded",
+      "schema": "pi.validation.semantic_route_plan.v1",
+      "source_bead": "bd-semantic-degraded",
+      "source_path": "[WORKSPACE]/semantic-route-degraded.json",
+      "status": "ok",
+      "summary": {
+        "coordination_status": "degraded",
+        "deferred_or_blocked_count": 0,
+        "heavy_group_count": 0,
+        "proof_memory_route_decision": "refresh_validation",
+        "required_group_count": 1,
+        "would_run_count": 1
+      }
+    },
+    "healthy": {
+      "bucket_counts": {
+        "provider": 1
+      },
+      "cache_heat": {
+        "heavy_group_ids": [
+          "all_targets_check"
+        ],
+        "proof_memory_cache_hint": {
+          "authority_boundary": "Cache hints may influence ordering only; proof-memory reuse remains governed by proof_memory_assessment.",
+          "decision": "reuse_available"
+        },
+        "route_heat_level": "high",
+        "shared_rch_env_present": true,
+        "status": "ready"
+      },
+      "changed_paths": [
+        "src/providers/openai.rs"
+      ],
+      "coalescing_advice": {
+        "advisory_only": true,
+        "local_fallback_policy": "Heavy cargo validation remains RCH-only and must not fail open into local cargo.",
+        "recommended_order": [
+          {
+            "group_id": "all_targets_check",
+            "rank": 1,
+            "requires_rch": true
+          }
+        ],
+        "status": "ready"
+      },
+      "command_templates": [
+        {
+          "action": "would_run",
+          "command": "rch exec -- env CARGO_TARGET_DIR=[PI_AGENT_CARGO_TMP]/${USER:-agent}/target TMPDIR=[PI_AGENT_CARGO_TMP]/${USER:-agent}/tmp cargo check --all-targets",
+          "group_id": "all_targets_check",
+          "local_fallback_rejection_reason": "RCH-required validation must not fail open into a local cargo build.",
+          "rank": 1,
+          "requires_rch": true
+        }
+      ],
+      "coordination_admission": {
+        "recommended_action": "safe_to_claim",
+        "reservation_paths": [
+          "src/providers/openai.rs"
+        ],
+        "reservation_reason_hint": "bd-semantic-healthy",
+        "risk_factors": [],
+        "risk_level": "low",
+        "status": "ready",
+        "thread_id_hint": "bd-semantic-healthy"
+      },
+      "decision": "route_plan_ready",
+      "guards": {
+        "advisory_only": true,
+        "no_agent_mail_mutation": true,
+        "no_beads_mutation": true,
+        "no_command_execution": true,
+        "no_file_deletion": true,
+        "no_git_mutation": true,
+        "no_rch_launch": true,
+        "not_release_or_dropin_claim_evidence": true
+      },
+      "profile_id": "source_only",
+      "required_group_ids": [
+        "all_targets_check"
+      ],
+      "route_status": "ready",
+      "schema": "pi.validation.semantic_route_plan.v1",
+      "source_bead": "bd-semantic-healthy",
+      "source_path": "[WORKSPACE]/semantic-route-healthy.json",
+      "status": "ok",
+      "summary": {
+        "coordination_status": "ready",
+        "deferred_or_blocked_count": 0,
+        "heavy_group_count": 1,
+        "proof_memory_route_decision": "reuse_available",
+        "required_group_count": 1,
+        "would_run_count": 1
+      }
+    }
+  },
+  "schema": "pi.swarm.semantic_route_runpack_projection_golden.v1"
+}

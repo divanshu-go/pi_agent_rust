@@ -716,11 +716,18 @@ Capture a handoff bundle before ending a swarm shift:
 capture_dir="/data/tmp/pi_swarm_runpack/${AGENT_NAME}-$(date +%Y%m%dT%H%M%S)"
 mkdir -p "$capture_dir"
 
+python3 scripts/plan_semantic_validation_route.py \
+  --from-git \
+  --source-bead <issue-id> \
+  --pretty \
+  --out "$capture_dir/semantic-route-plan.json"
+
 python3 scripts/build_swarm_operator_runpack.py \
   --capture-current \
   --capture-dir "$capture_dir" \
   --project-root /data/projects/pi_agent_rust \
   --agent-name "$AGENT_NAME" \
+  --semantic-route-plan-json "$capture_dir/semantic-route-plan.json" \
   --progress-slo-json "$capture_dir/progress-slo.json" \
   --out-json "$capture_dir/operator-runpack.json" \
   --out-md "$capture_dir/operator-runpack.md" \
@@ -731,6 +738,7 @@ python3 scripts/build_swarm_operator_runpack.py \
 ```
 
 The runpack schema is governed by `docs/contracts/swarm-operator-runpack-contract.json`. The runpack is a redacted index over existing evidence, not a release performance claim and not a replacement for the source artifacts.
+The semantic route plan schema is `pi.validation.semantic_route_plan.v1`. Generate it with `scripts/plan_semantic_validation_route.py --from-git --source-bead <issue-id> --out "$capture_dir/semantic-route-plan.json"` and pass it to the runpack with `--semantic-route-plan-json`. The route is advisory only: it summarizes changed-path buckets, proof-memory/cache heat, RCH-backed command templates, coordination admission, and coalescing order, but operators must still claim through Beads, reserve through Agent Mail when healthy, and run heavyweight Cargo validation through RCH. It must not execute commands, launch RCH, mutate Beads, mutate Agent Mail, mutate git, delete files, skip validation, or support release, benchmark, capacity, performance, strict drop-in, or claim-readiness assertions.
 The predictive telemetry ledger schema is governed by `docs/contracts/predictive-swarm-telemetry-ledger-contract.json`; checked-in advisory fixture evidence lives at `docs/evidence/predictive-swarm-telemetry-ledger.json`. It ranks validation, coordination, work-queue, turn-context, bottleneck-source, and evidence-freshness pressure from existing runpack signals only, and it must not be used as release performance, capacity, Agent Mail, RCH, scheduler, Beads, git, or claim-readiness authority.
 The validation scheduler plan schema is governed by `docs/contracts/validation-scheduler-plan-contract.json`; checked-in advisory fixture evidence lives at `docs/evidence/validation-scheduler-plan.json`. It ranks exact script and RCH-backed cargo command strings from the runpack's git, predictive telemetry, RCH admission, remote proof, and target-cache signals. It is read-only: it does not execute cargo, reserve workers, mutate Agent Mail or Beads, delete temp artifacts, or permit heavy cargo to fall back to local execution when RCH is unavailable.
 The autopilot input pack schema is governed by `docs/contracts/swarm-autopilot-input-pack-contract.json`. It normalizes source statuses for the dry-run planner, but it is still advisory and never replaces Doctor, Beads, Agent Mail, RCH, git, or the source artifacts themselves.
