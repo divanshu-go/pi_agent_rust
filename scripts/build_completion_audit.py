@@ -24,8 +24,10 @@ from typing import Any
 
 
 AUDIT_SCHEMA = "pi.completion_audit.v1"
+CLOSEOUT_ADMISSION_SCHEMA = "pi.completion_audit.closeout_admission_evidence.v1"
 GOLDEN_REPORT_DIRECTORY = Path("tests/golden_corpus/completion_audit")
 COMPLETE_AUDIT_GOLDEN = "complete_audit_projection.json"
+CLOSEOUT_ADMISSION_GOLDEN = "closeout_admission_projection.json"
 UPDATE_GOLDEN_ENV = "UPDATE_COMPLETION_AUDIT_GOLDEN"
 SNIPPET_MAX_CHARS = 1200
 COMMAND_START_RE = re.compile(
@@ -107,12 +109,17 @@ def read_text(path: Path) -> str:
 
 
 def read_json(path: Path) -> dict[str, Any]:
+    payload = read_json_value(path)
+    if not isinstance(payload, dict):
+        raise AuditError(f"expected object JSON in {path}")
+    return payload
+
+
+def read_json_value(path: Path) -> Any:
     try:
         payload = json.loads(read_text(path))
     except json.JSONDecodeError as exc:
         raise AuditError(f"invalid JSON in {path}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise AuditError(f"expected object JSON in {path}")
     return payload
 
 
@@ -405,6 +412,114 @@ def push_status(push: dict[str, Any]) -> str:
     return status_from_value(push.get("status"))
 
 
+def first_object(payload: Any, *, source: str) -> dict[str, Any]:
+    if isinstance(payload, list):
+        if payload and isinstance(payload[0], dict):
+            return payload[0]
+        raise AuditError(f"{source} must contain at least one object")
+    if isinstance(payload, dict):
+        return payload
+    raise AuditError(f"{source} must be an object or a list containing an object")
+
+
+def normalize_issue(issue: dict[str, Any], fallback_id: str | None = None) -> dict[str, Any]:
+    issue_id = str(issue.get("id") or fallback_id or "")
+    if not issue_id:
+        raise AuditError("bead issue is missing id")
+    dependencies = [
+        str(item.get("id") or item)
+        for item in as_list(issue.get("dependencies"))
+        if isinstance(item, (str, dict))
+    ]
+    dependents = [
+        str(item.get("id") or item)
+        for item in as_list(issue.get("dependents"))
+        if isinstance(item, (str, dict))
+    ]
+    return {
+        "id": issue_id,
+        "title": issue.get("title"),
+        "status": issue.get("status"),
+        "assignee": issue.get("assignee"),
+        "priority": issue.get("priority"),
+        "issue_type": issue.get("issue_type") or issue.get("type"),
+        "close_reason": issue.get("close_reason"),
+        "closed_at": issue.get("closed_at"),
+        "updated_at": issue.get("updated_at"),
+        "dependencies": dependencies,
+        "dependents": dependents,
+    }
+
+
+def normalize_ready_items(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, dict):
+        payload = payload.get("issues", payload.get("items", payload.get("ready", [])))
+    if not isinstance(payload, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for item in payload:
+        if isinstance(item, dict):
+            items.append(
+                {
+                    "id": item.get("id"),
+                    "title": item.get("title"),
+                    "status": item.get("status"),
+                    "priority": item.get("priority"),
+                    "issue_type": item.get("issue_type") or item.get("type"),
+                }
+            )
+    return items
+
+
+def parse_int(value: str) -> int | None:
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def parse_branch_status(branch_line: str) -> dict[str, Any]:
+    branch = ""
+    upstream = None
+    ahead_by = 0
+    behind_by = 0
+    if branch_line.startswith("## "):
+        body = branch_line[3:]
+        if "..." in body:
+            branch, rest = body.split("...", 1)
+            if " [" in rest:
+                upstream, flags = rest.split(" [", 1)
+                flags = flags.rstrip("]")
+                for part in flags.split(", "):
+                    if part.startswith("ahead "):
+                        ahead_by = parse_int(part.removeprefix("ahead ")) or 0
+                    elif part.startswith("behind "):
+                        behind_by = parse_int(part.removeprefix("behind ")) or 0
+            else:
+                upstream = rest or None
+        else:
+            branch = body
+    return {
+        "branch": branch,
+        "upstream": upstream,
+        "ahead_by": ahead_by,
+        "behind_by": behind_by,
+        "is_pushed": bool(upstream) and ahead_by == 0,
+    }
+
+
+def dirty_paths_from_files(files_changed: list[Any]) -> list[str]:
+    paths: list[str] = []
+    for item in files_changed:
+        if isinstance(item, str):
+            paths.append(normalize_path(item))
+        elif isinstance(item, dict):
+            path = item.get("path")
+            if isinstance(path, str) and path:
+                paths.append(normalize_path(path))
+    return sorted(dict.fromkeys(paths))
+
+
 def combine_matches(matches: list[EvidenceMatch]) -> tuple[str, str | None]:
     if not matches:
         return "missing", "no direct evidence matched this requirement"
@@ -499,9 +614,12 @@ def evaluate_requirement(
     ]
     for item in explicit_statuses:
         if item.get("id") == requirement.id or item.get("text") == requirement.text:
+            ref = item.get("ref")
+            if not isinstance(ref, str) or not ref:
+                ref = f"requirement_status:{requirement.id}"
             matches.append(
                 EvidenceMatch(
-                    f"requirement_status:{requirement.id}",
+                    ref,
                     status_from_value(item.get("status")),
                     str(item.get("issue")) if item.get("issue") else None,
                 )
@@ -553,7 +671,7 @@ def summarize_evidence(evidence: dict[str, Any], repo_root: Path) -> dict[str, A
             }
         )
 
-    return {
+    summary = {
         "files_changed": as_list(evidence.get("files_changed")),
         "commands": commands,
         "artifacts": artifacts,
@@ -561,6 +679,11 @@ def summarize_evidence(evidence: dict[str, Any], repo_root: Path) -> dict[str, A
         "pushes": as_list(evidence.get("pushes")),
         "unresolved_gaps": as_list(evidence.get("unresolved_gaps")),
     }
+    if evidence.get("beads") is not None:
+        summary["beads"] = as_list(evidence.get("beads"))
+    if isinstance(evidence.get("closeout_admission"), dict):
+        summary["closeout_admission"] = evidence["closeout_admission"]
+    return summary
 
 
 def capture_git_evidence(repo_root: Path) -> dict[str, Any]:
@@ -581,6 +704,7 @@ def capture_git_evidence(repo_root: Path) -> dict[str, Any]:
             continue
         if len(line) >= 4:
             files_changed.append({"path": line[3:], "status": line[:2].strip()})
+    dirty_files = dirty_paths_from_files(files_changed)
     latest = run(["git", "log", "-1", "--format=%H%x00%s"])
     commits = []
     if latest.returncode == 0 and "\x00" in latest.stdout:
@@ -588,8 +712,19 @@ def capture_git_evidence(repo_root: Path) -> dict[str, Any]:
         commits.append({"hash": commit_hash, "subject": subject, "status": "present"})
     pushes = []
     branch_line = next((line for line in status.stdout.splitlines() if line.startswith("## ")), "")
-    if "origin/" in branch_line and "ahead" not in branch_line and "behind" not in branch_line:
-        pushes.append({"remote": "origin", "branch": "main", "status": "pushed", "source": "git status"})
+    branch_status = parse_branch_status(branch_line)
+    if branch_status["upstream"]:
+        pushes.append(
+            {
+                "remote": str(branch_status["upstream"]).split("/", 1)[0],
+                "branch": branch_status["branch"],
+                "upstream": branch_status["upstream"],
+                "status": "pushed" if branch_status["is_pushed"] else "failed",
+                "source": "git status",
+                "ahead_by": branch_status["ahead_by"],
+                "behind_by": branch_status["behind_by"],
+            }
+        )
     return {
         "files_changed": files_changed,
         "commits": commits,
@@ -598,13 +733,232 @@ def capture_git_evidence(repo_root: Path) -> dict[str, Any]:
             "exit_code": status.returncode,
             "stdout": status.stdout,
             "stderr": status.stderr,
+            **branch_status,
+            "dirty_files": dirty_files,
         },
     }
 
 
+def issue_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    if args.bead_json is not None:
+        return first_object(read_json_value(args.bead_json), source=str(args.bead_json))
+    if args.bead_id:
+        result = subprocess.run(
+            ["br", "show", args.bead_id, "--json"],
+            cwd=args.repo_root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise AuditError(f"failed to read bead {args.bead_id}: {result.stderr.strip()}")
+        return first_object(json.loads(result.stdout), source=f"br show {args.bead_id}")
+    raise AuditError("--closeout-admission requires --bead-id or --bead-json")
+
+
+def load_optional_json(path: Path | None) -> Any | None:
+    if path is None:
+        return None
+    return read_json_value(path)
+
+
+def closeout_requirement_statuses(
+    *,
+    requirements: list[Requirement],
+    source_bead: dict[str, Any],
+    git_status: dict[str, Any],
+    require_clean_worktree: bool,
+) -> list[dict[str, Any]]:
+    statuses: list[dict[str, Any]] = []
+    bead_status = str(source_bead.get("status") or "").lower()
+    close_reason = source_bead.get("close_reason")
+    has_close_reason = isinstance(close_reason, str) and bool(close_reason.strip())
+    dirty_files = dirty_paths_from_files(as_list(git_status.get("dirty_files")))
+
+    for requirement in requirements:
+        lowered = requirement.text.lower()
+        wants_bead_closeout = "bead" in lowered and any(
+            token in lowered for token in ("close", "closed", "closeout")
+        )
+        wants_clean_worktree = "worktree" in lowered and any(
+            token in lowered for token in ("clean", "dirty")
+        )
+        if wants_bead_closeout:
+            passed = bead_status == "closed" and has_close_reason
+            issue = None
+            if bead_status != "closed":
+                issue = f"source bead {source_bead['id']} status is {source_bead.get('status')}"
+            elif not has_close_reason:
+                issue = f"source bead {source_bead['id']} is closed without a close_reason"
+            statuses.append(
+                {
+                    "id": requirement.id,
+                    "text": requirement.text,
+                    "status": "passed" if passed else "failed",
+                    "ref": f"bead:{source_bead['id']}:closeout",
+                    "issue": issue,
+                }
+            )
+        if wants_clean_worktree:
+            statuses.append(
+                {
+                    "id": requirement.id,
+                    "text": requirement.text,
+                    "status": "passed" if not dirty_files else "failed",
+                    "ref": "git:worktree_clean",
+                    "issue": None if not dirty_files else f"dirty files present: {', '.join(dirty_files)}",
+                }
+            )
+    return statuses
+
+
+def closeout_unresolved_gaps(
+    *,
+    source_bead: dict[str, Any],
+    git_status: dict[str, Any],
+    require_clean_worktree: bool,
+) -> list[dict[str, Any]]:
+    gaps: list[dict[str, Any]] = []
+    bead_status = str(source_bead.get("status") or "").lower()
+    close_reason = source_bead.get("close_reason")
+    if bead_status != "closed":
+        gaps.append(
+            {
+                "gap_id": "source_bead_not_closed",
+                "severity": "high",
+                "owner_bead": source_bead["id"],
+                "status": bead_status or "missing",
+                "issue": f"source bead {source_bead['id']} must be closed before closeout admission passes",
+            }
+        )
+    elif not (isinstance(close_reason, str) and close_reason.strip()):
+        gaps.append(
+            {
+                "gap_id": "source_bead_missing_close_reason",
+                "severity": "high",
+                "owner_bead": source_bead["id"],
+                "status": "missing",
+                "issue": f"source bead {source_bead['id']} is closed without direct close_reason evidence",
+            }
+        )
+
+    dirty_files = dirty_paths_from_files(as_list(git_status.get("dirty_files")))
+    if require_clean_worktree and dirty_files:
+        gaps.append(
+            {
+                "gap_id": "worktree_not_clean",
+                "severity": "high",
+                "owner_bead": source_bead["id"],
+                "status": "dirty",
+                "issue": f"dirty files present: {', '.join(dirty_files)}",
+            }
+        )
+    return gaps
+
+
+def build_closeout_admission_evidence(
+    *,
+    objective: str,
+    repo_root: Path,
+    source_issue: dict[str, Any],
+    ready_payload: Any | None = None,
+    git_evidence: dict[str, Any] | None = None,
+    agent_mail_summary: Any | None = None,
+    rch_summary: Any | None = None,
+    require_clean_worktree: bool = False,
+    runs_br_read_commands: bool = False,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    source_bead = normalize_issue(source_issue)
+    git_payload = git_evidence if git_evidence is not None else capture_git_evidence(repo_root)
+    git_status = dict(git_payload.get("git_status") or {})
+    if "dirty_files" in git_status:
+        dirty_files = dirty_paths_from_files(as_list(git_status.get("dirty_files")))
+    else:
+        dirty_files = dirty_paths_from_files(as_list(git_payload.get("files_changed")))
+    git_status["dirty_files"] = dirty_files
+    requirements = extract_requirements(objective)
+    requirement_statuses = closeout_requirement_statuses(
+        requirements=requirements,
+        source_bead=source_bead,
+        git_status=git_status,
+        require_clean_worktree=require_clean_worktree,
+    )
+    unresolved = closeout_unresolved_gaps(
+        source_bead=source_bead,
+        git_status=git_status,
+        require_clean_worktree=require_clean_worktree,
+    )
+    ready_items = normalize_ready_items(ready_payload) if ready_payload is not None else []
+    admission = {
+        "schema": CLOSEOUT_ADMISSION_SCHEMA,
+        "generated_at": generated_at or utc_now_iso(),
+        "source_bead": source_bead,
+        "ready_successors": ready_items,
+        "read_only": True,
+        "source_boundaries": {
+            "runs_git_read_commands": git_evidence is None,
+            "runs_br_read_commands": runs_br_read_commands,
+            "mutates_beads": False,
+            "mutates_agent_mail": False,
+            "mutates_rch": False,
+            "runs_cargo": False,
+            "deletes_files": False,
+        },
+        "git_status": git_status,
+        "agent_mail_summary": agent_mail_summary,
+        "rch_summary": rch_summary,
+        "blocked_requirements": [
+            item for item in requirement_statuses if status_from_value(item.get("status")) == "failed"
+        ],
+        "operator_next_actions": [
+            gap["issue"] for gap in unresolved if isinstance(gap, dict) and gap.get("issue")
+        ],
+    }
+    return merge_evidence(
+        {
+            "closeout_admission": admission,
+            "beads": [source_bead],
+            "requirement_statuses": requirement_statuses,
+            "unresolved_gaps": unresolved,
+        },
+        git_payload,
+    )
+
+
+def build_closeout_admission_evidence_from_args(
+    args: argparse.Namespace,
+    objective: str,
+) -> dict[str, Any]:
+    git_evidence = load_optional_json(args.git_evidence_json)
+    if git_evidence is not None and not isinstance(git_evidence, dict):
+        raise AuditError(f"expected object JSON in {args.git_evidence_json}")
+    return build_closeout_admission_evidence(
+        objective=objective,
+        repo_root=args.repo_root,
+        source_issue=issue_from_args(args),
+        ready_payload=load_optional_json(args.ready_json),
+        git_evidence=git_evidence,
+        agent_mail_summary=load_optional_json(args.agent_mail_summary_json),
+        rch_summary=load_optional_json(args.rch_summary_json),
+        require_clean_worktree=args.require_clean_worktree,
+        runs_br_read_commands=args.bead_json is None,
+    )
+
+
 def merge_evidence(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
-    for key in ("files_changed", "commands", "artifacts", "commits", "pushes", "unresolved_gaps", "requirement_statuses"):
+    for key in (
+        "files_changed",
+        "commands",
+        "artifacts",
+        "commits",
+        "pushes",
+        "unresolved_gaps",
+        "requirement_statuses",
+        "beads",
+    ):
         merged[key] = as_list(base.get(key)) + as_list(extra.get(key))
     for key, value in extra.items():
         if key not in merged:
@@ -704,6 +1058,39 @@ def render_markdown(audit: dict[str, Any]) -> str:
 
 
 def canonical_audit_projection(audit: dict[str, Any]) -> dict[str, Any]:
+    evidence_projection = {
+        "command_statuses": [
+            {
+                "command": command["command"],
+                "status": command["status"],
+                "exit_code": command["exit_code"],
+                "issue": command["issue"],
+            }
+            for command in audit["evidence"]["commands"]
+        ],
+        "artifact_statuses": [
+            {
+                "path": artifact["path"],
+                "status": artifact["status"],
+                "issue": artifact["issue"],
+            }
+            for artifact in audit["evidence"]["artifacts"]
+        ],
+        "unresolved_gaps": audit["evidence"]["unresolved_gaps"],
+    }
+    if "beads" in audit["evidence"]:
+        evidence_projection["beads"] = audit["evidence"]["beads"]
+    if "closeout_admission" in audit["evidence"]:
+        admission = audit["evidence"]["closeout_admission"]
+        evidence_projection["closeout_admission"] = {
+            "schema": admission["schema"],
+            "source_bead": admission["source_bead"],
+            "read_only": admission["read_only"],
+            "source_boundaries": admission["source_boundaries"],
+            "git_status": admission["git_status"],
+            "blocked_requirement_count": len(admission["blocked_requirements"]),
+            "operator_next_actions": admission["operator_next_actions"],
+        }
     return {
         "schema": audit["schema"],
         "generated_at": audit["generated_at"],
@@ -722,26 +1109,7 @@ def canonical_audit_projection(audit: dict[str, Any]) -> dict[str, Any]:
             }
             for req in audit["requirements"]
         ],
-        "evidence": {
-            "command_statuses": [
-                {
-                    "command": command["command"],
-                    "status": command["status"],
-                    "exit_code": command["exit_code"],
-                    "issue": command["issue"],
-                }
-                for command in audit["evidence"]["commands"]
-            ],
-            "artifact_statuses": [
-                {
-                    "path": artifact["path"],
-                    "status": artifact["status"],
-                    "issue": artifact["issue"],
-                }
-                for artifact in audit["evidence"]["artifacts"]
-            ],
-            "unresolved_gaps": audit["evidence"]["unresolved_gaps"],
-        },
+        "evidence": evidence_projection,
     }
 
 
@@ -833,6 +1201,122 @@ def complete_fixture(tmpdir: Path) -> tuple[str, dict[str, Any]]:
     return objective, evidence
 
 
+def closeout_adapter_fixture(tmpdir: Path) -> tuple[str, dict[str, Any], dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+    (tmpdir / "completion-audit.json").write_text("{}\n", encoding="utf-8")
+    (tmpdir / "completion-audit.md").write_text("# Audit\n", encoding="utf-8")
+    objective = """# Objective
+- Close bead `bd-fixture` with direct evidence in the close reason.
+- Update `scripts/build_completion_audit.py`.
+- Run `python3 scripts/build_completion_audit.py --self-test`.
+- Emit JSON plus Markdown audit artifacts.
+- Commit and push the finished work.
+- Leave the worktree clean.
+"""
+    evidence = {
+        "commands": [
+            {
+                "command": "python3 scripts/build_completion_audit.py --self-test",
+                "exit_code": 0,
+                "output": "SELF-TEST PASS\n",
+            }
+        ],
+        "artifacts": [
+            {"path": "completion-audit.json", "status": "present"},
+            {"path": "completion-audit.md", "status": "present"},
+        ],
+    }
+    issue = {
+        "id": "bd-fixture",
+        "title": "Fixture closeout",
+        "status": "closed",
+        "assignee": "FixtureAgent",
+        "priority": 2,
+        "issue_type": "task",
+        "close_reason": "Completed with direct evidence: commit abc1234, pushed ref, self-test, and audit artifacts.",
+        "closed_at": "2026-01-02T03:00:00+00:00",
+        "updated_at": "2026-01-02T03:00:00+00:00",
+        "dependencies": [],
+        "dependents": [{"id": "bd-fixture.2", "status": "open"}],
+    }
+    git_evidence = {
+        "files_changed": [{"path": "scripts/build_completion_audit.py", "status": "M"}],
+        "commits": [
+            {
+                "hash": "abc1234",
+                "subject": "bd-fixture add closeout admission adapter",
+                "status": "present",
+            }
+        ],
+        "pushes": [
+            {
+                "remote": "origin",
+                "branch": "main",
+                "upstream": "origin/main",
+                "status": "pushed",
+                "source": "fixture",
+                "ahead_by": 0,
+                "behind_by": 0,
+            }
+        ],
+        "git_status": {
+            "exit_code": 0,
+            "stdout": "## main...origin/main\n",
+            "stderr": "",
+            "branch": "main",
+            "upstream": "origin/main",
+            "ahead_by": 0,
+            "behind_by": 0,
+            "is_pushed": True,
+            "dirty_files": [],
+        },
+    }
+    ready_items = [
+        {
+            "id": "bd-fixture.2",
+            "title": "Next adapter child",
+            "status": "open",
+            "priority": 2,
+            "issue_type": "feature",
+        }
+    ]
+    return objective, evidence, issue, git_evidence, ready_items
+
+
+def closeout_adapter_audit(
+    *,
+    objective: str,
+    evidence: dict[str, Any],
+    issue: dict[str, Any],
+    git_evidence: dict[str, Any],
+    ready_items: list[dict[str, Any]],
+    repo_root: Path,
+    generated_at: str,
+    require_clean_worktree: bool = True,
+) -> dict[str, Any]:
+    adapter_evidence = build_closeout_admission_evidence(
+        objective=objective,
+        repo_root=repo_root,
+        source_issue=issue,
+        ready_payload=ready_items,
+        git_evidence=git_evidence,
+        agent_mail_summary={
+            "thread_id": "bd-fixture",
+            "start_message_id": 10,
+            "completion_message_id": 11,
+            "reservation_ids": [1, 2],
+        },
+        rch_summary={"required": False, "reason": "python-only fixture"},
+        require_clean_worktree=require_clean_worktree,
+        generated_at=generated_at,
+    )
+    return build_audit(
+        objective=objective,
+        evidence=merge_evidence(evidence, adapter_evidence),
+        repo_root=repo_root,
+        generated_at=generated_at,
+    )
+
+
 def run_self_test() -> int:
     fixed_now = "2026-01-02T03:04:05+00:00"
     with tempfile.TemporaryDirectory(prefix="completion_audit_selftest_") as raw_tmp:
@@ -905,6 +1389,124 @@ def run_self_test() -> int:
         )
         assert_condition(gap_audit["overall_status"] == "blocked", "unresolved gaps should block")
 
+        (
+            closeout_objective,
+            closeout_evidence,
+            closeout_issue,
+            closeout_git,
+            closeout_ready,
+        ) = closeout_adapter_fixture(tmpdir)
+        closeout_audit = closeout_adapter_audit(
+            objective=closeout_objective,
+            evidence=closeout_evidence,
+            issue=closeout_issue,
+            git_evidence=closeout_git,
+            ready_items=closeout_ready,
+            repo_root=tmpdir,
+            generated_at=fixed_now,
+        )
+        assert_condition(
+            closeout_audit["completion_allowed"] is True,
+            "closeout adapter fixture should allow completion",
+        )
+        assert_audit_matches_golden(closeout_audit, CLOSEOUT_ADMISSION_GOLDEN)
+
+        missing_push_git = json.loads(json.dumps(closeout_git))
+        missing_push_git["pushes"][0]["status"] = "failed"
+        missing_push_git["pushes"][0]["ahead_by"] = 1
+        missing_push_git["git_status"]["is_pushed"] = False
+        missing_push = closeout_adapter_audit(
+            objective=closeout_objective,
+            evidence=closeout_evidence,
+            issue=closeout_issue,
+            git_evidence=missing_push_git,
+            ready_items=closeout_ready,
+            repo_root=tmpdir,
+            generated_at=fixed_now,
+        )
+        assert_condition(missing_push["completion_allowed"] is False, "missing pushed ref should block")
+        assert_condition(
+            any(req["kind"] == "commit_push" and req["evidence_status"] == "failed" for req in missing_push["requirements"]),
+            "missing pushed ref should map to commit/push requirement",
+        )
+
+        failed_command_evidence = json.loads(json.dumps(closeout_evidence))
+        failed_command_evidence["commands"][0]["exit_code"] = 1
+        failed_command = closeout_adapter_audit(
+            objective=closeout_objective,
+            evidence=failed_command_evidence,
+            issue=closeout_issue,
+            git_evidence=closeout_git,
+            ready_items=closeout_ready,
+            repo_root=tmpdir,
+            generated_at=fixed_now,
+        )
+        assert_condition(failed_command["completion_allowed"] is False, "failed command should block")
+
+        proxy_command_evidence = json.loads(json.dumps(closeout_evidence))
+        proxy_command_evidence["commands"][0]["proxy_only"] = True
+        proxy_command_evidence["commands"][0].pop("exit_code", None)
+        proxy_command = closeout_adapter_audit(
+            objective=closeout_objective,
+            evidence=proxy_command_evidence,
+            issue=closeout_issue,
+            git_evidence=closeout_git,
+            ready_items=closeout_ready,
+            repo_root=tmpdir,
+            generated_at=fixed_now,
+        )
+        assert_condition(
+            proxy_command["completion_allowed"] is False,
+            "proxy-only command should block closeout admission",
+        )
+
+        missing_artifact_evidence = json.loads(json.dumps(closeout_evidence))
+        missing_artifact_evidence["artifacts"][1]["path"] = "missing-completion-audit.md"
+        missing_artifact = closeout_adapter_audit(
+            objective=closeout_objective,
+            evidence=missing_artifact_evidence,
+            issue=closeout_issue,
+            git_evidence=closeout_git,
+            ready_items=closeout_ready,
+            repo_root=tmpdir,
+            generated_at=fixed_now,
+        )
+        assert_condition(missing_artifact["completion_allowed"] is False, "missing artifact should block")
+
+        stale_close_issue = json.loads(json.dumps(closeout_issue))
+        stale_close_issue["close_reason"] = ""
+        stale_close = closeout_adapter_audit(
+            objective=closeout_objective,
+            evidence=closeout_evidence,
+            issue=stale_close_issue,
+            git_evidence=closeout_git,
+            ready_items=closeout_ready,
+            repo_root=tmpdir,
+            generated_at=fixed_now,
+        )
+        assert_condition(stale_close["completion_allowed"] is False, "stale close reason should block")
+        assert_condition(
+            any(req["issue"] and "close_reason" in req["issue"] for req in stale_close["requirements"]),
+            "stale close reason should be visible on a requirement",
+        )
+
+        dirty_git = json.loads(json.dumps(closeout_git))
+        dirty_git["git_status"]["dirty_files"] = ["scripts/build_completion_audit.py"]
+        dirty_worktree = closeout_adapter_audit(
+            objective=closeout_objective,
+            evidence=closeout_evidence,
+            issue=closeout_issue,
+            git_evidence=dirty_git,
+            ready_items=closeout_ready,
+            repo_root=tmpdir,
+            generated_at=fixed_now,
+        )
+        assert_condition(dirty_worktree["completion_allowed"] is False, "dirty worktree should block when required clean")
+        assert_condition(
+            any(req["issue"] and "dirty files" in req["issue"] for req in dirty_worktree["requirements"]),
+            "dirty worktree should be visible on a requirement",
+        )
+
     print("SELF-TEST PASS: completion audit fixtures are conservative")
     return 0
 
@@ -915,6 +1517,12 @@ def load_objective(args: argparse.Namespace) -> str:
         parts.append(read_text(args.objective_file))
     if args.objective_text:
         parts.append(args.objective_text)
+    if args.bead_json is not None:
+        issue = first_object(read_json_value(args.bead_json), source=str(args.bead_json))
+        title = issue.get("title")
+        description = issue.get("description")
+        if title or description:
+            parts.append(f"# {title or issue.get('id')}\n\n{description or ''}")
     if args.bead_id:
         result = subprocess.run(
             ["br", "show", args.bead_id, "--json"],
@@ -937,12 +1545,17 @@ def load_objective(args: argparse.Namespace) -> str:
     return "\n\n".join(parts)
 
 
-def load_evidence(args: argparse.Namespace) -> dict[str, Any]:
+def load_evidence(args: argparse.Namespace, objective: str) -> dict[str, Any]:
     evidence: dict[str, Any] = {}
     if args.evidence_json is not None:
         evidence = read_json(args.evidence_json)
     if args.capture_git:
         evidence = merge_evidence(evidence, capture_git_evidence(args.repo_root))
+    if args.closeout_admission:
+        evidence = merge_evidence(
+            evidence,
+            build_closeout_admission_evidence_from_args(args, objective),
+        )
     return evidence
 
 
@@ -951,11 +1564,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--objective-file", type=Path, help="Markdown objective or acceptance criteria")
     parser.add_argument("--objective-text", help="Inline objective text")
     parser.add_argument("--bead-id", help="Read bead title and description with br show")
+    parser.add_argument("--bead-json", type=Path, help="Use a br show JSON fixture for objective and closeout admission evidence")
+    parser.add_argument("--ready-json", type=Path, help="Use a br ready JSON fixture for closeout admission successors")
+    parser.add_argument("--git-evidence-json", type=Path, help="Use git evidence JSON instead of running git read commands")
+    parser.add_argument("--agent-mail-summary-json", type=Path, help="Optional Agent Mail fixture summary to embed in closeout admission evidence")
+    parser.add_argument("--rch-summary-json", type=Path, help="Optional RCH fixture summary to embed in closeout admission evidence")
     parser.add_argument("--evidence-json", type=Path, help="JSON evidence bundle")
     parser.add_argument("--out-json", type=Path, help="Write audit JSON")
     parser.add_argument("--out-md", type=Path, help="Write audit Markdown")
     parser.add_argument("--repo-root", type=Path, default=Path("."), help="Repository root")
     parser.add_argument("--capture-git", action="store_true", help="Add current git status/latest commit evidence")
+    parser.add_argument("--closeout-admission", action="store_true", help="Merge read-only Beads/git closeout admission evidence")
+    parser.add_argument("--require-clean-worktree", action="store_true", help="Block closeout admission when git evidence has dirty files")
     parser.add_argument("--self-test", action="store_true", help="Run fixture-backed self-test")
     return parser.parse_args(argv)
 
@@ -966,7 +1586,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_self_test()
     args.repo_root = args.repo_root.resolve()
     objective = load_objective(args)
-    evidence = load_evidence(args)
+    evidence = load_evidence(args, objective)
     audit = build_audit(objective=objective, evidence=evidence, repo_root=args.repo_root)
     if args.out_json is not None:
         args.out_json.parent.mkdir(parents=True, exist_ok=True)
