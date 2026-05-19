@@ -780,6 +780,69 @@ fn global_buffer_string_and_buffer_fill_match_node_vectors() {
 }
 
 #[test]
+fn global_buffer_fill_range_vectors_match_node() {
+    let result = eval_global_buffer(
+        r#"(() => {
+        const cases = [
+            ["fill_default", () => {
+                const b = Buffer.alloc(5);
+                const returned = b.fill("ab");
+                return (returned === b) + ":" + b.toString("hex");
+            }],
+            ["fill_range", () => {
+                const b = Buffer.alloc(5);
+                const returned = b.fill("ab", 1, 4);
+                return (returned === b) + ":" + b.toString("hex");
+            }],
+            ["fill_start_eq_end", () => {
+                const b = Buffer.from([1, 2, 3]);
+                const returned = b.fill(9, 2, 2);
+                return (returned === b) + ":" + b.toString("hex");
+            }],
+            ["fill_start_gt_end", () => {
+                const b = Buffer.from([1, 2, 3]);
+                const returned = b.fill(9, 3, 1);
+                return (returned === b) + ":" + b.toString("hex");
+            }],
+            ["fill_negative_start", () => {
+                const b = Buffer.alloc(2);
+                return b.fill(1, -1);
+            }],
+            ["fill_negative_end", () => {
+                const b = Buffer.alloc(2);
+                return b.fill(1, 0, -1);
+            }],
+            ["fill_start_oob", () => {
+                const b = Buffer.alloc(2);
+                const returned = b.fill(1, 3);
+                return (returned === b) + ":" + b.toString("hex");
+            }],
+            ["fill_end_oob", () => {
+                const b = Buffer.alloc(2);
+                return b.fill(1, 0, 3);
+            }],
+            ["fill_hex", () => {
+                const b = Buffer.alloc(5);
+                b.fill("61", 1, 5, "hex");
+                return b.toString("hex");
+            }],
+        ];
+        return cases.map(([label, run]) => {
+            try {
+                return label + ":" + run();
+            } catch (e) {
+                return label + ":" + e.name;
+            }
+        }).join("|");
+    })()"#,
+    );
+    assert_eq!(
+        result,
+        "fill_default:true:6162616261|fill_range:true:0061626100|fill_start_eq_end:true:010203|fill_start_gt_end:true:010203|fill_negative_start:RangeError|fill_negative_end:RangeError|fill_start_oob:true:0000|fill_end_oob:RangeError|fill_hex:0061616161"
+    );
+}
+
+#[test]
 fn global_buffer_arraybuffer_offset_length_match_node_vectors() {
     let result = eval_global_buffer(
         r#"(() => {

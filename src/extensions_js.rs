@@ -20893,6 +20893,13 @@ if (typeof globalThis.Buffer === 'undefined') {
             }
             return n;
         }
+        static _fillStartBound(value, defaultValue) {
+            const n = value === undefined ? defaultValue : Number(value);
+            if (!Number.isInteger(n) || n < 0) {
+                throw new RangeError('Index out of range');
+            }
+            return n;
+        }
         static from(input, encoding, length) {
             if (typeof input === 'string') {
                 const enc = __pi_buffer_normalize_encoding(encoding);
@@ -21185,11 +21192,11 @@ if (typeof globalThis.Buffer === 'undefined') {
             if (typeof offset === 'string') {
                 enc = offset;
             } else {
-                s = offset || 0;
+                s = Buffer._fillStartBound(offset, 0);
                 if (typeof end === 'string') {
                     enc = end;
                 } else if (end !== undefined) {
-                    e = end;
+                    e = Buffer._writeBound(end, this.length, this.length);
                 }
             }
             let bytes;
