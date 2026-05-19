@@ -32,6 +32,10 @@
     ],
     "closeout_admission": {
       "blocked_requirement_count": 0,
+      "claim_boundaries": {
+        "authorizes_file_deletion": false,
+        "forbidden_authority_sources": []
+      },
       "git_status": {
         "ahead_by": 0,
         "behind_by": 0,

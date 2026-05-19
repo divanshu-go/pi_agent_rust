@@ -28,6 +28,7 @@ CLOSEOUT_ADMISSION_SCHEMA = "pi.completion_audit.closeout_admission_evidence.v1"
 GOLDEN_REPORT_DIRECTORY = Path("tests/golden_corpus/completion_audit")
 COMPLETE_AUDIT_GOLDEN = "complete_audit_projection.json"
 CLOSEOUT_ADMISSION_GOLDEN = "closeout_admission_projection.json"
+NO_MOCK_CLOSEOUT_GOLDEN = "no_mock_closeout_projection.json"
 UPDATE_GOLDEN_ENV = "UPDATE_COMPLETION_AUDIT_GOLDEN"
 SNIPPET_MAX_CHARS = 1200
 COMMAND_START_RE = re.compile(
@@ -520,6 +521,27 @@ def dirty_paths_from_files(files_changed: list[Any]) -> list[str]:
     return sorted(dict.fromkeys(paths))
 
 
+def nested_bool(payload: Any, *keys: str) -> bool:
+    current = payload
+    for key in keys:
+        if not isinstance(current, dict):
+            return False
+        current = current.get(key)
+    return current is True
+
+
+def file_deletion_authorities(*payloads: Any) -> list[str]:
+    authorities: list[str] = []
+    for name, payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("authorizes_file_deletion") is True or nested_bool(
+            payload, "claim_boundaries", "authorizes_file_deletion"
+        ):
+            authorities.append(name)
+    return authorities
+
+
 def combine_matches(matches: list[EvidenceMatch]) -> tuple[str, str | None]:
     if not matches:
         return "missing", "no direct evidence matched this requirement"
@@ -769,6 +791,7 @@ def closeout_requirement_statuses(
     source_bead: dict[str, Any],
     git_status: dict[str, Any],
     require_clean_worktree: bool,
+    forbidden_authorities: list[str],
 ) -> list[dict[str, Any]]:
     statuses: list[dict[str, Any]] = []
     bead_status = str(source_bead.get("status") or "").lower()
@@ -783,6 +806,9 @@ def closeout_requirement_statuses(
         )
         wants_clean_worktree = "worktree" in lowered and any(
             token in lowered for token in ("clean", "dirty")
+        )
+        wants_no_file_deletion = "file" in lowered and any(
+            token in lowered for token in ("delete", "deletion")
         )
         if wants_bead_closeout:
             passed = bead_status == "closed" and has_close_reason
@@ -810,6 +836,18 @@ def closeout_requirement_statuses(
                     "issue": None if not dirty_files else f"dirty files present: {', '.join(dirty_files)}",
                 }
             )
+        if wants_no_file_deletion:
+            statuses.append(
+                {
+                    "id": requirement.id,
+                    "text": requirement.text,
+                    "status": "failed" if forbidden_authorities else "passed",
+                    "ref": "claim_boundary:file_deletion",
+                    "issue": None
+                    if not forbidden_authorities
+                    else f"file deletion authority present in {', '.join(forbidden_authorities)}",
+                }
+            )
     return statuses
 
 
@@ -818,6 +856,7 @@ def closeout_unresolved_gaps(
     source_bead: dict[str, Any],
     git_status: dict[str, Any],
     require_clean_worktree: bool,
+    forbidden_authorities: list[str],
 ) -> list[dict[str, Any]]:
     gaps: list[dict[str, Any]] = []
     bead_status = str(source_bead.get("status") or "").lower()
@@ -854,6 +893,16 @@ def closeout_unresolved_gaps(
                 "issue": f"dirty files present: {', '.join(dirty_files)}",
             }
         )
+    if forbidden_authorities:
+        gaps.append(
+            {
+                "gap_id": "forbidden_file_deletion_authority",
+                "severity": "high",
+                "owner_bead": source_bead["id"],
+                "status": "forbidden_authority",
+                "issue": f"file deletion authority present in {', '.join(forbidden_authorities)}",
+            }
+        )
     return gaps
 
 
@@ -879,16 +928,22 @@ def build_closeout_admission_evidence(
         dirty_files = dirty_paths_from_files(as_list(git_payload.get("files_changed")))
     git_status["dirty_files"] = dirty_files
     requirements = extract_requirements(objective)
+    forbidden_authorities = file_deletion_authorities(
+        ("agent_mail_summary", agent_mail_summary),
+        ("rch_summary", rch_summary),
+    )
     requirement_statuses = closeout_requirement_statuses(
         requirements=requirements,
         source_bead=source_bead,
         git_status=git_status,
         require_clean_worktree=require_clean_worktree,
+        forbidden_authorities=forbidden_authorities,
     )
     unresolved = closeout_unresolved_gaps(
         source_bead=source_bead,
         git_status=git_status,
         require_clean_worktree=require_clean_worktree,
+        forbidden_authorities=forbidden_authorities,
     )
     ready_items = normalize_ready_items(ready_payload) if ready_payload is not None else []
     admission = {
@@ -905,6 +960,10 @@ def build_closeout_admission_evidence(
             "mutates_rch": False,
             "runs_cargo": False,
             "deletes_files": False,
+        },
+        "claim_boundaries": {
+            "authorizes_file_deletion": bool(forbidden_authorities),
+            "forbidden_authority_sources": forbidden_authorities,
         },
         "git_status": git_status,
         "agent_mail_summary": agent_mail_summary,
@@ -1087,6 +1146,7 @@ def canonical_audit_projection(audit: dict[str, Any]) -> dict[str, Any]:
             "source_bead": admission["source_bead"],
             "read_only": admission["read_only"],
             "source_boundaries": admission["source_boundaries"],
+            "claim_boundaries": admission.get("claim_boundaries", {}),
             "git_status": admission["git_status"],
             "blocked_requirement_count": len(admission["blocked_requirements"]),
             "operator_next_actions": admission["operator_next_actions"],
@@ -1123,6 +1183,14 @@ def assert_audit_matches_golden(
     golden_name: str = COMPLETE_AUDIT_GOLDEN,
 ) -> None:
     actual = stable_json(canonical_audit_projection(audit))
+    assert_projection_matches_golden(actual, golden_name, "completion audit projection")
+
+
+def assert_projection_matches_golden(
+    actual: str,
+    golden_name: str,
+    label: str,
+) -> None:
     golden_path, relative_path = repo_golden_path(golden_name)
     if os.environ.get(UPDATE_GOLDEN_ENV) == "1":
         golden_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1141,11 +1209,11 @@ def assert_audit_matches_golden(
                 expected.splitlines(keepends=True),
                 actual.splitlines(keepends=True),
                 fromfile=str(relative_path),
-                tofile="actual completion audit projection",
+                tofile=f"actual {label}",
             )
         )
         raise AssertionError(
-            "completion audit projection changed; update the golden only after review with "
+            f"{label} changed; update the golden only after review with "
             f"`{UPDATE_GOLDEN_ENV}=1 python3 scripts/build_completion_audit.py --self-test`\n"
             f"{diff}"
         )
@@ -1315,6 +1383,363 @@ def closeout_adapter_audit(
         repo_root=repo_root,
         generated_at=generated_at,
     )
+
+
+def run_fixture_process(
+    args: list[str],
+    *,
+    cwd: Path,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        args,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if check and result.returncode != 0:
+        raise AssertionError(
+            f"fixture command failed: {' '.join(args)}\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+    return result
+
+
+def command_evidence_from_result(
+    *,
+    command: str,
+    result: subprocess.CompletedProcess[str],
+    proxy_only: bool = False,
+) -> dict[str, Any]:
+    evidence = {
+        "command": command,
+        "exit_code": result.returncode,
+        "output": f"{result.stdout}{result.stderr}",
+    }
+    if proxy_only:
+        evidence["proxy_only"] = True
+        evidence.pop("exit_code", None)
+    return evidence
+
+
+def no_mock_objective(command: str) -> str:
+    return f"""# Objective
+- Close bead `bd-nomock` with direct evidence in the close reason.
+- Run `{command}`.
+- Emit JSON plus Markdown audit artifacts.
+- Commit and push the finished work.
+- Leave the worktree clean.
+- Do not authorize file deletion.
+"""
+
+
+def parse_br_json(stdout: str, *, source: str) -> dict[str, Any]:
+    try:
+        return first_object(json.loads(stdout), source=source)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(f"invalid JSON from {source}: {exc}\n{stdout}") from exc
+
+
+def create_no_mock_workspace(
+    case_root: Path,
+    *,
+    command_text: str,
+    command_args: list[str],
+    push_final: bool,
+    close_bead: bool,
+    close_reason: str,
+    proxy_only_command: bool = False,
+    missing_markdown_artifact: bool = False,
+    unresolved_followup: bool = False,
+    authorizes_file_deletion: bool = False,
+) -> tuple[Path, str, dict[str, Any]]:
+    remote = case_root / "remote.git"
+    work = case_root / "work"
+    case_root.mkdir(parents=True, exist_ok=True)
+    run_fixture_process(["git", "init", "--bare", str(remote)], cwd=case_root)
+    work.mkdir()
+    run_fixture_process(["git", "init"], cwd=work)
+    run_fixture_process(["git", "checkout", "-b", "main"], cwd=work)
+    run_fixture_process(["git", "config", "user.email", "completion-audit@example.invalid"], cwd=work)
+    run_fixture_process(["git", "config", "user.name", "Completion Audit Fixture"], cwd=work)
+    (work / "README.md").write_text("# Fixture\n", encoding="utf-8")
+    run_fixture_process(["git", "add", "README.md"], cwd=work)
+    run_fixture_process(["git", "commit", "-m", "initial fixture"], cwd=work)
+    run_fixture_process(["git", "remote", "add", "origin", str(remote)], cwd=work)
+    run_fixture_process(["git", "push", "-u", "origin", "main"], cwd=work)
+
+    objective = no_mock_objective(command_text)
+    run_fixture_process(["br", "init", "--prefix", "bd"], cwd=work)
+    created = run_fixture_process(
+        [
+            "br",
+            "create",
+            "--title",
+            "No-mock closeout fixture",
+            "--body",
+            objective,
+            "--type",
+            "task",
+            "--priority",
+            "2",
+            "--json",
+        ],
+        cwd=work,
+    )
+    created_issue = parse_br_json(created.stdout, source="br create")
+    bead_id = str(created_issue["id"])
+
+    (work / "completion-audit.json").write_text("{}\n", encoding="utf-8")
+    (work / "completion-audit.md").write_text("# Audit\n", encoding="utf-8")
+    if close_bead:
+        run_fixture_process(["br", "close", bead_id, "--reason", close_reason], cwd=work)
+    run_fixture_process(["br", "sync", "--flush-only"], cwd=work)
+    run_fixture_process(["git", "add", ".beads", "completion-audit.json", "completion-audit.md"], cwd=work)
+    run_fixture_process(["git", "commit", "-m", "closeout evidence fixture"], cwd=work)
+    if push_final:
+        run_fixture_process(["git", "push"], cwd=work)
+
+    command_result = run_fixture_process(command_args, cwd=work, check=False)
+    issue_result = run_fixture_process(["br", "show", bead_id, "--json"], cwd=work)
+    ready_result = run_fixture_process(["br", "ready", "--json"], cwd=work)
+    issue = first_object(json.loads(issue_result.stdout), source="br show")
+    ready = json.loads(ready_result.stdout)
+    git_evidence = capture_git_evidence(work)
+    artifacts = [{"path": "completion-audit.json", "status": "present"}]
+    artifacts.append(
+        {
+            "path": "missing-completion-audit.md" if missing_markdown_artifact else "completion-audit.md",
+            "status": "present",
+        }
+    )
+    base_evidence: dict[str, Any] = {
+        "commands": [
+            command_evidence_from_result(
+                command=command_text,
+                result=command_result,
+                proxy_only=proxy_only_command,
+            )
+        ],
+        "artifacts": artifacts,
+    }
+    if unresolved_followup:
+        base_evidence["unresolved_gaps"] = [
+            {
+                "gap_id": "followup_not_owned",
+                "severity": "high",
+                "owner_bead": bead_id,
+                "status": "open",
+            }
+        ]
+    audit = closeout_adapter_audit(
+        objective=objective,
+        evidence=base_evidence,
+        issue=issue,
+        git_evidence=git_evidence,
+        ready_items=ready if isinstance(ready, list) else [],
+        repo_root=work,
+        generated_at="2026-01-02T03:04:05+00:00",
+        require_clean_worktree=True,
+    )
+    if authorizes_file_deletion:
+        adapter_evidence = build_closeout_admission_evidence(
+            objective=objective,
+            repo_root=work,
+            source_issue=issue,
+            ready_payload=ready,
+            git_evidence=git_evidence,
+            agent_mail_summary={
+                "thread_id": bead_id,
+                "claim_boundaries": {"authorizes_file_deletion": True},
+            },
+            rch_summary={"required": False},
+            require_clean_worktree=True,
+            generated_at="2026-01-02T03:04:05+00:00",
+        )
+        audit = build_audit(
+            objective=objective,
+            evidence=merge_evidence(base_evidence, adapter_evidence),
+            repo_root=work,
+            generated_at="2026-01-02T03:04:05+00:00",
+        )
+    return work, bead_id, audit
+
+
+def no_mock_case_projection(name: str, bead_id: str, audit: dict[str, Any]) -> dict[str, Any]:
+    def stable_value(value: Any) -> Any:
+        if isinstance(value, str):
+            return value.replace(bead_id, "bd-nomock")
+        if isinstance(value, list):
+            return [stable_value(item) for item in value]
+        return value
+
+    def redact_command(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        return re.sub(
+            r"(?i)\b(token|api[_-]?key|secret|password)=\S+",
+            lambda match: f"{match.group(1)}=<redacted>",
+            value,
+        )
+
+    blocked = [
+        {
+            "id": req["id"],
+            "kind": req["kind"],
+            "status": req["evidence_status"],
+            "issue": stable_value(req["issue"]),
+            "refs": stable_value(req["evidence_refs"]),
+        }
+        for req in audit["requirements"]
+        if req["evidence_status"] != "covered"
+    ]
+    evidence_log = {
+        "commands": [
+            {
+                "command_redacted": redact_command(command.get("command")),
+                "status": command.get("status"),
+                "exit_code": command.get("exit_code"),
+                "duration_ms": 0,
+            }
+            for command in audit["evidence"]["commands"]
+        ],
+        "artifacts": [
+            {
+                "path": artifact.get("path"),
+                "status": artifact.get("status"),
+            }
+            for artifact in audit["evidence"]["artifacts"]
+        ],
+        "timing": {
+            "started_at": "2026-01-02T03:04:05+00:00",
+            "finished_at": "2026-01-02T03:04:05+00:00",
+            "duration_ms": 0,
+        },
+    }
+    return {
+        "name": name,
+        "bead_id": "bd-nomock",
+        "overall_status": audit["overall_status"],
+        "completion_allowed": audit["completion_allowed"],
+        "blocked_requirements": blocked,
+        "evidence_log": evidence_log,
+        "unresolved_gap_count": audit["summary"]["unresolved_gap_count"],
+    }
+
+
+def assert_no_mock_projection_golden(cases: list[dict[str, Any]]) -> None:
+    projection = {
+        "schema": "pi.completion_audit.no_mock_closeout_projection.v1",
+        "generated_at": "2026-01-02T03:04:05+00:00",
+        "cases": cases,
+    }
+    assert_projection_matches_golden(
+        stable_json(projection),
+        NO_MOCK_CLOSEOUT_GOLDEN,
+        "no-mock completion audit projection",
+    )
+
+
+def run_no_mock_self_test(tmpdir: Path) -> None:
+    cases: list[dict[str, Any]] = []
+
+    pass_work, pass_bead, pass_audit = create_no_mock_workspace(
+        tmpdir / "pass",
+        command_text="python3 --version",
+        command_args=["python3", "--version"],
+        push_final=True,
+        close_bead=True,
+        close_reason="Completed with direct evidence: pushed closeout commit, command transcript, and audit artifacts.",
+    )
+    assert_condition(pass_work.exists(), "no-mock pass workspace should exist during test")
+    assert_condition(pass_audit["completion_allowed"] is True, "no-mock pass case should allow completion")
+    cases.append(no_mock_case_projection("pass", pass_bead, pass_audit))
+
+    _, missing_push_bead, missing_push = create_no_mock_workspace(
+        tmpdir / "missing_push",
+        command_text="python3 --version",
+        command_args=["python3", "--version"],
+        push_final=False,
+        close_bead=True,
+        close_reason="Completed with direct evidence except pushed ref is intentionally absent.",
+    )
+    assert_condition(missing_push["completion_allowed"] is False, "no-mock missing push should block")
+    cases.append(no_mock_case_projection("missing_push", missing_push_bead, missing_push))
+
+    _, failed_command_bead, failed_command = create_no_mock_workspace(
+        tmpdir / "failed_command",
+        command_text="python3 -c 'import sys; sys.exit(7)'",
+        command_args=["python3", "-c", "import sys; sys.exit(7)"],
+        push_final=True,
+        close_bead=True,
+        close_reason="Completed with command failure intentionally present.",
+    )
+    assert_condition(failed_command["completion_allowed"] is False, "no-mock failed command should block")
+    cases.append(no_mock_case_projection("failed_command", failed_command_bead, failed_command))
+
+    _, proxy_command_bead, proxy_command = create_no_mock_workspace(
+        tmpdir / "proxy_command",
+        command_text="python3 --version",
+        command_args=["python3", "--version"],
+        push_final=True,
+        close_bead=True,
+        close_reason="Completed with proxy-only command evidence intentionally present.",
+        proxy_only_command=True,
+    )
+    assert_condition(proxy_command["completion_allowed"] is False, "no-mock proxy command should block")
+    cases.append(no_mock_case_projection("proxy_command", proxy_command_bead, proxy_command))
+
+    _, missing_artifact_bead, missing_artifact = create_no_mock_workspace(
+        tmpdir / "missing_artifact",
+        command_text="python3 --version",
+        command_args=["python3", "--version"],
+        push_final=True,
+        close_bead=True,
+        close_reason="Completed with missing artifact evidence intentionally present.",
+        missing_markdown_artifact=True,
+    )
+    assert_condition(missing_artifact["completion_allowed"] is False, "no-mock missing artifact should block")
+    cases.append(no_mock_case_projection("missing_artifact", missing_artifact_bead, missing_artifact))
+
+    _, stale_bead, stale_status = create_no_mock_workspace(
+        tmpdir / "stale_beads_status",
+        command_text="python3 --version",
+        command_args=["python3", "--version"],
+        push_final=True,
+        close_bead=False,
+        close_reason="not used",
+    )
+    assert_condition(stale_status["completion_allowed"] is False, "no-mock stale Beads status should block")
+    cases.append(no_mock_case_projection("stale_beads_status", stale_bead, stale_status))
+
+    _, unresolved_bead, unresolved = create_no_mock_workspace(
+        tmpdir / "unresolved_followup",
+        command_text="python3 --version",
+        command_args=["python3", "--version"],
+        push_final=True,
+        close_bead=True,
+        close_reason="Completed with unresolved follow-up intentionally present.",
+        unresolved_followup=True,
+    )
+    assert_condition(unresolved["completion_allowed"] is False, "no-mock unresolved follow-up should block")
+    cases.append(no_mock_case_projection("unresolved_followup", unresolved_bead, unresolved))
+
+    _, deletion_bead, deletion = create_no_mock_workspace(
+        tmpdir / "forbidden_file_deletion",
+        command_text="python3 --version",
+        command_args=["python3", "--version"],
+        push_final=True,
+        close_bead=True,
+        close_reason="Completed with forbidden file-deletion authority intentionally present.",
+        authorizes_file_deletion=True,
+    )
+    assert_condition(deletion["completion_allowed"] is False, "no-mock file deletion authority should block")
+    cases.append(no_mock_case_projection("forbidden_file_deletion", deletion_bead, deletion))
+
+    assert_no_mock_projection_golden(cases)
 
 
 def run_self_test() -> int:
@@ -1506,6 +1931,8 @@ def run_self_test() -> int:
             any(req["issue"] and "dirty files" in req["issue"] for req in dirty_worktree["requirements"]),
             "dirty worktree should be visible on a requirement",
         )
+
+        run_no_mock_self_test(tmpdir)
 
     print("SELF-TEST PASS: completion audit fixtures are conservative")
     return 0

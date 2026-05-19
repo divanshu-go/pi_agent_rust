@@ -1,0 +1,334 @@
+{
+  "cases": [
+    {
+      "bead_id": "bd-nomock",
+      "blocked_requirements": [],
+      "completion_allowed": true,
+      "evidence_log": {
+        "artifacts": [
+          {
+            "path": "completion-audit.json",
+            "status": "passed"
+          },
+          {
+            "path": "completion-audit.md",
+            "status": "passed"
+          }
+        ],
+        "commands": [
+          {
+            "command_redacted": "python3 --version",
+            "duration_ms": 0,
+            "exit_code": 0,
+            "status": "passed"
+          }
+        ],
+        "timing": {
+          "duration_ms": 0,
+          "finished_at": "2026-01-02T03:04:05+00:00",
+          "started_at": "2026-01-02T03:04:05+00:00"
+        }
+      },
+      "name": "pass",
+      "overall_status": "complete",
+      "unresolved_gap_count": 0
+    },
+    {
+      "bead_id": "bd-nomock",
+      "blocked_requirements": [
+        {
+          "id": "REQ-004",
+          "issue": "missing push evidence",
+          "kind": "commit_push",
+          "refs": [
+            "commit[0]",
+            "push[0]",
+            "commit_push:required_pair"
+          ],
+          "status": "failed"
+        }
+      ],
+      "completion_allowed": false,
+      "evidence_log": {
+        "artifacts": [
+          {
+            "path": "completion-audit.json",
+            "status": "passed"
+          },
+          {
+            "path": "completion-audit.md",
+            "status": "passed"
+          }
+        ],
+        "commands": [
+          {
+            "command_redacted": "python3 --version",
+            "duration_ms": 0,
+            "exit_code": 0,
+            "status": "passed"
+          }
+        ],
+        "timing": {
+          "duration_ms": 0,
+          "finished_at": "2026-01-02T03:04:05+00:00",
+          "started_at": "2026-01-02T03:04:05+00:00"
+        }
+      },
+      "name": "missing_push",
+      "overall_status": "blocked",
+      "unresolved_gap_count": 0
+    },
+    {
+      "bead_id": "bd-nomock",
+      "blocked_requirements": [
+        {
+          "id": "REQ-002",
+          "issue": "exit_code=7",
+          "kind": "command",
+          "refs": [
+            "command[0]:python3 -c 'import sys; sys.exit(7)'"
+          ],
+          "status": "failed"
+        }
+      ],
+      "completion_allowed": false,
+      "evidence_log": {
+        "artifacts": [
+          {
+            "path": "completion-audit.json",
+            "status": "passed"
+          },
+          {
+            "path": "completion-audit.md",
+            "status": "passed"
+          }
+        ],
+        "commands": [
+          {
+            "command_redacted": "python3 -c 'import sys; sys.exit(7)'",
+            "duration_ms": 0,
+            "exit_code": 7,
+            "status": "failed"
+          }
+        ],
+        "timing": {
+          "duration_ms": 0,
+          "finished_at": "2026-01-02T03:04:05+00:00",
+          "started_at": "2026-01-02T03:04:05+00:00"
+        }
+      },
+      "name": "failed_command",
+      "overall_status": "blocked",
+      "unresolved_gap_count": 0
+    },
+    {
+      "bead_id": "bd-nomock",
+      "blocked_requirements": [
+        {
+          "id": "REQ-002",
+          "issue": "only proxy evidence matched this requirement",
+          "kind": "command",
+          "refs": [
+            "command[0]:python3 --version"
+          ],
+          "status": "proxy_only"
+        }
+      ],
+      "completion_allowed": false,
+      "evidence_log": {
+        "artifacts": [
+          {
+            "path": "completion-audit.json",
+            "status": "passed"
+          },
+          {
+            "path": "completion-audit.md",
+            "status": "passed"
+          }
+        ],
+        "commands": [
+          {
+            "command_redacted": "python3 --version",
+            "duration_ms": 0,
+            "exit_code": null,
+            "status": "proxy_only"
+          }
+        ],
+        "timing": {
+          "duration_ms": 0,
+          "finished_at": "2026-01-02T03:04:05+00:00",
+          "started_at": "2026-01-02T03:04:05+00:00"
+        }
+      },
+      "name": "proxy_command",
+      "overall_status": "incomplete",
+      "unresolved_gap_count": 0
+    },
+    {
+      "bead_id": "bd-nomock",
+      "blocked_requirements": [
+        {
+          "id": "REQ-003",
+          "issue": "artifact status passed but path is missing: missing-completion-audit.md",
+          "kind": "artifact_bundle",
+          "refs": [
+            "artifact[0]:completion-audit.json",
+            "artifact[1]:missing-completion-audit.md",
+            "artifact_bundle:json+markdown"
+          ],
+          "status": "contradiction"
+        }
+      ],
+      "completion_allowed": false,
+      "evidence_log": {
+        "artifacts": [
+          {
+            "path": "completion-audit.json",
+            "status": "passed"
+          },
+          {
+            "path": "missing-completion-audit.md",
+            "status": "contradiction"
+          }
+        ],
+        "commands": [
+          {
+            "command_redacted": "python3 --version",
+            "duration_ms": 0,
+            "exit_code": 0,
+            "status": "passed"
+          }
+        ],
+        "timing": {
+          "duration_ms": 0,
+          "finished_at": "2026-01-02T03:04:05+00:00",
+          "started_at": "2026-01-02T03:04:05+00:00"
+        }
+      },
+      "name": "missing_artifact",
+      "overall_status": "blocked",
+      "unresolved_gap_count": 0
+    },
+    {
+      "bead_id": "bd-nomock",
+      "blocked_requirements": [
+        {
+          "id": "REQ-001",
+          "issue": "source bead bd-nomock status is open",
+          "kind": "deliverable",
+          "refs": [
+            "bead:bd-nomock:closeout"
+          ],
+          "status": "failed"
+        }
+      ],
+      "completion_allowed": false,
+      "evidence_log": {
+        "artifacts": [
+          {
+            "path": "completion-audit.json",
+            "status": "passed"
+          },
+          {
+            "path": "completion-audit.md",
+            "status": "passed"
+          }
+        ],
+        "commands": [
+          {
+            "command_redacted": "python3 --version",
+            "duration_ms": 0,
+            "exit_code": 0,
+            "status": "passed"
+          }
+        ],
+        "timing": {
+          "duration_ms": 0,
+          "finished_at": "2026-01-02T03:04:05+00:00",
+          "started_at": "2026-01-02T03:04:05+00:00"
+        }
+      },
+      "name": "stale_beads_status",
+      "overall_status": "blocked",
+      "unresolved_gap_count": 1
+    },
+    {
+      "bead_id": "bd-nomock",
+      "blocked_requirements": [],
+      "completion_allowed": false,
+      "evidence_log": {
+        "artifacts": [
+          {
+            "path": "completion-audit.json",
+            "status": "passed"
+          },
+          {
+            "path": "completion-audit.md",
+            "status": "passed"
+          }
+        ],
+        "commands": [
+          {
+            "command_redacted": "python3 --version",
+            "duration_ms": 0,
+            "exit_code": 0,
+            "status": "passed"
+          }
+        ],
+        "timing": {
+          "duration_ms": 0,
+          "finished_at": "2026-01-02T03:04:05+00:00",
+          "started_at": "2026-01-02T03:04:05+00:00"
+        }
+      },
+      "name": "unresolved_followup",
+      "overall_status": "blocked",
+      "unresolved_gap_count": 1
+    },
+    {
+      "bead_id": "bd-nomock",
+      "blocked_requirements": [
+        {
+          "id": "REQ-006",
+          "issue": "file deletion authority present in agent_mail_summary",
+          "kind": "deliverable",
+          "refs": [
+            "claim_boundary:file_deletion"
+          ],
+          "status": "failed"
+        }
+      ],
+      "completion_allowed": false,
+      "evidence_log": {
+        "artifacts": [
+          {
+            "path": "completion-audit.json",
+            "status": "passed"
+          },
+          {
+            "path": "completion-audit.md",
+            "status": "passed"
+          }
+        ],
+        "commands": [
+          {
+            "command_redacted": "python3 --version",
+            "duration_ms": 0,
+            "exit_code": 0,
+            "status": "passed"
+          }
+        ],
+        "timing": {
+          "duration_ms": 0,
+          "finished_at": "2026-01-02T03:04:05+00:00",
+          "started_at": "2026-01-02T03:04:05+00:00"
+        }
+      },
+      "name": "forbidden_file_deletion",
+      "overall_status": "blocked",
+      "unresolved_gap_count": 1
+    }
+  ],
+  "generated_at": "2026-01-02T03:04:05+00:00",
+  "schema": "pi.completion_audit.no_mock_closeout_projection.v1"
+}
