@@ -1874,6 +1874,44 @@ fn global_buffer_lowercase_uint_aliases_match_node_vectors() {
 }
 
 #[test]
+fn global_buffer_variable_width_unsigned_integer_vectors_match_node() {
+    let result = eval_global_buffer(
+        r#"(() => {
+        const cases = [
+            ["types", () => ["readUIntBE", "readUIntLE", "writeUIntBE", "writeUIntLE"].map((name) => name + ":" + typeof Buffer.prototype[name]).join(",")],
+            ["read_be_1", () => Buffer.from([0x12]).readUIntBE(0, 1)],
+            ["read_be_2", () => Buffer.from([0x12, 0x34]).readUIntBE(0, 2)],
+            ["read_be_6", () => Buffer.from([1, 2, 3, 4, 5, 6]).readUIntBE(0, 6)],
+            ["read_le_6", () => Buffer.from([1, 2, 3, 4, 5, 6]).readUIntLE(0, 6)],
+            ["write_be_6", () => { const b = Buffer.alloc(6); return b.writeUIntBE(0x010203040506, 0, 6) + ":" + b.toString("hex"); }],
+            ["write_le_6", () => { const b = Buffer.alloc(6); return b.writeUIntLE(0x010203040506, 0, 6) + ":" + b.toString("hex"); }],
+            ["read_len_zero", () => Buffer.from([1]).readUIntBE(0, 0)],
+            ["read_len_seven", () => Buffer.from([1, 2, 3, 4, 5, 6, 7]).readUIntBE(0, 7)],
+            ["read_len_fraction", () => Buffer.from([1, 2]).readUIntBE(0, 1.9)],
+            ["read_len_string", () => Buffer.from([1, 2]).readUIntBE(0, "2")],
+            ["read_len_null", () => Buffer.from([1, 2]).readUIntBE(0, null)],
+            ["read_offset_null", () => Buffer.from([1, 2]).readUIntBE(null, 1)],
+            ["write_oob_value", () => { const b = Buffer.alloc(2); return b.writeUIntBE(0x10000, 0, 2) + ":" + b.toString("hex"); }],
+            ["write_fraction_value", () => { const b = Buffer.alloc(2); return b.writeUIntBE(1.9, 0, 2) + ":" + b.toString("hex"); }],
+            ["write_nan_value", () => { const b = Buffer.alloc(2); return b.writeUIntBE(NaN, 0, 2) + ":" + b.toString("hex"); }],
+            ["write_string_value", () => { const b = Buffer.alloc(2); return b.writeUIntBE("1", 0, 2) + ":" + b.toString("hex"); }],
+        ];
+        return cases.map(([label, run]) => {
+            try {
+                return label + ":" + run();
+            } catch (e) {
+                return label + ":" + e.name;
+            }
+        }).join("|");
+    })()"#,
+    );
+    assert_eq!(
+        result,
+        "types:readUIntBE:function,readUIntLE:function,writeUIntBE:function,writeUIntLE:function|read_be_1:18|read_be_2:4660|read_be_6:1108152157446|read_le_6:6618611909121|write_be_6:6:010203040506|write_le_6:6:060504030201|read_len_zero:RangeError|read_len_seven:RangeError|read_len_fraction:RangeError|read_len_string:TypeError|read_len_null:TypeError|read_offset_null:TypeError|write_oob_value:RangeError|write_fraction_value:2:0001|write_nan_value:2:0000|write_string_value:2:0001"
+    );
+}
+
+#[test]
 fn global_buffer_integer_offset_argument_validation_matches_node_vectors() {
     let result = eval_global_buffer(
         r#"(() => {
