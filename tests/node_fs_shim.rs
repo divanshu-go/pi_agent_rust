@@ -114,6 +114,45 @@ fn write_read_roundtrip_buffer() {
     assert_eq!(result, "true");
 }
 
+#[test]
+fn write_read_single_byte_encodings_match_node_vectors() {
+    let result = eval_fs(
+        r#"(() => {
+        fs.writeFileSync("tmp/latin1.txt", "éÿ", { encoding: "latin1" });
+        const latin1Bytes = Array.from(fs.readFileSync("tmp/latin1.txt")).join(",");
+        const latin1Read = fs.readFileSync("tmp/latin1.txt", "latin1")
+            .split("").map((ch) => ch.charCodeAt(0)).join(",");
+
+        fs.writeFileSync("tmp/binary.txt", "éÿ", "binary");
+        const binaryBytes = Array.from(fs.readFileSync("tmp/binary.txt")).join(",");
+        const binaryRead = fs.readFileSync("tmp/binary.txt", "binary")
+            .split("").map((ch) => ch.charCodeAt(0)).join(",");
+
+        fs.writeFileSync("tmp/ascii-write.txt", "éÿ", "ascii");
+        const asciiWriteBytes = Array.from(fs.readFileSync("tmp/ascii-write.txt")).join(",");
+
+        fs.writeFileSync("tmp/ascii-read.txt", Buffer.from([0xe9, 0xff, 0x41]));
+        const asciiRead = fs.readFileSync("tmp/ascii-read.txt", "ascii")
+            .split("").map((ch) => ch.charCodeAt(0)).join(",");
+
+        return [latin1Bytes, latin1Read, binaryBytes, binaryRead, asciiWriteBytes, asciiRead].join("|");
+    })()"#,
+    );
+    assert_eq!(result, "233,255|233,255|233,255|233,255|233,255|105,127,65");
+}
+
+#[test]
+fn append_file_sync_honors_single_byte_encoding_options() {
+    let result = eval_fs(
+        r#"(() => {
+        fs.writeFileSync("tmp/append-single-byte.txt", "é", { encoding: "latin1" });
+        fs.appendFileSync("tmp/append-single-byte.txt", "ÿ", { encoding: "binary" });
+        return Array.from(fs.readFileSync("tmp/append-single-byte.txt")).join(",");
+    })()"#,
+    );
+    assert_eq!(result, "233,255");
+}
+
 // ─── existsSync ─────────────────────────────────────────────────────────────
 
 #[test]

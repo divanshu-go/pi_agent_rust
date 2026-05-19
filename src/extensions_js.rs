@@ -10863,11 +10863,21 @@ const __pi_vfs = (() => {
         : opts && typeof opts === "object" && typeof opts.encoding === "string"
           ? opts.encoding
           : undefined;
-    const normalizedEncoding = encoding ? String(encoding).toLowerCase() : "utf8";
+    const normalizedEncoding = normalizeFsEncoding(encoding, "utf8");
 
     if (typeof data === "string") {
       if (normalizedEncoding === "base64") {
         return Buffer.from(data, "base64");
+      }
+      if (normalizedEncoding === "hex") {
+        return Buffer.from(data, "hex");
+      }
+      if (
+        normalizedEncoding === "latin1" ||
+        normalizedEncoding === "binary" ||
+        normalizedEncoding === "ascii"
+      ) {
+        return oneByteStringToBytes(data);
       }
       return new TextEncoder().encode(data);
     }
@@ -10886,6 +10896,38 @@ const __pi_vfs = (() => {
     return new TextEncoder().encode(String(data ?? ""));
   }
 
+  function normalizeFsEncoding(encoding, defaultEncoding) {
+    if (encoding === undefined || encoding === null || encoding === "") {
+      return defaultEncoding;
+    }
+    const normalized = String(encoding).toLowerCase();
+    return normalized === "utf-8" ? "utf8" : normalized;
+  }
+
+  function oneByteStringToBytes(input) {
+    const bytes = new Uint8Array(input.length);
+    for (let i = 0; i < input.length; i++) {
+      bytes[i] = input.charCodeAt(i) & 0xff;
+    }
+    return bytes;
+  }
+
+  function oneByteBytesToString(bytes, stripHighBit) {
+    let output = "";
+    let chunk = [];
+    for (let i = 0; i < bytes.length; i++) {
+      chunk.push(stripHighBit ? (bytes[i] & 0x7f) : bytes[i]);
+      if (chunk.length >= 4096) {
+        output += String.fromCharCode.apply(null, chunk);
+        chunk.length = 0;
+      }
+    }
+    if (chunk.length > 0) {
+      output += String.fromCharCode.apply(null, chunk);
+    }
+    return output;
+  }
+
   function decodeBytes(bytes, opts) {
     const encoding =
       typeof opts === "string"
@@ -10893,10 +10935,10 @@ const __pi_vfs = (() => {
         : opts && typeof opts === "object" && typeof opts.encoding === "string"
           ? opts.encoding
           : undefined;
-    if (!encoding || String(encoding).toLowerCase() === "buffer") {
+    const normalized = normalizeFsEncoding(encoding, "buffer");
+    if (normalized === "buffer") {
       return Buffer.from(bytes);
     }
-    const normalized = String(encoding).toLowerCase();
     if (normalized === "base64") {
       let binChunks = [];
       let chunk = [];
@@ -10911,6 +10953,19 @@ const __pi_vfs = (() => {
         binChunks.push(String.fromCharCode.apply(null, chunk));
       }
       return btoa(binChunks.join(''));
+    }
+    if (normalized === "hex") {
+      const hex = new Array(bytes.length);
+      for (let i = 0; i < bytes.length; i++) {
+        hex[i] = (bytes[i] < 16 ? "0" : "") + bytes[i].toString(16);
+      }
+      return hex.join("");
+    }
+    if (normalized === "latin1" || normalized === "binary") {
+      return oneByteBytesToString(bytes, false);
+    }
+    if (normalized === "ascii") {
+      return oneByteBytesToString(bytes, true);
     }
     return new TextDecoder().decode(bytes);
   }
