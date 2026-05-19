@@ -15,10 +15,15 @@ Checks performed:
 
 Environment variables:
   CI_REGRESSION_MODE    "strict" (default) or "warn" (log but don't fail)
+
+Usage:
+  python3 scripts/check_conformance_regression.py
+  python3 scripts/check_conformance_regression.py --self-test
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -95,15 +100,31 @@ def extract_baseline_per_extension(baseline: dict[str, Any]) -> dict[str, str]:
     return statuses
 
 
-def main() -> int:
-    mode = os.environ.get("CI_REGRESSION_MODE", "strict").strip().lower()
-    if mode not in {"strict", "warn"}:
-        print(f"ERROR: invalid CI_REGRESSION_MODE={mode!r}; expected 'strict' or 'warn'", file=sys.stderr)
-        return 1
+def load_trend_entries(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+    trend_entries: list[dict[str, Any]] = []
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(entry, dict):
+                trend_entries.append(entry)
+    return trend_entries
 
-    baseline = load_json(BASELINE_PATH, "conformance_baseline")
-    summary = load_json(SUMMARY_PATH, "conformance_summary")
 
+def build_regression_verdict(
+    baseline: dict[str, Any],
+    summary: dict[str, Any],
+    current_events: dict[str, str],
+    trend_entries: list[dict[str, Any]],
+    mode: str,
+) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     failures: list[str] = []
     warnings: list[str] = []
@@ -164,7 +185,6 @@ def main() -> int:
         "2": thresholds.get("tier2_pass_rate_min_pct", 95.0),
     }
 
-    baseline_by_tier = baseline_ext.get("by_tier", {})
     current_by_tier = summary.get("per_tier", {})
 
     # Map current per_tier keys to tier numbers for comparison.
@@ -231,7 +251,6 @@ def main() -> int:
 
     # ── 4. Individual extension regressions ──────────────────────────────────
 
-    current_events = load_events(EVENTS_PATH)
     baseline_per_ext = extract_baseline_per_extension(baseline)
 
     # Build baseline extension set: everything in exception_policy + failure_classification = FAIL,
@@ -289,34 +308,22 @@ def main() -> int:
     # If conformance_trend.jsonl exists with 3+ entries, warn if pass_rate
     # has dropped for 3 or more consecutive runs (sustained degradation).
 
-    if TREND_PATH.is_file():
-        trend_entries: list[dict[str, Any]] = []
-        with TREND_PATH.open(encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    trend_entries.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
+    if len(trend_entries) >= 3:
+        consecutive_drops = 0
+        for i in range(len(trend_entries) - 1, 0, -1):
+            curr = trend_entries[i].get("pass_rate_pct", 0.0)
+            prev = trend_entries[i - 1].get("pass_rate_pct", 0.0)
+            if curr < prev:
+                consecutive_drops += 1
+            else:
+                break
 
-        if len(trend_entries) >= 3:
-            consecutive_drops = 0
-            for i in range(len(trend_entries) - 1, 0, -1):
-                curr = trend_entries[i].get("pass_rate_pct", 0.0)
-                prev = trend_entries[i - 1].get("pass_rate_pct", 0.0)
-                if curr < prev:
-                    consecutive_drops += 1
-                else:
-                    break
-
-            if consecutive_drops >= 3:
-                warnings.append(
-                    f"Sustained degradation: pass_rate dropped for "
-                    f"{consecutive_drops} consecutive runs. "
-                    f"Review conformance_trend.jsonl for details."
-                )
+        if consecutive_drops >= 3:
+            warnings.append(
+                f"Sustained degradation: pass_rate dropped for "
+                f"{consecutive_drops} consecutive runs. "
+                f"Review conformance_trend.jsonl for details."
+            )
 
     # ── Build verdict ────────────────────────────────────────────────────────
 
@@ -338,36 +345,199 @@ def main() -> int:
         "new_failures": new_failures,
         "new_na_introductions": new_na_introductions,
     }
+    return verdict
 
-    VERDICT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    VERDICT_PATH.write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
 
-    # ── Output ───────────────────────────────────────────────────────────────
+def print_verdict_report(verdict: dict[str, Any], verdict_path: Path | None = None) -> None:
+    if verdict_path is not None:
+        print(f"Regression verdict written: {verdict_path}")
+        print()
 
-    print(f"Regression verdict written: {VERDICT_PATH}")
-    print()
-
-    all_ok = not failures
-    for check in checks:
+    for check in verdict["checks"]:
         marker = "PASS" if check["ok"] else "FAIL"
         detail = f" ({check['detail']})" if check.get("detail") else ""
         print(f"  [{marker}] {check['id']}: {check['actual']} {check['threshold']}{detail}")
 
+    warnings = verdict["warnings"]
     if warnings:
         print(f"\nWarnings ({len(warnings)}):")
-        for w in warnings:
-            print(f"  - {w}")
+        for warning in warnings:
+            print(f"  - {warning}")
 
+    failures = verdict["failures"]
+    mode = verdict["mode"]
     if failures:
         print(f"\nREGRESSION GATE {'WARNING' if mode == 'warn' else 'FAILED'}: {len(failures)} check(s) failed")
-        for f in failures:
-            print(f"  - {f}")
-        if mode == "strict":
-            return 1
-        return 0
+        for failure in failures:
+            print(f"  - {failure}")
+        return
 
     print("\nREGRESSION GATE PASSED: no conformance regressions detected")
+
+
+def verdict_exit_code(verdict: dict[str, Any]) -> int:
+    return 1 if verdict["status"] == "fail" else 0
+
+
+def self_test_baseline() -> dict[str, Any]:
+    return {
+        "extension_conformance": {
+            "pass_rate_pct": 100.0,
+            "by_source": {
+                "official-pi-mono": {
+                    "pass": 10,
+                    "fail": 0,
+                    "total": 10,
+                },
+            },
+        },
+        "regression_thresholds": {
+            "overall_pass_rate_min_pct": 90.0,
+            "tier1_pass_rate_min_pct": 100.0,
+            "tier2_pass_rate_min_pct": 95.0,
+            "max_new_failures": 0,
+            "scenario_pass_rate_min_pct": 85.0,
+        },
+        "exception_policy": {
+            "entries": [],
+        },
+        "failure_classification": {},
+        "scenario_conformance": {
+            "pass_rate_pct": 90.0,
+        },
+    }
+
+
+def self_test_summary(
+    *,
+    pass_rate: float = 100.0,
+    official_pass: int = 10,
+    official_fail: int = 0,
+    official_na: int = 1,
+    total: int = 11,
+) -> dict[str, Any]:
+    return {
+        "pass_rate_pct": pass_rate,
+        "per_tier": {
+            "official-pi-mono": {
+                "pass": official_pass,
+                "fail": official_fail,
+                "na": official_na,
+                "total": total,
+            },
+        },
+    }
+
+
+def assert_self_test(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def run_self_test() -> int:
+    baseline = self_test_baseline()
+    pass_verdict = build_regression_verdict(
+        baseline,
+        self_test_summary(),
+        {},
+        [],
+        "strict",
+    )
+    assert_self_test(pass_verdict["status"] == "pass", "strict pass verdict should pass")
+    assert_self_test(pass_verdict["failures"] == [], "strict pass verdict should have no failures")
+    assert_self_test(verdict_exit_code(pass_verdict) == 0, "strict pass verdict should exit 0")
+
+    strict_failure = build_regression_verdict(
+        baseline,
+        self_test_summary(pass_rate=80.0, official_pass=8, official_fail=2, official_na=1, total=11),
+        {"new-extension": "FAIL"},
+        [],
+        "strict",
+    )
+    assert_self_test(strict_failure["status"] == "fail", "strict failure verdict should fail")
+    assert_self_test(verdict_exit_code(strict_failure) == 1, "strict failure verdict should exit 1")
+    assert_self_test(
+        "pass_rate_no_regression" in strict_failure["failures"],
+        "strict failure should include pass-rate regression",
+    )
+    assert_self_test(
+        "no_new_failures" in strict_failure["failures"],
+        "strict failure should include new-failure regression",
+    )
+    assert_self_test(
+        strict_failure["new_failures"] == ["new-extension"],
+        "strict failure should record the new failing extension",
+    )
+
+    warn_failure = build_regression_verdict(
+        baseline,
+        self_test_summary(pass_rate=80.0, official_pass=8, official_fail=2, official_na=1, total=11),
+        {"new-extension": "FAIL"},
+        [],
+        "warn",
+    )
+    assert_self_test(warn_failure["status"] == "warn", "warn mode failure should warn")
+    assert_self_test(verdict_exit_code(warn_failure) == 0, "warn mode failure should exit 0")
+
+    trend_warning = build_regression_verdict(
+        baseline,
+        self_test_summary(),
+        {},
+        [
+            {"pass_rate_pct": 100.0},
+            {"pass_rate_pct": 99.0},
+            {"pass_rate_pct": 98.0},
+            {"pass_rate_pct": 97.0},
+        ],
+        "strict",
+    )
+    assert_self_test(trend_warning["status"] == "pass", "trend warning should not fail the gate")
+    assert_self_test(
+        any("Sustained degradation" in warning for warning in trend_warning["warnings"]),
+        "trend warning should report sustained degradation",
+    )
+
+    na_allowance = next(
+        check for check in pass_verdict["checks"] if check["id"] == "official_na_no_increase"
+    )
+    assert_self_test(na_allowance["ok"], "official N/A allowance should account for corpus growth")
+
+    print("Conformance regression self-test passed.")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Check conformance artifacts for pass-rate and failure regressions.",
+    )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="run deterministic in-memory checks without writing regression_verdict.json",
+    )
+    args = parser.parse_args(argv)
+
+    if args.self_test:
+        return run_self_test()
+
+    mode = os.environ.get("CI_REGRESSION_MODE", "strict").strip().lower()
+    if mode not in {"strict", "warn"}:
+        print(f"ERROR: invalid CI_REGRESSION_MODE={mode!r}; expected 'strict' or 'warn'", file=sys.stderr)
+        return 1
+
+    baseline = load_json(BASELINE_PATH, "conformance_baseline")
+    summary = load_json(SUMMARY_PATH, "conformance_summary")
+    verdict = build_regression_verdict(
+        baseline,
+        summary,
+        load_events(EVENTS_PATH),
+        load_trend_entries(TREND_PATH),
+        mode,
+    )
+    VERDICT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    VERDICT_PATH.write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
+    print_verdict_report(verdict, VERDICT_PATH)
+    return verdict_exit_code(verdict)
 
 
 if __name__ == "__main__":
