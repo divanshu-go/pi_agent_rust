@@ -21352,19 +21352,29 @@ if (typeof globalThis.Buffer === 'undefined') {
         readUInt16LE(offset) { const o = Buffer._checkedOffset(offset, 2, this.length); return this[o] | (this[o + 1] << 8); }
         readUInt32BE(offset) { const o = Buffer._checkedOffset(offset, 4, this.length); return ((this[o] << 24) | (this[o+1] << 16) | (this[o+2] << 8) | this[o+3]) >>> 0; }
         readUInt32LE(offset) { const o = Buffer._checkedOffset(offset, 4, this.length); return (this[o] | (this[o+1] << 8) | (this[o+2] << 16) | (this[o+3] << 24)) >>> 0; }
+        readUint8(offset) { return this.readUInt8(offset); }
+        readUint16BE(offset) { return this.readUInt16BE(offset); }
+        readUint16LE(offset) { return this.readUInt16LE(offset); }
+        readUint32BE(offset) { return this.readUInt32BE(offset); }
+        readUint32LE(offset) { return this.readUInt32LE(offset); }
         readInt8(offset) { const o = Buffer._checkedOffset(offset, 1, this.length); const v = this[o]; return v > 127 ? v - 256 : v; }
         readInt16BE(offset) { const v = this.readUInt16BE(offset); return v > 0x7fff ? v - 0x10000 : v; }
         readInt16LE(offset) { const v = this.readUInt16LE(offset); return v > 0x7fff ? v - 0x10000 : v; }
         readInt32BE(offset) { const o = Buffer._checkedOffset(offset, 4, this.length); return (this[o] << 24) | (this[o+1] << 16) | (this[o+2] << 8) | this[o+3]; }
         readInt32LE(offset) { const o = Buffer._checkedOffset(offset, 4, this.length); return this[o] | (this[o+1] << 8) | (this[o+2] << 16) | (this[o+3] << 24); }
         writeUInt8(value, offset) { const o = Buffer._checkedOffset(offset, 1, this.length); const v = Buffer._checkedWriteValue(value, 0, 0xff); this[o] = v & 0xff; return o + 1; }
+        writeUint8(value, offset) { return this.writeUInt8(value, offset); }
         writeInt8(value, offset) { const o = Buffer._checkedOffset(offset, 1, this.length); const v = Buffer._checkedWriteValue(value, -0x80, 0x7f); this[o] = v & 0xff; return o + 1; }
         writeUInt16BE(value, offset) { const o = Buffer._checkedOffset(offset, 2, this.length); const v = Buffer._checkedWriteValue(value, 0, 0xffff); this[o] = (v >> 8) & 0xff; this[o+1] = v & 0xff; return o + 2; }
         writeUInt16LE(value, offset) { const o = Buffer._checkedOffset(offset, 2, this.length); const v = Buffer._checkedWriteValue(value, 0, 0xffff); this[o] = v & 0xff; this[o+1] = (v >> 8) & 0xff; return o + 2; }
+        writeUint16BE(value, offset) { return this.writeUInt16BE(value, offset); }
+        writeUint16LE(value, offset) { return this.writeUInt16LE(value, offset); }
         writeInt16BE(value, offset) { const o = Buffer._checkedOffset(offset, 2, this.length); const v = Buffer._checkedWriteValue(value, -0x8000, 0x7fff); this[o] = (v >> 8) & 0xff; this[o+1] = v & 0xff; return o + 2; }
         writeInt16LE(value, offset) { const o = Buffer._checkedOffset(offset, 2, this.length); const v = Buffer._checkedWriteValue(value, -0x8000, 0x7fff); this[o] = v & 0xff; this[o+1] = (v >> 8) & 0xff; return o + 2; }
         writeUInt32BE(value, offset) { const o = Buffer._checkedOffset(offset, 4, this.length); const v = Buffer._checkedWriteValue(value, 0, 0xffffffff); this[o]=(v>>>24)&0xff; this[o+1]=(v>>>16)&0xff; this[o+2]=(v>>>8)&0xff; this[o+3]=v&0xff; return o+4; }
         writeUInt32LE(value, offset) { const o = Buffer._checkedOffset(offset, 4, this.length); const v = Buffer._checkedWriteValue(value, 0, 0xffffffff); this[o]=v&0xff; this[o+1]=(v>>>8)&0xff; this[o+2]=(v>>>16)&0xff; this[o+3]=(v>>>24)&0xff; return o+4; }
+        writeUint32BE(value, offset) { return this.writeUInt32BE(value, offset); }
+        writeUint32LE(value, offset) { return this.writeUInt32LE(value, offset); }
         writeInt32BE(value, offset) { const o = Buffer._checkedOffset(offset, 4, this.length); const v = Buffer._checkedWriteValue(value, -0x80000000, 0x7fffffff); this[o]=(v>>24)&0xff; this[o+1]=(v>>16)&0xff; this[o+2]=(v>>8)&0xff; this[o+3]=v&0xff; return o+4; }
         writeInt32LE(value, offset) { const o = Buffer._checkedOffset(offset, 4, this.length); const v = Buffer._checkedWriteValue(value, -0x80000000, 0x7fffffff); this[o]=v&0xff; this[o+1]=(v>>8)&0xff; this[o+2]=(v>>16)&0xff; this[o+3]=(v>>24)&0xff; return o+4; }
     }

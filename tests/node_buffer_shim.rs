@@ -1823,6 +1823,57 @@ fn global_buffer_integer_write_value_range_validation_matches_node_vectors() {
 }
 
 #[test]
+fn global_buffer_lowercase_uint_aliases_match_node_vectors() {
+    let result = eval_global_buffer(
+        r#"(() => {
+        const names = [
+            "readUint8",
+            "readUint16BE",
+            "readUint16LE",
+            "readUint32BE",
+            "readUint32LE",
+            "writeUint8",
+            "writeUint16BE",
+            "writeUint16LE",
+            "writeUint32BE",
+            "writeUint32LE",
+        ];
+        const b = Buffer.alloc(13);
+        const writes = [
+            b.writeUint8(0x12, 0),
+            b.writeUint16BE(0x3456, 1),
+            b.writeUint16LE(0x789a, 3),
+            b.writeUint32BE(0x01020304, 5),
+            b.writeUint32LE(0x05060708, 9),
+        ].join(",");
+        const reads = [
+            b.readUint8(0),
+            b.readUint16BE(1),
+            b.readUint16LE(3),
+            b.readUint32BE(5),
+            b.readUint32LE(9),
+        ].join(",");
+        const invalid = [];
+        try { Buffer.alloc(1).writeUint8(-1, 0); invalid.push("neg:ok"); }
+        catch (e) { invalid.push("neg:" + e.name); }
+        try { Buffer.from([1, 2]).readUint16LE(null); invalid.push("offset:ok"); }
+        catch (e) { invalid.push("offset:" + e.name); }
+        return [
+            names.map((name) => name + ":" + typeof Buffer.prototype[name]).join(","),
+            writes,
+            b.toString("hex"),
+            reads,
+            invalid.join(","),
+        ].join("|");
+    })()"#,
+    );
+    assert_eq!(
+        result,
+        "readUint8:function,readUint16BE:function,readUint16LE:function,readUint32BE:function,readUint32LE:function,writeUint8:function,writeUint16BE:function,writeUint16LE:function,writeUint32BE:function,writeUint32LE:function|1,3,5,9,13|1234569a780102030408070605|18,13398,30874,16909060,84281096|neg:RangeError,offset:TypeError"
+    );
+}
+
+#[test]
 fn global_buffer_integer_offset_argument_validation_matches_node_vectors() {
     let result = eval_global_buffer(
         r#"(() => {
