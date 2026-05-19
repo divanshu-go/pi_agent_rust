@@ -20970,7 +20970,11 @@ if (typeof globalThis.Buffer === 'undefined') {
             return ['utf8','utf-8','ascii','latin1','binary','base64','hex','ucs2','ucs-2','utf16le','utf-16le'].includes(String(enc).toLowerCase());
         }
         static byteLength(str, encoding) {
-            if (typeof str !== 'string') return str.length || 0;
+            if (typeof str !== 'string') {
+                if (str instanceof ArrayBuffer) return str.byteLength;
+                if (ArrayBuffer.isView && ArrayBuffer.isView(str)) return str.byteLength;
+                return str.length || 0;
+            }
             const enc = __pi_buffer_normalize_encoding(encoding, true);
             if (enc === 'base64') return __pi_buffer_base64_byte_length(str);
             if (enc === 'hex') return str.length >> 1;

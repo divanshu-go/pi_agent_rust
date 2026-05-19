@@ -764,6 +764,22 @@ fn global_buffer_base64_byte_length_padding_matches_node() {
 }
 
 #[test]
+fn global_buffer_byte_length_byte_backed_inputs_match_node() {
+    let result = eval_global_buffer(
+        r#"(() => {
+        const cases = [
+            new ArrayBuffer(3),
+            new Uint16Array(2),
+            new Uint8Array([1, 2, 3]),
+            Buffer.from([1, 2, 3, 4]),
+        ];
+        return cases.map((input) => Buffer.byteLength(input)).join("|");
+    })()"#,
+    );
+    assert_eq!(result, "3|4|3|4");
+}
+
+#[test]
 fn global_buffer_string_and_buffer_fill_match_node_vectors() {
     let result = eval_global_buffer(
         r#"(() => {
