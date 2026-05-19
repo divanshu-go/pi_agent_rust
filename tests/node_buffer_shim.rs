@@ -874,6 +874,26 @@ fn global_buffer_compare_and_equals_type_validation_match_node() {
 }
 
 #[test]
+fn global_buffer_compare_range_vectors_match_node() {
+    let result = eval_global_buffer(
+        r#"(() => {
+        const cases = [
+            ["range_equal", () => Buffer.from("abcdef").compare(Buffer.from("zzbcdzz"), 2, 5, 1, 4)],
+            ["range_less", () => Buffer.from("abc").compare(Buffer.from("abd"), 0, 3, 0, 3)],
+            ["range_greater", () => Buffer.from("abd").compare(Buffer.from("abc"), 0, 3, 0, 3)],
+            ["empty_slices", () => Buffer.from("abc").compare(Buffer.from("xyz"), 1, 1, 2, 2)],
+            ["uint8_range", () => Buffer.from("abc").compare(new Uint8Array([120, 97, 98, 99]), 1, 4, 0, 3)],
+        ];
+        return cases.map(([label, run]) => label + ":" + run()).join("|");
+    })()"#,
+    );
+    assert_eq!(
+        result,
+        "range_equal:0|range_less:-1|range_greater:1|empty_slices:0|uint8_range:0"
+    );
+}
+
+#[test]
 fn global_buffer_unknown_encoding_strict_entrypoints_match_node() {
     let result = eval_global_buffer(
         r#"(() => {
