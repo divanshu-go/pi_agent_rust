@@ -86,19 +86,20 @@ function latin1Decode(bytes, start, end, stripHighBit) {
   return out;
 }
 
-function normalizeEncoding(enc) {
+function normalizeEncoding(enc, allowUnknownUtf8) {
   if (!enc || enc === 'utf8' || enc === 'utf-8') return 'utf8';
-  const lower = enc.toLowerCase();
+  const lower = String(enc).toLowerCase();
   if (lower === 'utf8' || lower === 'utf-8') return 'utf8';
   if (lower === 'hex') return 'hex';
   if (lower === 'base64') return 'base64';
   if (lower === 'ascii') return 'ascii';
   if (lower === 'binary' || lower === 'latin1') return 'latin1';
-  return 'utf8';
+  if (allowUnknownUtf8) return 'utf8';
+  throw new TypeError(`Unknown encoding: ${enc}`);
 }
 
-function encodeString(str, encoding) {
-  switch (normalizeEncoding(encoding)) {
+function encodeString(str, encoding, allowUnknownUtf8) {
+  switch (normalizeEncoding(encoding, allowUnknownUtf8)) {
     case 'hex': return hexDecode(str);
     case 'base64': return base64Decode(str);
     case 'ascii':
@@ -187,7 +188,7 @@ class Buffer extends Uint8Array {
 
   static isEncoding(encoding) {
     return ['utf8', 'utf-8', 'hex', 'base64', 'ascii', 'binary', 'latin1']
-      .includes((encoding || '').toLowerCase());
+      .includes(String(encoding || '').toLowerCase());
   }
 
   static byteLength(string, encoding) {
@@ -196,7 +197,7 @@ class Buffer extends Uint8Array {
       if (string instanceof ArrayBuffer) return string.byteLength;
       throw new TypeError('The "string" argument must be a string, Buffer, or ArrayBuffer');
     }
-    return encodeString(string, encoding).length;
+    return encodeString(string, encoding, true).length;
   }
 
   static concat(list, totalLength) {

@@ -20770,14 +20770,15 @@ if (typeof globalThis.URL === 'undefined') {
 }
 
 if (typeof globalThis.Buffer === 'undefined') {
-    function __pi_buffer_normalize_encoding(encoding) {
+    function __pi_buffer_normalize_encoding(encoding, allowUnknownUtf8) {
         if (encoding == null || encoding === '') return 'utf8';
         const enc = String(encoding).toLowerCase();
         if (enc === 'utf8' || enc === 'utf-8') return 'utf8';
         if (enc === 'latin1' || enc === 'binary' || enc === 'ascii') return enc;
         if (enc === 'base64' || enc === 'hex') return enc;
         if (enc === 'ucs2' || enc === 'ucs-2' || enc === 'utf16le' || enc === 'utf-16le') return 'utf16le';
-        return enc;
+        if (allowUnknownUtf8) return 'utf8';
+        throw new TypeError('Unknown encoding: ' + encoding);
     }
     function __pi_buffer_from_one_byte_string(input) {
         const out = new Buffer(input.length);
@@ -20869,7 +20870,7 @@ if (typeof globalThis.Buffer === 'undefined') {
         }
         static byteLength(str, encoding) {
             if (typeof str !== 'string') return str.length || 0;
-            const enc = __pi_buffer_normalize_encoding(encoding);
+            const enc = __pi_buffer_normalize_encoding(encoding, true);
             if (enc === 'base64') return Math.ceil(str.length * 3 / 4);
             if (enc === 'hex') return str.length >> 1;
             if (enc === 'latin1' || enc === 'binary' || enc === 'ascii') return str.length;

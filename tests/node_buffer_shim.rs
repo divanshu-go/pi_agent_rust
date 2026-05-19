@@ -521,6 +521,28 @@ fn is_encoding_invalid() {
     assert_eq!(result, "false");
 }
 
+#[test]
+fn unknown_encoding_strict_entrypoints_match_node() {
+    let result = eval_buffer(
+        r#"(() => {
+        const outcomes = [];
+        try { Buffer.from("abc", "bogus"); outcomes.push("from:ok"); }
+        catch (e) { outcomes.push("from:" + e.message); }
+        try { Buffer.from([0x61]).toString("bogus"); outcomes.push("toString:ok"); }
+        catch (e) { outcomes.push("toString:" + e.message); }
+        try { Buffer.alloc(3).write("abc", 0, 3, "bogus"); outcomes.push("write:ok"); }
+        catch (e) { outcomes.push("write:" + e.message); }
+        outcomes.push("byteLength:" + Buffer.byteLength("abc", "bogus"));
+        outcomes.push("isEncoding:" + Buffer.isEncoding("bogus"));
+        return outcomes.join("|");
+    })()"#,
+    );
+    assert_eq!(
+        result,
+        "from:Unknown encoding: bogus|toString:Unknown encoding: bogus|write:Unknown encoding: bogus|byteLength:3|isEncoding:false"
+    );
+}
+
 // ─── Import styles ─────────────────────────────────────────────────────────
 
 #[test]
@@ -590,6 +612,28 @@ fn global_buffer_search_semantics_match_node() {
     })()"#,
     );
     assert_eq!(result, "-1,2,false");
+}
+
+#[test]
+fn global_buffer_unknown_encoding_strict_entrypoints_match_node() {
+    let result = eval_global_buffer(
+        r#"(() => {
+        const outcomes = [];
+        try { Buffer.from("abc", "bogus"); outcomes.push("from:ok"); }
+        catch (e) { outcomes.push("from:" + e.message); }
+        try { Buffer.from([0x61]).toString("bogus"); outcomes.push("toString:ok"); }
+        catch (e) { outcomes.push("toString:" + e.message); }
+        try { Buffer.alloc(3).write("abc", 0, 3, "bogus"); outcomes.push("write:ok"); }
+        catch (e) { outcomes.push("write:" + e.message); }
+        outcomes.push("byteLength:" + Buffer.byteLength("abc", "bogus"));
+        outcomes.push("isEncoding:" + Buffer.isEncoding("bogus"));
+        return outcomes.join("|");
+    })()"#,
+    );
+    assert_eq!(
+        result,
+        "from:Unknown encoding: bogus|toString:Unknown encoding: bogus|write:Unknown encoding: bogus|byteLength:3|isEncoding:false"
+    );
 }
 
 // ─── Edge cases ────────────────────────────────────────────────────────────
