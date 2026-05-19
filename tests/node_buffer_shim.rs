@@ -976,6 +976,35 @@ fn global_buffer_signed_integer_vectors_match_node() {
 }
 
 #[test]
+fn global_buffer_integer_bounds_vectors_match_node() {
+    let result = eval_global_buffer(
+        r#"(() => {
+        const cases = [
+            ["readUInt8_oob", () => Buffer.from([1]).readUInt8(1)],
+            ["readUInt16LE_short", () => Buffer.from([1]).readUInt16LE(0)],
+            ["readInt32BE_short", () => Buffer.from([1, 2, 3]).readInt32BE(0)],
+            ["writeUInt8_oob", () => Buffer.alloc(1).writeUInt8(1, 1)],
+            ["writeUInt16LE_short", () => Buffer.alloc(1).writeUInt16LE(1, 0)],
+            ["writeInt32BE_short", () => Buffer.alloc(3).writeInt32BE(-1, 0)],
+            ["readUInt8_negative", () => Buffer.from([1]).readUInt8(-1)],
+            ["writeUInt8_negative", () => Buffer.alloc(1).writeUInt8(1, -1)],
+        ];
+        return cases.map(([label, run]) => {
+            try {
+                return label + ":" + run();
+            } catch (e) {
+                return label + ":" + e.name;
+            }
+        }).join("|");
+    })()"#,
+    );
+    assert_eq!(
+        result,
+        "readUInt8_oob:RangeError|readUInt16LE_short:RangeError|readInt32BE_short:RangeError|writeUInt8_oob:RangeError|writeUInt16LE_short:RangeError|writeInt32BE_short:RangeError|readUInt8_negative:RangeError|writeUInt8_negative:RangeError"
+    );
+}
+
+#[test]
 fn global_buffer_unknown_encoding_strict_entrypoints_match_node() {
     let result = eval_global_buffer(
         r#"(() => {
