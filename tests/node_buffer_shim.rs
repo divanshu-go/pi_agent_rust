@@ -2193,6 +2193,34 @@ fn global_buffer_encoding_specific_slice_write_vectors_match_node() {
 }
 
 #[test]
+fn global_buffer_inspect_and_locale_string_vectors_match_node() {
+    let result = eval_global_buffer(
+        r#"(() => {
+        const cases = [
+            ["types", () => ["inspect", "toLocaleString"].map((name) => name + ":" + typeof Buffer.prototype[name]).join(",")],
+            ["locale_utf8", () => Buffer.from("hi").toLocaleString()],
+            ["locale_hex_args", () => Buffer.from([0, 15, 16, 255]).toLocaleString("hex", 1, 3)],
+            ["inspect_empty", () => Buffer.alloc(0).inspect()],
+            ["inspect_small", () => Buffer.from([0, 15, 16, 255]).inspect()],
+            ["inspect_ellipsis", () => Buffer.from(Array.from({ length: 60 }, (_, i) => i)).inspect()],
+            ["inspect_custom_symbol", () => Buffer.prototype[Symbol.for("nodejs.util.inspect.custom")] === Buffer.prototype.inspect],
+        ];
+        return cases.map(([label, run]) => {
+            try {
+                return label + ":" + run();
+            } catch (e) {
+                return label + ":" + e.name;
+            }
+        }).join("|");
+    })()"#,
+    );
+    assert_eq!(
+        result,
+        "types:inspect:function,toLocaleString:function|locale_utf8:hi|locale_hex_args:0f10|inspect_empty:<Buffer >|inspect_small:<Buffer 00 0f 10 ff>|inspect_ellipsis:<Buffer 00 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10 11 12 13 14 15 16 17 18 19 1a 1b 1c 1d 1e 1f 20 21 22 23 24 25 26 27 28 29 2a 2b 2c 2d 2e 2f 30 31 ... 10 more bytes>|inspect_custom_symbol:true"
+    );
+}
+
+#[test]
 fn global_buffer_to_string_range_vectors_match_node() {
     let result = eval_global_buffer(
         r#"(() => {

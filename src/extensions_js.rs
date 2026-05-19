@@ -21205,6 +21205,21 @@ if (typeof globalThis.Buffer === 'undefined') {
         base64Slice(start, end) { return this.toString('base64', start, end); }
         base64urlSlice(start, end) { return this.toString('base64url', start, end); }
         ucs2Slice(start, end) { return this.toString('ucs2', start, end); }
+        toLocaleString(encoding, start, end) {
+            return this.toString(encoding, start, end);
+        }
+        inspect() {
+            const max = 50;
+            const visible = Math.min(this.length, max);
+            const parts = new Array(visible);
+            for (let i = 0; i < visible; i++) {
+                parts[i] = (this[i] < 16 ? '0' : '') + this[i].toString(16);
+            }
+            if (this.length > max) {
+                parts.push('...', String(this.length - max), 'more bytes');
+            }
+            return parts.length === 0 ? '<Buffer >' : '<Buffer ' + parts.join(' ') + '>';
+        }
         toJSON() {
             return { type: 'Buffer', data: Array.from(this) };
         }
@@ -21466,6 +21481,9 @@ if (typeof globalThis.Buffer === 'undefined') {
         writeInt32LE(value, offset) { const o = Buffer._checkedOffset(offset, 4, this.length); const v = Buffer._checkedWriteValue(value, -0x80000000, 0x7fffffff); this[o]=v&0xff; this[o+1]=(v>>8)&0xff; this[o+2]=(v>>16)&0xff; this[o+3]=(v>>24)&0xff; return o+4; }
     }
     globalThis.Buffer = Buffer;
+    if (typeof Symbol === 'function' && typeof Symbol.for === 'function') {
+        Buffer.prototype[Symbol.for('nodejs.util.inspect.custom')] = Buffer.prototype.inspect;
+    }
 }
 
 if (typeof globalThis.crypto === 'undefined') {
