@@ -1,16 +1,16 @@
 {
   "schema": "pi.ext.health_delta.v1",
-  "generated_at": "2026-05-13T03:37:59.568Z",
-  "baseline_path": "/data/projects/pi_agent_rust/tests/ext_conformance/reports/conformance_baseline.json",
+  "generated_at": "2026-05-25T08:45:59.076Z",
+  "baseline_path": "/home/runner/work/pi_agent_rust/pi_agent_rust/tests/ext_conformance/reports/conformance_baseline.json",
   "baseline_date": "2026-02-07T23:31:53Z",
   "current_summary": {
     "excluded": 1,
-    "failed": 0,
+    "failed": 3,
     "manifest_count": 224,
-    "pass_rate_pct": 100.0,
-    "passed": 223,
-    "skipped": 1,
-    "tested": 223
+    "pass_rate_pct": 98.64864864864865,
+    "passed": 219,
+    "skipped": 2,
+    "tested": 222
   },
   "baseline_summary": {
     "failed": 14,
@@ -19,10 +19,10 @@
     "tested": 223
   },
   "aggregate_delta": {
-    "fail_delta": -14,
-    "net_change": 13,
-    "pass_delta": 14,
-    "rate_delta_pct": 6.299999999999997
+    "fail_delta": -11,
+    "net_change": 12,
+    "pass_delta": 10,
+    "rate_delta_pct": 4.948648648648643
   },
   "regressions": [],
   "fixes": [
@@ -99,14 +99,6 @@
       "baseline_failure_reason": "Extension requires an npm package not available as a virtual module stub."
     },
     {
-      "id": "npm/pi-wakatime",
-      "tier": 3,
-      "delta_type": "fix",
-      "current_status": "pass",
-      "baseline_status": "fail",
-      "baseline_failure_reason": "Extension requires an npm package not available as a virtual module stub."
-    },
-    {
       "id": "npm/pi-web-access",
       "tier": 3,
       "delta_type": "fix",
@@ -159,12 +151,6 @@
     {
       "id": "bookmark",
       "tier": 1,
-      "delta_type": "new_pass",
-      "current_status": "pass"
-    },
-    {
-      "id": "claude-rules",
-      "tier": 2,
       "delta_type": "new_pass",
       "current_status": "pass"
     },
@@ -669,8 +655,9 @@
     {
       "id": "npm/aliou-pi-synthetic",
       "tier": 3,
-      "delta_type": "new_pass",
-      "current_status": "pass"
+      "delta_type": "new_failure",
+      "current_status": "fail",
+      "failure_reason": "Load error: Extension error: JS extension runtime task cancelled"
     },
     {
       "id": "npm/benvargas-pi-ancestor-discovery",
@@ -1029,8 +1016,9 @@
     {
       "id": "npm/verioussmith-pi-openrouter",
       "tier": 3,
-      "delta_type": "new_pass",
-      "current_status": "pass"
+      "delta_type": "new_failure",
+      "current_status": "fail",
+      "failure_reason": "Load error: Extension error: JS extension runtime task cancelled"
     },
     {
       "id": "npm/vpellegrino-pi-skills",
@@ -1394,7 +1382,17 @@
     }
   ],
   "removed_extensions": [],
-  "unchanged_failures": [],
+  "unchanged_failures": [
+    {
+      "id": "npm/pi-wakatime",
+      "tier": 3,
+      "delta_type": "unchanged_fail",
+      "current_status": "fail",
+      "baseline_status": "fail",
+      "failure_reason": "Load error: Extension error: JS extension runtime task cancelled",
+      "baseline_failure_reason": "Extension requires an npm package not available as a virtual module stub."
+    }
+  ],
   "excluded_extensions": [
     {
       "id": "base_fixtures",
@@ -1403,6 +1401,6 @@
     }
   ],
   "total_regressions": 0,
-  "total_fixes": 13,
-  "net_change": 13
+  "total_fixes": 12,
+  "net_change": 12
 }
