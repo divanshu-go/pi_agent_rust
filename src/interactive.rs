@@ -16,6 +16,7 @@ use asupersync::channel::mpsc;
 use asupersync::runtime::RuntimeHandle;
 use asupersync::sync::Mutex;
 use async_trait::async_trait;
+use bubbles::cursor::{BlinkCanceledMsg, BlinkMsg as CursorBlinkMsg, InitialBlinkMsg};
 use bubbles::spinner::{SpinnerModel, TickMsg as SpinnerTickMsg, spinners};
 use bubbles::textarea::TextArea;
 use bubbles::viewport::Viewport;
@@ -2787,14 +2788,16 @@ impl PiApp {
 
     /// Initialize the application.
     fn init(&self) -> Option<Cmd> {
-        // Start text input cursor blink.
+        // Deliberately do NOT start the text-input cursor blink loop. The
+        // textarea's blink fires a `BlinkMsg` every ~530ms forever, and every
+        // tick repaints the whole alternate-screen TUI — pure idle output churn
+        // for terminal hosts (and wasted CPU/bandwidth over SSH). The cursor
+        // still renders solid-on (a focused cursor's blink state starts "shown"
+        // and we never toggle it), so input remains perfectly usable. Cursor
+        // movement re-arms the blink via `blink_cmd()` inside TextArea::update,
+        // so we also drop the blink messages defensively in `update_inner`.
         // Spinner ticks are started lazily when we transition idle -> busy.
-        let test_mode = std::env::var_os("PI_TEST_MODE").is_some();
-        let input_cmd = if test_mode {
-            None
-        } else {
-            BubbleteaModel::init(&self.input)
-        };
+        let input_cmd = None;
         let pending_cmd = if self.pending_inputs.is_empty() {
             None
         } else {
@@ -2871,6 +2874,19 @@ impl PiApp {
         // Ignore spinner ticks when no spinner row is visible so old tick
         // chains naturally stop and do not trigger hidden redraw churn.
         if msg.downcast_ref::<SpinnerTickMsg>().is_some() && !self.spinner_visible() {
+            return None;
+        }
+
+        // Drop cursor-blink messages before they reach the textarea. We never
+        // start the blink loop in `init()`, but TextArea::update re-arms it via
+        // `blink_cmd()` on every cursor movement; swallowing the blink messages
+        // here keeps that chain from ever sustaining, so the runtime can stay
+        // idle (parked) between real events instead of repainting every ~530ms.
+        // The cursor stays rendered solid-on, which is the desired behavior.
+        if msg.downcast_ref::<InitialBlinkMsg>().is_some()
+            || msg.downcast_ref::<CursorBlinkMsg>().is_some()
+            || msg.downcast_ref::<BlinkCanceledMsg>().is_some()
+        {
             return None;
         }
 
