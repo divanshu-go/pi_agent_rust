@@ -3660,9 +3660,9 @@ dependencies = [
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.37.0"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1f111c8c41e7c61a49cd34e44c7619462967221a6443b0ec299e0ac30cfb9b1"
+checksum = "afc22eff61b133b115c6e8c74e818c628d6d5e7a502afea6f64dee076dd94326"
 dependencies = [
  "cc",
  "pkg-config",
@@ -4400,7 +4400,7 @@ dependencies = [
 
 [[package]]
 name = "pi_agent_rust"
-version = "0.1.16"
+version = "0.1.17-screenpipe.0"
 dependencies = [
  "anyhow",
  "arbitrary",
@@ -5796,8 +5796,7 @@ dependencies = [
 [[package]]
 name = "sqlmodel-core"
 version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fa4101fbdfea631e594f1d4a94aaa3765fdbfb88c5ee2e34e1f462b60df67df"
+source = "git+https://github.com/divanshu-go/sqlmodel_rust.git?rev=2827238a1317af3705ef398c245efc589e0862e1#2827238a1317af3705ef398c245efc589e0862e1"
 dependencies = [
  "asupersync",
  "regex",
@@ -5809,8 +5808,7 @@ dependencies = [
 [[package]]
 name = "sqlmodel-sqlite"
 version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e916ef96571b8c22643b9ca36c15f3a27b0e742b1a3dd641e06c2ad459d7f86a"
+source = "git+https://github.com/divanshu-go/sqlmodel_rust.git?rev=2827238a1317af3705ef398c245efc589e0862e1#2827238a1317af3705ef398c245efc589e0862e1"
 dependencies = [
  "asupersync",
  "libsqlite3-sys",
