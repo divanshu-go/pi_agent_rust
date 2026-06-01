@@ -53,6 +53,10 @@ pub use crate::provider::{
     Context as ProviderContext, InputType, Model, ModelCost, Provider, StreamOptions,
     ThinkingBudgets as ProviderThinkingBudgets, ToolDef,
 };
+pub use crate::sdk_controller::{
+    AbortSummary, AgentSessionController, ControllerSpawner, PromptTicket, QueueId, QueueKind,
+    QueueSnapshot, QueueSubscription, QueuedPrompt, create_agent_session_controller,
+};
 pub use crate::session::Session;
 pub use crate::tools::{Tool, ToolOutput, ToolRegistry, ToolUpdate};
 
@@ -1214,6 +1218,15 @@ impl AgentSessionHandle {
         self.session.run_text(input.into(), combined).await
     }
 
+    /// Emit a synthetic [`AgentEvent`] to this handle's session-level listeners.
+    ///
+    /// Used by the controller's retry wrapper to surface `AutoRetryStart` /
+    /// `AutoRetryEnd` events (which originate outside the agent loop) on the
+    /// same event stream subscribers already observe, matching the RPC path.
+    pub fn emit_event(&self, event: &AgentEvent) {
+        self.listeners.notify(event);
+    }
+
     /// Send one user prompt through the agent loop with an explicit abort signal.
     pub async fn prompt_with_abort(
         &mut self,
@@ -1620,12 +1633,13 @@ fn build_stream_options_with_optional_key(
     api_key: Option<String>,
     selection: &app::ModelSelection,
     session: &Session,
+    thinking_override: Option<crate::model::ThinkingLevel>,
 ) -> StreamOptions {
     let mut options = StreamOptions {
         api_key,
         headers: selection.model_entry.headers.clone(),
         session_id: Some(session.header.id.clone()),
-        thinking_level: Some(selection.thinking_level),
+        thinking_level: thinking_override.or(Some(selection.thinking_level)),
         ..Default::default()
     };
 
@@ -1753,8 +1767,9 @@ pub async fn create_agent_session(options: SessionOptions) -> Result<AgentSessio
     let api_key = app::resolve_api_key(&auth, &cli, &selection.model_entry)
         .map_err(|err| Error::validation(err.to_string()))?;
 
-    let stream_options =
-        build_stream_options_with_optional_key(&config, api_key, &selection, &session);
+    let stream_options = build_stream_options_with_optional_key(
+        &config, api_key, &selection, &session, options.thinking,
+    );
 
     let agent_config = AgentConfig {
         system_prompt: Some(system_prompt),

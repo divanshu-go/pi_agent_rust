@@ -181,6 +181,7 @@ pub mod rpc;
 #[doc(hidden)]
 pub mod scheduler;
 pub mod sdk;
+pub mod sdk_controller;
 #[doc(hidden)]
 pub mod semantic_workspace_graph;
 #[doc(hidden)]

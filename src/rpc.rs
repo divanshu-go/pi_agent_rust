@@ -861,13 +861,21 @@ pub async fn run(
                     continue;
                 }
 
+                let images = match parse_prompt_images(parsed.get("images")) {
+                    Ok(images) => images,
+                    Err(err) => {
+                        let _ = out_tx.send(response_error_with_hints(id, "steer", &err));
+                        continue;
+                    }
+                };
+
                 let expanded = options.resources.expand_input(&message);
                 if is_streaming.load(Ordering::SeqCst) {
                     let result = shared_state
                         .lock(&cx)
                         .await
                         .map_err(|err| Error::session(format!("state lock failed: {err}")))?
-                        .push_steering(build_user_message(&expanded, &[]));
+                        .push_steering(build_user_message(&expanded, &images));
 
                     match result {
                         Ok(()) => {
@@ -906,7 +914,7 @@ pub async fn run(
                         retry_abort,
                         options,
                         expanded,
-                        Vec::new(),
+                        images,
                         prompt_cx,
                     )
                     .await;
@@ -934,13 +942,21 @@ pub async fn run(
                     continue;
                 }
 
+                let images = match parse_prompt_images(parsed.get("images")) {
+                    Ok(images) => images,
+                    Err(err) => {
+                        let _ = out_tx.send(response_error_with_hints(id, "follow_up", &err));
+                        continue;
+                    }
+                };
+
                 let expanded = options.resources.expand_input(&message);
                 if is_streaming.load(Ordering::SeqCst) {
                     let result = shared_state
                         .lock(&cx)
                         .await
                         .map_err(|err| Error::session(format!("state lock failed: {err}")))?
-                        .push_follow_up(build_user_message(&expanded, &[]));
+                        .push_follow_up(build_user_message(&expanded, &images));
 
                     match result {
                         Ok(()) => {
@@ -979,7 +995,7 @@ pub async fn run(
                         retry_abort,
                         options,
                         expanded,
-                        Vec::new(),
+                        images,
                         prompt_cx,
                     )
                     .await;

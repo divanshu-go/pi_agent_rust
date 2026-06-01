@@ -3347,6 +3347,38 @@ fn bash_cancellation_details(
 }
 
 #[allow(clippy::too_many_lines)]
+/// Resolve which shell binary the bash tool should exec.
+///
+/// Resolution order (parity gaps C6/J2 — honor an embedder-pinned shell so the
+/// embedded bash tool works on Windows with PortableGit bash):
+///   1. explicit `shell_path` (config / settings.json `shellPath`)
+///   2. `PI_SHELL` env override, when it points at an existing file
+///   3. the POSIX allowlist (`/bin/bash`, `/usr/bin/bash`, `/usr/local/bin/bash`)
+///   4. `sh` as a last resort
+///
+/// `exists` is injected so the resolution is unit-testable without touching the
+/// filesystem.
+fn resolve_bash_shell<'a>(
+    shell_path: Option<&'a str>,
+    pi_shell_env: Option<&'a str>,
+    exists: impl Fn(&str) -> bool,
+) -> &'a str {
+    if let Some(explicit) = shell_path {
+        return explicit;
+    }
+    if let Some(env_shell) = pi_shell_env {
+        if !env_shell.is_empty() && exists(env_shell) {
+            return env_shell;
+        }
+    }
+    for path in ["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"] {
+        if exists(path) {
+            return path;
+        }
+    }
+    "sh"
+}
+
 pub(crate) async fn run_bash_command(
     cwd: &Path,
     shell_path: Option<&str>,
@@ -3376,14 +3408,12 @@ pub(crate) async fn run_bash_command(
         ));
     }
 
-    let shell = shell_path.unwrap_or_else(|| {
-        for path in ["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"] {
-            if Path::new(path).exists() {
-                return path;
-            }
-        }
-        "sh"
-    });
+    let pi_shell_env = if shell_path.is_none() {
+        std::env::var("PI_SHELL").ok()
+    } else {
+        None
+    };
+    let shell = resolve_bash_shell(shell_path, pi_shell_env.as_deref(), |p| Path::new(p).exists());
 
     let mut cmd = command_with_default_sigpipe_in_dir(shell, cwd)
         .map_err(|e| Error::tool("bash", format!("Failed to prepare shell: {e}")))?;
@@ -7731,6 +7761,42 @@ mod tests {
     use proptest::prelude::*;
     #[cfg(target_os = "linux")]
     use std::time::Duration;
+
+    #[test]
+    fn resolve_bash_shell_prefers_explicit_path() {
+        // Explicit config shellPath wins, even over PI_SHELL and POSIX paths.
+        let got = resolve_bash_shell(Some("/opt/git/bash.exe"), Some("/x"), |_| true);
+        assert_eq!(got, "/opt/git/bash.exe");
+    }
+
+    #[test]
+    fn resolve_bash_shell_honors_pi_shell_env_when_present() {
+        // Parity C6/J2: with no explicit path, an existing PI_SHELL is used.
+        let got = resolve_bash_shell(None, Some("C:/PortableGit/bin/bash.exe"), |p| {
+            p == "C:/PortableGit/bin/bash.exe"
+        });
+        assert_eq!(got, "C:/PortableGit/bin/bash.exe");
+    }
+
+    #[test]
+    fn resolve_bash_shell_ignores_missing_pi_shell() {
+        // A PI_SHELL that does not exist falls through to the POSIX allowlist.
+        let got = resolve_bash_shell(None, Some("/nope/bash"), |p| p == "/bin/bash");
+        assert_eq!(got, "/bin/bash");
+    }
+
+    #[test]
+    fn resolve_bash_shell_ignores_empty_pi_shell() {
+        let got = resolve_bash_shell(None, Some(""), |p| p == "/usr/bin/bash");
+        assert_eq!(got, "/usr/bin/bash");
+    }
+
+    #[test]
+    fn resolve_bash_shell_falls_back_to_sh() {
+        // Nothing exists -> sh.
+        let got = resolve_bash_shell(None, None, |_| false);
+        assert_eq!(got, "sh");
+    }
 
     #[test]
     fn test_truncate_head() {
